@@ -672,10 +672,18 @@ async function init() {
   // Update changes badge
   updateChangesBadge();
 
-  // Load entry from URL if present
+  // Load entry from URL if present, otherwise auto-select first page
   const entry = getEntryFromUrl();
   if (entry) {
     loadEntry(entry.collection, entry.slug, false);
+  } else {
+    // Auto-select first page - prefer "home" from pages collection
+    const homePage = allPages.find(p => p.collection === 'pages' && p.slug === 'home');
+    const firstPage = homePage || allPages.find(p => p.collection === 'pages') || allPages[0];
+
+    if (firstPage) {
+      loadEntry(firstPage.collection, firstPage.slug, true);
+    }
   }
 }
 
