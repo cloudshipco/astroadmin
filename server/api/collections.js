@@ -14,6 +14,45 @@ import {
 const router = express.Router();
 
 /**
+ * Convert discriminatedUnions to blockTypes format on schema fields
+ * This bridges the zod-to-json-schema output to what form-generator expects
+ */
+function enrichSchemaWithBlockTypes(schema, discriminatedUnions) {
+  if (!discriminatedUnions || discriminatedUnions.length === 0) {
+    return schema;
+  }
+
+  // Deep clone to avoid mutations
+  const enriched = JSON.parse(JSON.stringify(schema));
+
+  for (const union of discriminatedUnions) {
+    // Navigate to the field at the union path
+    let target = enriched;
+    const pathToField = union.path.filter(p => p !== '[]'); // Remove array markers
+
+    for (const key of pathToField) {
+      if (target?.properties?.[key]) {
+        target = target.properties[key];
+      } else {
+        target = null;
+        break;
+      }
+    }
+
+    if (target && target.type === 'array') {
+      // Convert options to blockTypes format
+      const blockTypes = {};
+      for (const option of union.options) {
+        blockTypes[option.value] = option.schema || { type: 'object', properties: {} };
+      }
+      target.blockTypes = blockTypes;
+    }
+  }
+
+  return enriched;
+}
+
+/**
  * GET /api/collections
  * Get all collections with their metadata
  */
@@ -44,7 +83,10 @@ router.get('/:collectionName', async (req, res) => {
     const { collectionName } = req.params;
 
     const entries = await getCollectionEntries(collectionName);
-    const { type, schema } = await getCollectionSchema(collectionName);
+    const { type, schema, discriminatedUnions } = await getCollectionSchema(collectionName);
+
+    // Convert discriminatedUnions to blockTypes format for form-generator
+    const enrichedSchema = enrichSchemaWithBlockTypes(schema, discriminatedUnions);
 
     res.json({
       success: true,
@@ -53,7 +95,8 @@ router.get('/:collectionName', async (req, res) => {
         type,
         entries,
         entryCount: entries.length,
-        schema,
+        schema: enrichedSchema,
+        discriminatedUnions,
       },
     });
   } catch (error) {

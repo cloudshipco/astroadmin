@@ -124,8 +124,8 @@ export async function parseAstroSchemas(projectRoot) {
 
       try {
         // Convert Zod schema to JSON Schema
+        // Don't pass 'name' option - it causes wrapping in definitions
         const jsonSchema = zodToJsonSchema(collection.schema, {
-          name: name,
           $refStrategy: 'none', // Inline all refs for simplicity
           errorMessages: true,
         });
