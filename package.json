@@ -1,0 +1,80 @@
+{
+  "name": "astroadmin",
+  "version": "0.1.0",
+  "description": "Admin interface for Astro Content Collections - auto-generates forms from your Zod schemas",
+  "type": "module",
+  "main": "server/index.js",
+  "bin": {
+    "astroadmin": "./bin/cli.js"
+  },
+  "scripts": {
+    "dev": "NODE_ENV=development node --watch bin/cli.js dev",
+    "prod": "NODE_ENV=production node bin/cli.js dev",
+    "start": "node bin/cli.js dev",
+    "build:css": "tailwindcss -i ./ui/input.css -o ./ui/styles.css --minify",
+    "watch:css": "tailwindcss -i ./ui/input.css -o ./ui/styles.css --watch",
+    "test": "node tests/api.test.js",
+    "test:watch": "node --watch tests/api.test.js",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "keywords": [
+    "astro",
+    "cms",
+    "content-collections",
+    "admin",
+    "zod",
+    "headless-cms"
+  ],
+  "author": "James Pickard",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamespickard/astroadmin.git"
+  },
+  "homepage": "https://github.com/jamespickard/astroadmin#readme",
+  "dependencies": {
+    "alpinejs": "^3.15.2",
+    "chokidar": "^4.0.3",
+    "commander": "^12.1.0",
+    "cors": "^2.8.5",
+    "esbuild": "^0.24.0",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.4.1",
+    "express-session": "^1.18.1",
+    "gray-matter": "^4.0.3",
+    "multer": "^2.0.2",
+    "simple-git": "^3.27.0",
+    "ws": "^8.18.0",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "peerDependencies": {
+    "astro": ">=4.0.0",
+    "zod": ">=3.20.0"
+  },
+  "peerDependenciesMeta": {
+    "astro": {
+      "optional": false
+    },
+    "zod": {
+      "optional": false
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "autoprefixer": "^10.4.22",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.17"
+  },
+  "files": [
+    "bin/",
+    "server/",
+    "ui/",
+    "README.md",
+    "LICENSE"
+  ]
+}

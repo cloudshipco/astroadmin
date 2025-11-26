@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - AstroAdmin</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="dashboard-shopify">
+    <!-- Topbar -->
+    <header class="topbar-shopify">
+      <div class="topbar-left">
+        <h1 class="topbar-logo">AstroAdmin</h1>
+        <select id="pageSelector" class="page-selector">
+          <option value="">Select page...</option>
+        </select>
+      </div>
+      <div class="topbar-right">
+        <span id="saveStatus" class="save-status"></span>
+        <button id="saveBtn" class="btn btn-success btn-sm" style="display: none;">
+          Save
+        </button>
+        <button id="changesBtn" class="btn btn-secondary btn-sm btn-with-badge">
+          Changes
+          <span id="changesBadge" class="changes-badge" style="display: none;">0</span>
+        </button>
+        <button id="logoutBtn" class="btn btn-secondary btn-sm">
+          Logout
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Layout -->
+    <div class="main-layout">
+      <!-- Editor Panel (narrow, left side) -->
+      <div class="editor-panel">
+        <div class="editor-panel-header">
+          <span id="editorTitle">Select a page to edit</span>
+        </div>
+        <div class="editor-panel-body" id="editorForm">
+          <p class="placeholder-text">Choose a page from the dropdown above to start editing.</p>
+        </div>
+      </div>
+
+      <!-- Preview Panel (wide, right side) -->
+      <div class="preview-panel">
+        <div class="preview-panel-header">
+          <span>Preview</span>
+          <div class="preview-controls" style="display: none;" id="previewControls">
+            <div class="viewport-selector" id="viewportSelector">
+              <button type="button" class="viewport-btn active" data-width="100%" title="Desktop (Full width)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              </button>
+              <button type="button" class="viewport-btn" data-width="768px" title="Tablet (768px)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
+              </button>
+              <button type="button" class="viewport-btn" data-width="375px" title="Mobile (375px)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
+              </button>
+            </div>
+            <button id="refreshPreview" class="btn btn-sm btn-ghost">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+        <div class="preview-panel-body">
+          <div class="preview-frame-wrapper" id="previewWrapper">
+            <div class="preview-frame-scaler" id="previewScaler">
+              <iframe id="previewFrame" class="preview-iframe" style="display: none;"></iframe>
+            </div>
+          </div>
+          <div id="previewPlaceholder" class="preview-placeholder">
+            <p>Preview will appear here</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/dashboard.js"></script>
+</body>
+</html>

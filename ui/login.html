@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - AstroAdmin</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module">
+    import Alpine from 'https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/module.esm.js';
+    window.Alpine = Alpine;
+    Alpine.start();
+  </script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-primary-500 to-purple-600 flex items-center justify-center p-5">
+  <div
+    class="w-full max-w-md"
+    x-data="{
+      username: '',
+      password: '',
+      error: '',
+      loading: false,
+
+      async checkSession() {
+        try {
+          const res = await fetch('/api/session');
+          const data = await res.json();
+          if (data.authenticated) window.location.href = '/dashboard';
+        } catch (e) {}
+      },
+
+      async login() {
+        this.error = '';
+        this.loading = true;
+
+        try {
+          const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: this.username,
+              password: this.password
+            })
+          });
+
+          const data = await res.json();
+
+          if (data.success) {
+            window.location.href = '/dashboard';
+          } else {
+            this.error = data.error || 'Invalid username or password';
+          }
+        } catch (e) {
+          this.error = 'Failed to connect to server';
+        } finally {
+          this.loading = false;
+        }
+      }
+    }"
+    x-init="checkSession()"
+  >
+    <div class="bg-white rounded-xl shadow-2xl p-8">
+      <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold text-primary-500 mb-2">🚀 AstroAdmin</h1>
+        <p class="text-gray-600">Content Management for Astro</p>
+      </div>
+
+      <form @submit.prevent="login()" class="space-y-5">
+        <div>
+          <label for="username" class="form-label">Username</label>
+          <input
+            type="text"
+            id="username"
+            name="username"
+            x-model="username"
+            required
+            autofocus
+            autocomplete="username"
+            class="form-input"
+          >
+        </div>
+
+        <div>
+          <label for="password" class="form-label">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            x-model="password"
+            required
+            autocomplete="current-password"
+            class="form-input"
+          >
+        </div>
+
+        <div x-show="error" x-text="error" class="error-message p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-sm"></div>
+
+        <button
+          type="submit"
+          :disabled="loading"
+          class="w-full btn btn-primary"
+        >
+          <span x-show="!loading">Sign In</span>
+          <span x-show="loading">Signing in...</span>
+        </button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

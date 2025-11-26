@@ -1,0 +1,628 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom components using Tailwind */
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply bg-primary-500 text-white hover:bg-primary-600 focus:ring-4 focus:ring-primary-100;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-200 text-gray-700 hover:bg-gray-300;
+  }
+
+  .btn-success {
+    @apply bg-green-600 text-white hover:bg-green-700;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 text-white hover:bg-red-700;
+  }
+
+  .btn-sm {
+    @apply text-sm px-3 py-1.5;
+  }
+
+  .form-input {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm;
+  }
+
+  .form-label {
+    @apply block mb-1.5 font-medium text-gray-700 text-sm;
+  }
+
+  .form-group {
+    @apply mb-4;
+  }
+
+  /* Shopify-style Dashboard Layout */
+  .dashboard-shopify {
+    @apply flex flex-col h-screen overflow-hidden bg-gray-100;
+  }
+
+  .topbar-shopify {
+    @apply h-14 bg-gray-900 flex items-center justify-between px-4 flex-shrink-0;
+  }
+
+  .topbar-left {
+    @apply flex items-center gap-4;
+  }
+
+  .topbar-logo {
+    @apply text-white font-bold text-lg;
+  }
+
+  .page-selector {
+    @apply bg-gray-800 text-white border-gray-700 rounded-md px-3 py-1.5 text-sm min-w-[200px];
+  }
+
+  .page-selector:focus {
+    @apply ring-2 ring-primary-500 outline-none;
+  }
+
+  .topbar-right {
+    @apply flex items-center gap-3;
+  }
+
+  .save-status {
+    @apply text-gray-400 text-sm;
+  }
+
+  .main-layout {
+    @apply flex flex-1 overflow-hidden;
+  }
+
+  /* Editor Panel - Narrow left side */
+  .editor-panel {
+    @apply w-[380px] bg-white border-r border-gray-200 flex flex-col flex-shrink-0;
+  }
+
+  .editor-panel-header {
+    @apply px-4 py-3 border-b border-gray-200 font-semibold text-sm bg-gray-50;
+  }
+
+  .editor-panel-body {
+    @apply flex-1 overflow-y-auto p-4;
+  }
+
+  .placeholder-text {
+    @apply text-gray-400 text-sm text-center py-8;
+  }
+
+  /* Preview Panel - Wide right side */
+  .preview-panel {
+    @apply flex-1 flex flex-col bg-white;
+  }
+
+  .preview-panel-header {
+    @apply px-4 py-3 border-b border-gray-200 font-semibold text-sm bg-gray-50 flex items-center justify-between;
+  }
+
+  .preview-panel-body {
+    @apply flex-1 overflow-hidden bg-gray-50;
+  }
+
+  .preview-placeholder {
+    @apply flex items-center justify-center h-full text-gray-400;
+  }
+
+  .preview-iframe {
+    @apply w-full h-full border-0 bg-white;
+    transition: opacity 0.2s ease-in-out;
+  }
+
+  .preview-iframe.loading {
+    opacity: 0.85;
+  }
+
+  .preview-frame-wrapper {
+    @apply w-full h-full flex justify-center items-start bg-gray-100 overflow-hidden;
+  }
+
+  .preview-frame-scaler {
+    @apply w-full h-full;
+  }
+
+  .preview-controls {
+    @apply flex items-center gap-3;
+  }
+
+  .viewport-selector {
+    @apply flex items-center gap-1 bg-gray-100 rounded-lg p-1;
+  }
+
+  .viewport-btn {
+    @apply p-1.5 rounded text-gray-500 hover:text-gray-700 hover:bg-white transition-colors;
+  }
+
+  .viewport-btn.active {
+    @apply bg-white text-gray-900 shadow-sm;
+  }
+
+  /* Nested Fieldsets */
+  .nested-fieldset {
+    @apply border border-gray-200 rounded-lg p-4 mb-4;
+  }
+
+  .nested-fieldset legend {
+    @apply font-semibold text-gray-700 px-2 text-sm;
+  }
+
+  .nested-fields {
+    @apply mt-3 space-y-3;
+  }
+
+  /* Array Fields */
+  .array-field {
+    @apply border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2;
+  }
+
+  .array-item {
+    @apply bg-white p-3 rounded border border-gray-200 flex gap-3 items-start;
+  }
+
+  .array-item-input {
+    @apply flex-1 px-3 py-2 border border-gray-300 rounded text-sm;
+  }
+
+  /* Checkbox */
+  .checkbox-label {
+    @apply flex items-center gap-2 cursor-pointer;
+  }
+
+  .checkbox-label input[type="checkbox"] {
+    @apply w-auto cursor-pointer;
+  }
+
+  /* Block Editor Styles */
+  .blocks-container {
+    @apply mb-6;
+  }
+
+  .blocks-header {
+    @apply flex items-center justify-between mb-4;
+  }
+
+  .blocks-actions {
+    @apply flex gap-2 items-center;
+  }
+
+  .blocks-actions select {
+    @apply w-40;
+  }
+
+  .blocks-list {
+    @apply space-y-3;
+  }
+
+  .block-item {
+    @apply bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm cursor-grab;
+  }
+
+  .block-item.collapsed .block-body {
+    display: none;
+  }
+
+  .block-item.dragging {
+    @apply opacity-50 cursor-grabbing;
+  }
+
+  .block-item.drag-over {
+    @apply border-primary-500 border-2 bg-primary-50;
+  }
+
+  .block-item-error {
+    @apply border-red-300 bg-red-50;
+  }
+
+  .block-header {
+    @apply flex items-center gap-3 px-4 py-3 bg-gray-50 border-b border-gray-200;
+  }
+
+  .toggle-block-header {
+    @apply cursor-pointer hover:bg-gray-100 transition-colors;
+  }
+
+  .block-expand-icon {
+    @apply w-4 h-4 flex items-center justify-center text-gray-400 text-xs;
+  }
+
+  .block-drag-handle {
+    @apply text-gray-400 cursor-grab select-none text-lg;
+  }
+
+  .block-type-badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700;
+  }
+
+  .block-type-hero { @apply bg-purple-100 text-purple-800; }
+  .block-type-features { @apply bg-blue-100 text-blue-800; }
+  .block-type-sectionHeader { @apply bg-gray-100 text-gray-800; }
+  .block-type-richText { @apply bg-green-100 text-green-800; }
+  .block-type-textImage { @apply bg-teal-100 text-teal-800; }
+  .block-type-stats { @apply bg-orange-100 text-orange-800; }
+  .block-type-testimonials { @apply bg-pink-100 text-pink-800; }
+  .block-type-gallery { @apply bg-indigo-100 text-indigo-800; }
+  .block-type-cta { @apply bg-yellow-100 text-yellow-800; }
+  .block-type-organizations { @apply bg-cyan-100 text-cyan-800; }
+  .block-type-seo { @apply bg-slate-100 text-slate-800; }
+
+  .block-preview-text {
+    @apply flex-1 text-sm text-gray-500 truncate;
+  }
+
+  .block-actions {
+    @apply flex gap-1;
+  }
+
+  .block-body {
+    @apply p-4;
+  }
+
+  .block-footer {
+    @apply mt-4 pt-4 border-t border-gray-200 flex justify-end;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700;
+  }
+
+  .form-input-sm {
+    @apply py-1.5 text-sm;
+  }
+
+  /* Array item fields in blocks */
+  .array-item-fields {
+    @apply flex-1 space-y-3;
+  }
+
+  .array-item-fields .form-group {
+    @apply mb-3;
+  }
+
+  /* Image Picker Styles */
+  .image-picker {
+    @apply border border-gray-200 rounded-lg p-3 bg-gray-50;
+  }
+
+  .image-picker-preview {
+    @apply relative mb-3 rounded-lg overflow-hidden bg-gray-100;
+  }
+
+  .image-picker-preview.hidden {
+    display: none;
+  }
+
+  .image-picker-img {
+    @apply w-full h-auto max-h-48 object-contain;
+  }
+
+  .image-picker-clear {
+    @apply absolute top-2 right-2 w-7 h-7 bg-red-500 text-white rounded-full flex items-center justify-center text-lg font-bold hover:bg-red-600 transition-colors cursor-pointer;
+  }
+
+  .image-picker-placeholder {
+    @apply flex flex-col items-center justify-center py-6 text-gray-400 text-sm;
+  }
+
+  .image-picker-placeholder.hidden {
+    display: none;
+  }
+
+  .image-picker-icon {
+    @apply text-2xl mb-1;
+  }
+
+  .image-picker-actions {
+    @apply flex gap-2 mb-2;
+  }
+
+  .image-picker-url {
+    @apply text-xs;
+  }
+
+  /* Image Library Modal */
+  .image-modal-overlay {
+    @apply fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4;
+  }
+
+  .image-modal {
+    @apply bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col;
+  }
+
+  .image-modal-header {
+    @apply flex items-center justify-between px-6 py-4 border-b border-gray-200;
+  }
+
+  .image-modal-title {
+    @apply text-lg font-semibold text-gray-900;
+  }
+
+  .image-modal-close {
+    @apply text-gray-400 hover:text-gray-600 text-2xl cursor-pointer;
+  }
+
+  .image-modal-body {
+    @apply flex-1 overflow-y-auto p-6;
+  }
+
+  .image-modal-upload-zone {
+    @apply border-2 border-dashed border-gray-300 rounded-lg p-6 mb-6 text-center cursor-pointer hover:border-primary-400 hover:bg-primary-50 transition-colors;
+  }
+
+  .image-modal-upload-zone.dragover {
+    @apply border-primary-500 bg-primary-50;
+  }
+
+  .image-modal-upload-zone input[type="file"] {
+    display: none;
+  }
+
+  .image-modal-upload-icon {
+    @apply text-4xl text-gray-400 mb-2;
+  }
+
+  .image-modal-upload-text {
+    @apply text-gray-600 mb-1;
+  }
+
+  .image-modal-upload-hint {
+    @apply text-xs text-gray-400;
+  }
+
+  .image-library-grid {
+    @apply grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3;
+  }
+
+  .image-library-item {
+    @apply relative aspect-square bg-gray-100 rounded-lg overflow-hidden cursor-pointer border-2 border-transparent hover:border-primary-400 transition-all;
+  }
+
+  .image-library-item.selected {
+    @apply border-primary-500 ring-2 ring-primary-200;
+  }
+
+  .image-library-item img {
+    @apply w-full h-full object-cover;
+  }
+
+  .image-library-item-overlay {
+    @apply absolute inset-0 bg-black bg-opacity-0 hover:bg-opacity-20 transition-all flex items-center justify-center;
+  }
+
+  .image-library-item-check {
+    display: none;
+    @apply text-white text-2xl;
+  }
+
+  .image-library-item.selected .image-library-item-check {
+    display: block;
+  }
+
+  .image-library-item.selected .image-library-item-overlay {
+    @apply bg-primary-500 bg-opacity-40;
+  }
+
+  .image-library-item-delete {
+    @apply absolute top-1 right-1 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center text-sm font-bold opacity-0 hover:bg-red-600 transition-all z-10;
+  }
+
+  .image-library-item:hover .image-library-item-delete {
+    @apply opacity-100;
+  }
+
+  .image-library-empty {
+    @apply text-center py-12 text-gray-400;
+  }
+
+  .image-modal-footer {
+    @apply flex items-center justify-between px-6 py-4 border-t border-gray-200 bg-gray-50;
+  }
+
+  .image-modal-selected-info {
+    @apply text-sm text-gray-600;
+  }
+
+  .image-modal-actions {
+    @apply flex gap-2;
+  }
+
+  .image-uploading {
+    @apply flex items-center gap-2 text-sm text-gray-600;
+  }
+
+  .image-uploading-spinner {
+    @apply animate-spin w-4 h-4 border-2 border-gray-300 border-t-primary-500 rounded-full;
+  }
+
+  /* Color Picker Styles */
+  .color-picker-wrapper {
+    @apply flex items-center gap-2;
+  }
+
+  .color-picker-input {
+    @apply w-10 h-10 p-0 border border-gray-300 rounded-lg cursor-pointer;
+    -webkit-appearance: none;
+  }
+
+  .color-picker-input::-webkit-color-swatch-wrapper {
+    padding: 2px;
+  }
+
+  .color-picker-input::-webkit-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
+
+  .color-picker-text {
+    @apply flex-1;
+  }
+
+  .color-picker-clear {
+    @apply w-8 h-8 bg-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-red-100 hover:text-red-600 transition-colors cursor-pointer text-lg font-bold;
+  }
+
+  /* Changes Panel Styles */
+  .changes-panel {
+    @apply fixed top-14 right-0 w-96 h-[calc(100vh-3.5rem)] bg-white border-l border-gray-200 shadow-xl z-40 flex flex-col;
+  }
+
+  .changes-panel.hidden {
+    display: none;
+  }
+
+  .changes-panel-header {
+    @apply flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50;
+  }
+
+  .changes-panel-title {
+    @apply font-semibold text-gray-900;
+  }
+
+  .changes-panel-close {
+    @apply text-gray-400 hover:text-gray-600 text-xl cursor-pointer;
+  }
+
+  .changes-panel-body {
+    @apply flex-1 overflow-y-auto p-4;
+  }
+
+  .changes-section {
+    @apply mb-6;
+  }
+
+  .changes-section-title {
+    @apply text-sm font-semibold text-gray-600 mb-2;
+  }
+
+  .changes-list, .commits-list {
+    @apply space-y-1;
+  }
+
+  .changes-loading, .changes-error, .changes-empty {
+    @apply text-sm text-gray-400 py-4 text-center;
+  }
+
+  .changes-error {
+    @apply text-red-500;
+  }
+
+  .change-item {
+    @apply flex items-center gap-2 p-2 bg-gray-50 rounded-lg text-sm;
+  }
+
+  .change-type {
+    @apply w-5 h-5 rounded text-xs font-bold flex items-center justify-center;
+  }
+
+  .change-type-modified {
+    @apply bg-yellow-100 text-yellow-700;
+  }
+
+  .change-type-added {
+    @apply bg-green-100 text-green-700;
+  }
+
+  .change-type-deleted {
+    @apply bg-red-100 text-red-700;
+  }
+
+  .change-file {
+    @apply flex-1 truncate text-gray-700;
+  }
+
+  .change-actions {
+    @apply flex gap-1;
+  }
+
+  .btn-icon {
+    @apply w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 transition-colors cursor-pointer text-sm;
+  }
+
+  .btn-icon-danger:hover {
+    @apply bg-red-100 text-red-600;
+  }
+
+  .commit-item {
+    @apply flex items-center gap-2 p-2 text-sm;
+  }
+
+  .commit-hash {
+    @apply font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-600;
+  }
+
+  .commit-message {
+    @apply flex-1 truncate text-gray-700;
+  }
+
+  .commit-date {
+    @apply text-xs text-gray-400;
+  }
+
+  .changes-panel-footer {
+    @apply flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-gray-50;
+  }
+
+  /* Diff Modal */
+  .diff-modal-overlay {
+    @apply fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4;
+  }
+
+  .diff-modal {
+    @apply bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col;
+  }
+
+  .diff-modal-header {
+    @apply flex items-center justify-between px-6 py-4 border-b border-gray-200;
+  }
+
+  .diff-modal-header h3 {
+    @apply font-semibold text-gray-900;
+  }
+
+  .diff-modal-close {
+    @apply text-gray-400 hover:text-gray-600 text-2xl cursor-pointer;
+  }
+
+  .diff-modal-body {
+    @apply flex-1 overflow-auto p-4 bg-gray-900;
+  }
+
+  .diff-content {
+    @apply font-mono text-sm text-gray-300 whitespace-pre-wrap;
+  }
+
+  .diff-add {
+    @apply text-green-400 bg-green-900 bg-opacity-30;
+  }
+
+  .diff-remove {
+    @apply text-red-400 bg-red-900 bg-opacity-30;
+  }
+
+  .diff-info {
+    @apply text-blue-400;
+  }
+
+  .diff-empty {
+    @apply text-gray-500 italic;
+  }
+
+  .diff-modal-footer {
+    @apply flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-200 bg-gray-50;
+  }
+
+  /* Changes button badge */
+  .changes-badge {
+    @apply absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold;
+  }
+
+  .btn-with-badge {
+    @apply relative;
+  }
+}
