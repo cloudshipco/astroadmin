@@ -642,24 +642,44 @@ export function setupFormHandlers(formElement, onBlockChange) {
       const select = container.querySelector('#add-block-type');
       const blockType = select.value;
 
-      if (!blockType) return;
+      if (!blockType) {
+        // Visual feedback instead of silent failure
+        select.focus();
+        select.classList.add('shake');
+        setTimeout(() => select.classList.remove('shake'), 500);
+        return;
+      }
 
       const blocksList = container.querySelector('.blocks-list');
       const blockTypes = JSON.parse(blocksList.dataset.blockTypes || '{}');
       const fieldPath = blocksList.dataset.field;
       const index = blocksList.querySelectorAll('.block-item').length;
 
-      // Create empty block with type
-      const newBlock = { type: blockType };
+      // Use createEmptyBlock to populate defaults (prevents schema validation errors)
+      const blockSchema = blockTypes[blockType];
+      const newBlock = createEmptyBlock(blockType, blockSchema);
       const blockHtml = generateBlockItem(fieldPath, blockTypes, newBlock, index);
 
       // Add to DOM
       blocksList.insertAdjacentHTML('beforeend', blockHtml);
 
+      // Get the newly added block and expand it
+      const newBlockEl = blocksList.lastElementChild;
+      newBlockEl.classList.remove('collapsed');
+      const icon = newBlockEl.querySelector('.block-expand-icon');
+      if (icon) icon.textContent = '▼';
+
+      // Focus first input and scroll into view
+      const firstInput = newBlockEl.querySelector('input:not([type="hidden"]), textarea');
+      if (firstInput) {
+        firstInput.focus();
+        firstInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
       // Reset select
       select.value = '';
 
-      // Trigger change callback
+      // Trigger change callback (saves and refreshes preview)
       if (onBlockChange) onBlockChange();
     }
   });
