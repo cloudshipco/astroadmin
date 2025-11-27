@@ -249,7 +249,7 @@ function generateBlockItem(arrayPath, blockTypes, block, index) {
         <input type="hidden" name="${path}.type" value="${blockType}">
         ${blockFields}
         <div class="block-footer">
-          <button type="button" class="btn btn-sm btn-danger remove-block" onclick="event.stopPropagation()">Delete Section</button>
+          <button type="button" class="btn btn-sm btn-danger remove-block">Delete Block</button>
         </div>
       </div>
     </div>
@@ -564,21 +564,27 @@ export function extractFormData(formElement) {
 
 /**
  * Remove empty string values from objects (they clutter the YAML)
- * Preserves empty strings if the field is required (has value in original)
+ * But preserve empty strings in block items (array elements with 'type' field)
+ * since those fields may be required by the schema
  */
-function cleanEmptyValues(obj) {
+function cleanEmptyValues(obj, isBlockItem = false) {
   if (Array.isArray(obj)) {
-    obj.forEach(item => cleanEmptyValues(item));
+    obj.forEach(item => {
+      // Check if this is a block item (has a 'type' discriminator field)
+      const itemIsBlock = item && typeof item === 'object' && 'type' in item;
+      cleanEmptyValues(item, itemIsBlock);
+    });
   } else if (obj && typeof obj === 'object') {
     for (const key of Object.keys(obj)) {
       const value = obj[key];
-      if (value === '') {
-        // Remove empty string values
+      if (value === '' && !isBlockItem) {
+        // Only remove empty strings if NOT inside a block item
+        // Block items may have required fields that need empty string placeholders
         delete obj[key];
       } else if (typeof value === 'object') {
-        cleanEmptyValues(value);
-        // Remove empty objects
-        if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
+        cleanEmptyValues(value, isBlockItem);
+        // Remove empty objects (but not in block items)
+        if (!isBlockItem && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
           delete obj[key];
         }
       }
