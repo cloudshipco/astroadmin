@@ -181,8 +181,9 @@ export async function startServer(options = {}) {
 
   // Start server
   const server = app.listen(port, host, () => {
-    console.log(`✅ AstroAdmin server running at http://${host}:${port}`);
-    console.log(`📝 Admin UI: http://${host}:${port}`);
+    const actualPort = server.address().port;
+    console.log(`✅ AstroAdmin server running at http://${host}:${actualPort}`);
+    console.log(`📝 Admin UI: http://${host}:${actualPort}`);
     console.log(`🔍 Preview: ${config.preview.url}\n`);
 
     if (IS_DEV) {

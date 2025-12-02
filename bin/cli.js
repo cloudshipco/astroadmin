@@ -5,9 +5,9 @@
  * Command-line interface for running the admin server
  *
  * Usage:
- *   npx astroadmin dev              # Start in current directory
+ *   npx astroadmin dev              # Start on auto-selected port
  *   npx astroadmin dev --project .  # Explicit project path
- *   npx astroadmin dev -p 3030      # Custom port
+ *   npx astroadmin dev -p 3030      # Specific port
  */
 
 import { Command } from 'commander';
@@ -26,7 +26,7 @@ program
 program
   .command('dev')
   .description('Start admin development server')
-  .option('-p, --port <port>', 'Port to run on', '3030')
+  .option('-p, --port <port>', 'Port to run on (0 for auto)', '0')
   .option('-H, --host <host>', 'Host to bind to', 'localhost')
   .option('--project <path>', 'Astro project root directory', process.cwd())
   .action(async (options) => {
@@ -64,7 +64,7 @@ program
 program
   .command('start')
   .description('Start admin server (alias for dev)')
-  .option('-p, --port <port>', 'Port to run on', '3030')
+  .option('-p, --port <port>', 'Port to run on (0 for auto)', '0')
   .option('-H, --host <host>', 'Host to bind to', 'localhost')
   .option('--project <path>', 'Astro project root directory', process.cwd())
   .action(async (options) => {

@@ -22,11 +22,11 @@ npm install astroadmin
 # Start admin server (from your Astro project root)
 npx astroadmin dev
 
-# Or with options
+# With a specific port (default auto-selects a free port)
 npx astroadmin dev --port 3030 --project ./my-astro-site
 ```
 
-Then visit http://localhost:3030
+The server URL will be printed when it starts.
 
 ## Requirements
 

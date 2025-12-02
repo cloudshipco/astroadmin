@@ -36,7 +36,7 @@ const defaultPaths = {
 // Default configuration
 const defaultConfig = {
   // Server settings
-  port: process.env.PORT || 3030,
+  port: process.env.PORT || 0,
   host: process.env.HOST || 'localhost',
 
   // Paths
@@ -166,7 +166,7 @@ export function logConfig() {
   console.log('=' .repeat(50));
   console.log(`Environment:      ${ENV}`);
   console.log(`Project Root:     ${PROJECT_ROOT}`);
-  console.log(`Server:           http://${config.host}:${config.port}`);
+  console.log(`Server Port:      ${config.port === 0 ? 'auto' : config.port}`);
   console.log(`Preview URL:      ${config.preview.url}`);
   console.log(`Preview Method:   ${config.preview.method}`);
   console.log(`Content Dir:      ${config.paths.content}`);
