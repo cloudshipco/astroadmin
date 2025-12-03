@@ -38,6 +38,9 @@
       <div class="editor-panel">
         <div class="editor-panel-header">
           <span id="editorTitle">Select a page to edit</span>
+          <button id="deleteEntryBtn" class="btn btn-sm btn-danger" style="display: none;" title="Delete this entry">
+            Delete
+          </button>
         </div>
         <div class="editor-panel-body" id="editorForm">
           <p class="placeholder-text">Choose a page from the dropdown above to start editing.</p>
@@ -75,6 +78,26 @@
             <p>Preview will appear here</p>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Item Modal -->
+  <div id="newItemModal" class="new-item-modal-overlay hidden">
+    <div class="new-item-modal">
+      <div class="new-item-modal-header">
+        <h2 class="new-item-modal-title">Create New <span id="newItemCollectionName"></span></h2>
+        <button type="button" class="new-item-modal-close" data-close>&times;</button>
+      </div>
+      <div class="new-item-modal-body">
+        <label for="newItemSlug" class="form-label">Slug (URL identifier)</label>
+        <input type="text" id="newItemSlug" class="form-input" placeholder="e.g., about-us" autocomplete="off">
+        <p id="newItemSlugHint" class="new-item-slug-hint">Use lowercase letters, numbers, and hyphens only</p>
+        <p id="newItemSlugError" class="new-item-slug-error hidden"></p>
+      </div>
+      <div class="new-item-modal-footer">
+        <button type="button" class="btn btn-secondary" data-cancel>Cancel</button>
+        <button type="button" class="btn btn-primary" id="newItemCreateBtn" data-create disabled>Create</button>
       </div>
     </div>
   </div>

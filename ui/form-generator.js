@@ -29,7 +29,7 @@ export function generateForm(schema, data = {}) {
       continue;
     }
 
-    const fieldHtml = generateField(fieldName, fieldSchema, value);
+    const fieldHtml = generateField(fieldName, fieldSchema, value, '', data);
     formHtml.push(fieldHtml);
   }
 
@@ -39,8 +39,13 @@ export function generateForm(schema, data = {}) {
 
 /**
  * Generate a single field
+ * @param {string} name - Field name
+ * @param {object} schema - Field schema
+ * @param {any} value - Field value
+ * @param {string} path - Parent path prefix
+ * @param {object} siblingData - Data object containing sibling fields (for related field lookups like imageAlt)
  */
-function generateField(name, schema, value, path = '') {
+function generateField(name, schema, value, path = '', siblingData = {}) {
   const fullPath = path ? `${path}.${name}` : name;
   const id = fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
 
@@ -50,14 +55,15 @@ function generateField(name, schema, value, path = '') {
   }
 
   if (schema.type === 'object') {
-    // Nested object
+    // Nested object - pass the nested object's data as siblingData for nested fields
+    const nestedData = value || {};
     return `
       <div class="mb-6">
         <fieldset class="nested-fieldset">
           <legend class="text-sm font-semibold text-gray-700 mb-3">${formatLabel(name)}</legend>
           <div class="space-y-4">
             ${Object.entries(schema.properties || {}).map(([key, subSchema]) =>
-              generateField(key, subSchema, value?.[key], fullPath)
+              generateField(key, subSchema, nestedData[key], fullPath, nestedData)
             ).join('\n')}
           </div>
         </fieldset>
@@ -66,6 +72,12 @@ function generateField(name, schema, value, path = '') {
   }
 
   if (schema.type === 'array') {
+    // Check if this is a reference field (array of IDs referencing another collection)
+    const refCollection = detectReferenceCollection(name, schema);
+    if (refCollection) {
+      return generateReferenceField(name, schema, value, fullPath, id, refCollection);
+    }
+
     // Regular array of items
     const items = Array.isArray(value) ? value : [];
     return `
@@ -138,7 +150,9 @@ function generateField(name, schema, value, path = '') {
 
   // Check if this is an image field
   if (isImageField(name, schema)) {
-    return generateImageField(name, schema, value, fullPath, id);
+    // Look for corresponding alt text in sibling data (e.g., imageAlt for image)
+    const altValue = siblingData[`${name}Alt`] || siblingData[`${name}_alt`] || '';
+    return generateImageField(name, schema, value, fullPath, id, altValue);
   }
 
   // Check if this is a color field
@@ -152,7 +166,16 @@ function generateField(name, schema, value, path = '') {
                     schema.format === 'date' ? 'date' : 'text';
 
   // Large text field for long content
-  if (schema.multiline || name.toLowerCase().includes('description') || name.toLowerCase().includes('content')) {
+  // Default to textarea unless:
+  // - maxLength is short (under 100 chars), OR
+  // - field name suggests it's a short field (title, link, etc.)
+  const shortFieldNames = ['text', 'link', 'href', 'url', 'title', 'heading', 'name', 'label', 'icon', 'value', 'number'];
+  const lowerName = name.toLowerCase();
+  const isShortByName = shortFieldNames.some(short => lowerName === short || lowerName.endsWith(short));
+  const isShortByLength = schema.maxLength && schema.maxLength < 100;
+  const isLongByName = lowerName.includes('description') || lowerName.includes('content') || lowerName.includes('subheading');
+
+  if (!isShortByLength && !isShortByName || isLongByName) {
     return `
       <div class="form-group">
         <label for="${id}" class="form-label">${getFieldLabel(name, schema)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
@@ -261,10 +284,11 @@ function generateBlockItem(arrayPath, blockTypes, block, index) {
  */
 function generateBlockFields(path, properties, data) {
   if (!properties) return '';
+  const blockData = data || {};
 
   return Object.entries(properties)
     .filter(([key]) => key !== 'type') // Skip the type field (it's hidden)
-    .map(([key, schema]) => generateField(key, schema, data?.[key], path))
+    .map(([key, schema]) => generateField(key, schema, blockData[key], path, blockData))
     .join('\n');
 }
 
@@ -291,12 +315,13 @@ function getBlockPreview(block) {
  */
 function generateArrayItem(arrayPath, itemSchema, value, index) {
   const path = `${arrayPath}[${index}]`;
+  const itemData = value || {};
 
   if (itemSchema?.type === 'object') {
     return `
       <div class="array-item-fields">
         ${Object.entries(itemSchema.properties || {}).map(([key, schema]) =>
-          generateField(key, schema, value?.[key], path)
+          generateField(key, schema, itemData[key], path, itemData)
         ).join('\n')}
       </div>
     `;
@@ -338,7 +363,7 @@ function isImageField(name, schema) {
 /**
  * Generate an image picker field
  */
-function generateImageField(name, schema, value, fullPath, id) {
+function generateImageField(name, schema, value, fullPath, id, altValue = '') {
   const hasValue = value && value.trim();
   const previewClass = hasValue ? '' : 'hidden';
   const placeholderClass = hasValue ? 'hidden' : '';
@@ -373,11 +398,12 @@ function generateImageField(name, schema, value, fullPath, id) {
         >
         <input
           type="text"
-          class="form-input image-picker-url"
+          class="form-input image-picker-alt"
           style="margin-top: 0.5rem;"
-          value="${escapeHtml(value || '')}"
-          placeholder="/images/filename.jpg or https://..."
-          data-url-input
+          name="${fullPath}Alt"
+          value="${escapeHtml(altValue || '')}"
+          placeholder="Alt text for accessibility"
+          data-alt-input
         >
       </div>
     </div>
@@ -474,6 +500,76 @@ function colorToHex(color) {
 
   // Default to white if we can't parse
   return '#ffffff';
+}
+
+/**
+ * Detect if a field is a reference to another collection
+ * Returns the collection name if it is, null otherwise
+ */
+function detectReferenceCollection(name, schema) {
+  // Only check arrays of strings
+  if (schema.type !== 'array' || schema.items?.type !== 'string') {
+    return null;
+  }
+
+  const lowerName = name.toLowerCase();
+
+  // Map of field name patterns to collection names
+  const referencePatterns = {
+    'testimonialids': 'testimonials',
+    'testimonials': 'testimonials',
+    'pageids': 'pages',
+    'pages': 'pages',
+    // Add more patterns as needed
+  };
+
+  // Check direct matches
+  if (referencePatterns[lowerName]) {
+    return referencePatterns[lowerName];
+  }
+
+  // Check if name ends with 'Ids' and derive collection name
+  if (lowerName.endsWith('ids')) {
+    const baseName = name.slice(0, -3); // Remove 'Ids'
+    // Pluralize if needed (simple version)
+    return baseName.endsWith('s') ? baseName.toLowerCase() : baseName.toLowerCase() + 's';
+  }
+
+  // Check schema hints
+  if (schema.referenceCollection) {
+    return schema.referenceCollection;
+  }
+
+  return null;
+}
+
+/**
+ * Generate a reference picker field
+ */
+function generateReferenceField(name, schema, value, fullPath, id, collectionName) {
+  const items = Array.isArray(value) ? value : [];
+  const singularName = collectionName.endsWith('s') ? collectionName.slice(0, -1) : collectionName;
+
+  return `
+    <div class="form-group">
+      <label class="form-label">${getFieldLabel(name, schema)}</label>
+      <div class="reference-field" data-field="${fullPath}" data-collection="${collectionName}">
+        <div class="reference-items">
+          ${items.length === 0 ? '<div class="reference-empty">No items selected</div>' : ''}
+          ${items.map((itemId, index) => `
+            <div class="reference-item" data-index="${index}" data-id="${escapeHtml(itemId)}">
+              <input type="hidden" name="${fullPath}[${index}]" value="${escapeHtml(itemId)}">
+              <span class="reference-item-label">${escapeHtml(itemId)}</span>
+              <button type="button" class="btn btn-sm btn-danger remove-reference-item" title="Remove">×</button>
+            </div>
+          `).join('\n')}
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm add-reference-item" data-field="${fullPath}" data-collection="${collectionName}">
+          Add ${formatLabel(singularName)}
+        </button>
+      </div>
+    </div>
+  `;
 }
 
 /**
@@ -717,6 +813,26 @@ export function setupFormHandlers(formElement, onBlockChange) {
 
   // Drag and drop for reordering blocks
   let draggedBlock = null;
+  let dropIndicator = null;
+  let dropTarget = null;
+  let dropPosition = null; // 'before' or 'after'
+
+  // Create drop indicator element
+  function getDropIndicator() {
+    if (!dropIndicator) {
+      dropIndicator = document.createElement('div');
+      dropIndicator.className = 'block-drop-indicator';
+    }
+    return dropIndicator;
+  }
+
+  function removeDropIndicator() {
+    if (dropIndicator && dropIndicator.parentNode) {
+      dropIndicator.parentNode.removeChild(dropIndicator);
+    }
+    dropTarget = null;
+    dropPosition = null;
+  }
 
   formElement.addEventListener('dragstart', (e) => {
     const blockItem = e.target.closest('.block-item');
@@ -731,41 +847,70 @@ export function setupFormHandlers(formElement, onBlockChange) {
     if (draggedBlock) {
       draggedBlock.classList.remove('dragging');
       draggedBlock = null;
-      // Remove all drag-over states
-      formElement.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      removeDropIndicator();
     }
   });
 
   formElement.addEventListener('dragover', (e) => {
     e.preventDefault();
     const blockItem = e.target.closest('.block-item');
+    const blocksList = e.target.closest('.blocks-list');
+
+    if (!draggedBlock || !blocksList) return;
+
+    e.dataTransfer.dropEffect = 'move';
+    const indicator = getDropIndicator();
+
     if (blockItem && blockItem !== draggedBlock) {
-      e.dataTransfer.dropEffect = 'move';
-      // Add visual indicator
-      formElement.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-      blockItem.classList.add('drag-over');
+      // Determine if cursor is in top or bottom half of block
+      const rect = blockItem.getBoundingClientRect();
+      const midpoint = rect.top + rect.height / 2;
+      const isAbove = e.clientY < midpoint;
+
+      dropTarget = blockItem;
+      dropPosition = isAbove ? 'before' : 'after';
+
+      // Position the indicator
+      if (isAbove) {
+        blockItem.parentNode.insertBefore(indicator, blockItem);
+      } else {
+        blockItem.parentNode.insertBefore(indicator, blockItem.nextSibling);
+      }
+    } else if (!blockItem && blocksList) {
+      // Cursor is in the blocks list but not on a block - show at end
+      const blocks = blocksList.querySelectorAll('.block-item');
+      const lastBlock = blocks[blocks.length - 1];
+      if (lastBlock && lastBlock !== draggedBlock) {
+        dropTarget = lastBlock;
+        dropPosition = 'after';
+        blocksList.appendChild(indicator);
+      }
+    }
+  });
+
+  formElement.addEventListener('dragleave', (e) => {
+    // Only remove indicator if leaving the blocks list entirely
+    const blocksList = e.target.closest('.blocks-list');
+    if (!blocksList || !blocksList.contains(e.relatedTarget)) {
+      removeDropIndicator();
     }
   });
 
   formElement.addEventListener('drop', (e) => {
     e.preventDefault();
-    const targetBlock = e.target.closest('.block-item');
-    if (targetBlock && draggedBlock && targetBlock !== draggedBlock) {
-      const blocksList = targetBlock.closest('.blocks-list');
-      const blocks = Array.from(blocksList.querySelectorAll('.block-item'));
-      const draggedIndex = blocks.indexOf(draggedBlock);
-      const targetIndex = blocks.indexOf(targetBlock);
 
-      if (draggedIndex < targetIndex) {
-        targetBlock.parentNode.insertBefore(draggedBlock, targetBlock.nextSibling);
+    if (draggedBlock && dropTarget && dropPosition) {
+      if (dropPosition === 'before') {
+        dropTarget.parentNode.insertBefore(draggedBlock, dropTarget);
       } else {
-        targetBlock.parentNode.insertBefore(draggedBlock, targetBlock);
+        dropTarget.parentNode.insertBefore(draggedBlock, dropTarget.nextSibling);
       }
 
       reindexBlocks(formElement);
       if (onBlockChange) onBlockChange();
     }
-    formElement.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+
+    removeDropIndicator();
   });
 
   // Add array item (for non-block arrays)

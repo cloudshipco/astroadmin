@@ -83,7 +83,7 @@
   }
 
   .editor-panel-header {
-    @apply px-4 py-3 border-b border-gray-200 font-semibold text-sm bg-gray-50;
+    @apply px-4 py-3 border-b border-gray-200 font-semibold text-sm bg-gray-50 flex items-center justify-between;
   }
 
   .editor-panel-body {
@@ -212,8 +212,10 @@
     @apply opacity-50 cursor-grabbing;
   }
 
-  .block-item.drag-over {
-    @apply border-primary-500 border-2 bg-primary-50;
+  .block-drop-indicator {
+    height: 4px;
+    @apply bg-primary-500 rounded-full my-2;
+    box-shadow: 0 0 6px 2px rgb(99 102 241 / 0.5);
   }
 
   .block-item-error {
@@ -438,6 +440,55 @@
 
   .image-uploading-spinner {
     @apply animate-spin w-4 h-4 border-2 border-gray-300 border-t-primary-500 rounded-full;
+  }
+
+  /* New Item Modal Styles */
+  .new-item-modal-overlay {
+    @apply fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4;
+  }
+
+  .new-item-modal-overlay.hidden {
+    display: none;
+  }
+
+  .new-item-modal {
+    @apply bg-white rounded-xl shadow-2xl w-full max-w-md;
+  }
+
+  .new-item-modal-header {
+    @apply flex items-center justify-between px-6 py-4 border-b border-gray-200;
+  }
+
+  .new-item-modal-title {
+    @apply text-lg font-semibold text-gray-900;
+  }
+
+  .new-item-modal-close {
+    @apply text-gray-400 hover:text-gray-600 text-2xl cursor-pointer;
+  }
+
+  .new-item-modal-body {
+    @apply p-6;
+  }
+
+  .new-item-modal-body .form-input {
+    @apply mt-1;
+  }
+
+  .new-item-slug-hint {
+    @apply text-xs text-gray-400 mt-2;
+  }
+
+  .new-item-slug-error {
+    @apply text-xs text-red-500 mt-2;
+  }
+
+  .new-item-slug-error.hidden {
+    display: none;
+  }
+
+  .new-item-modal-footer {
+    @apply flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl;
   }
 
   /* Color Picker Styles */
