@@ -681,6 +681,108 @@
   .shake {
     animation: shake 0.5s ease-in-out;
   }
+
+  /* Reference Field Styles */
+  .reference-field {
+    @apply border border-gray-200 rounded-lg p-3 bg-gray-50;
+  }
+
+  .reference-items {
+    @apply space-y-2 mb-3;
+  }
+
+  .reference-item {
+    @apply flex items-center gap-2 bg-white p-2 rounded border border-gray-200;
+  }
+
+  .reference-item-label {
+    @apply flex-1 text-sm text-gray-700 truncate;
+  }
+
+  .reference-empty {
+    @apply text-sm text-gray-400 py-2 text-center;
+  }
+
+  /* Reference Picker Modal */
+  .reference-modal-overlay {
+    @apply fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4;
+  }
+
+  .reference-modal-overlay.hidden {
+    display: none;
+  }
+
+  .reference-modal {
+    @apply bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col;
+  }
+
+  .reference-modal-header {
+    @apply flex items-center justify-between px-6 py-4 border-b border-gray-200;
+  }
+
+  .reference-modal-title {
+    @apply text-lg font-semibold text-gray-900;
+  }
+
+  .reference-modal-close {
+    @apply text-gray-400 hover:text-gray-600 text-2xl cursor-pointer leading-none;
+  }
+
+  .reference-modal-body {
+    @apply flex-1 overflow-y-auto p-4;
+  }
+
+  .reference-search-wrapper {
+    @apply mb-4;
+  }
+
+  .reference-search {
+    @apply w-full;
+  }
+
+  .reference-list {
+    @apply space-y-2;
+  }
+
+  .reference-list-item {
+    @apply flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-primary-50 hover:border-primary-200 border border-transparent transition-colors;
+  }
+
+  .reference-list-item.disabled {
+    @apply opacity-50 cursor-not-allowed hover:bg-gray-50 hover:border-transparent;
+  }
+
+  .reference-list-item-content {
+    @apply flex-1 min-w-0;
+  }
+
+  .reference-list-item-title {
+    @apply font-medium text-gray-900 truncate;
+  }
+
+  .reference-list-item-preview {
+    @apply text-sm text-gray-500 truncate mt-0.5;
+  }
+
+  .reference-list-item-badge {
+    @apply text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full;
+  }
+
+  .reference-loading, .reference-empty {
+    @apply text-center py-8 text-gray-400 text-sm;
+  }
+
+  .reference-modal-footer {
+    @apply flex items-center justify-between px-6 py-4 border-t border-gray-200 bg-gray-50;
+  }
+
+  .reference-selected-info {
+    @apply text-sm text-gray-600;
+  }
+
+  .reference-modal-actions {
+    @apply flex gap-2;
+  }
 }
 
 @keyframes shake {

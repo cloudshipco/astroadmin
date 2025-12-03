@@ -8,6 +8,7 @@ import {
   getAllCollections,
   getCollectionNames,
   getCollectionEntries,
+  getCollectionEntriesWithPreview,
   getCollectionSchema,
 } from '../utils/collections.js';
 
@@ -116,6 +117,20 @@ router.get('/:collectionName', async (req, res) => {
 router.get('/:collectionName/entries', async (req, res) => {
   try {
     const { collectionName } = req.params;
+    const { preview } = req.query;
+
+    // If preview=true, return entries with preview data
+    if (preview === 'true') {
+      const entries = await getCollectionEntriesWithPreview(collectionName);
+      return res.json({
+        success: true,
+        collection: collectionName,
+        entries,
+        count: entries.length,
+      });
+    }
+
+    // Default: return just slugs
     const entries = await getCollectionEntries(collectionName);
 
     res.json({

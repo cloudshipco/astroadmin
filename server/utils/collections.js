@@ -217,3 +217,51 @@ export async function hasBlockEditor(collectionName) {
     return false;
   }
 }
+
+/**
+ * Get all entries with preview data for a collection
+ * Returns entries with slug, title, and preview text
+ */
+export async function getCollectionEntriesWithPreview(collectionName) {
+  const { readContent } = await import('./content.js');
+  const slugs = await getCollectionEntries(collectionName);
+
+  const entries = await Promise.all(
+    slugs.map(async (slug) => {
+      try {
+        const content = await readContent(collectionName, slug);
+        const data = content.data || {};
+
+        // Try to extract a title from common field names
+        const title = data.title || data.name || data.heading || slug;
+
+        // Try to extract preview text from common field names
+        const previewFields = ['quote', 'description', 'content', 'excerpt', 'summary', 'subheading'];
+        let preview = '';
+        for (const field of previewFields) {
+          if (data[field] && typeof data[field] === 'string') {
+            preview = data[field].substring(0, 100);
+            if (data[field].length > 100) preview += '...';
+            break;
+          }
+        }
+
+        return {
+          slug,
+          title,
+          preview,
+          data, // Include all frontmatter for richer display
+        };
+      } catch (error) {
+        // If we can't read the file, just return basic info
+        return {
+          slug,
+          title: slug,
+          preview: '',
+        };
+      }
+    })
+  );
+
+  return entries;
+}

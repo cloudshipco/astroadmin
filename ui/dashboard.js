@@ -4,6 +4,7 @@
 
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
 import { openImageLibrary, uploadNewImage } from './image-library.js';
+import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount } from './changes-panel.js';
 
 let currentCollection = null;
@@ -453,6 +454,9 @@ async function renderEditor(entryData) {
 
   // Setup color picker handlers
   setupColorPickers(form, debouncedSave);
+
+  // Setup reference picker handlers
+  setupReferencePickers(form, debouncedSave);
 }
 
 /**
@@ -563,6 +567,198 @@ function setupColorPickers(form, onChangeCallback) {
       if (onChangeCallback) onChangeCallback();
     }
   });
+}
+
+/**
+ * Setup reference picker event handlers
+ */
+function setupReferencePickers(form, onChangeCallback) {
+  // Load preview data for all reference items on the page
+  loadReferenceItemPreviews(form);
+
+  form.addEventListener('click', (e) => {
+    // Add reference item button
+    if (e.target.matches('.add-reference-item')) {
+      const referenceField = e.target.closest('.reference-field');
+      const collectionName = e.target.dataset.collection;
+      const fieldPath = e.target.dataset.field;
+
+      // Get currently selected IDs to exclude from picker
+      const existingItems = referenceField.querySelectorAll('.reference-item');
+      const excludeIds = Array.from(existingItems).map(item => item.dataset.id);
+
+      openReferencePicker(collectionName, (selectedId, selectedData) => {
+        addReferenceItem(referenceField, fieldPath, selectedId, selectedData);
+        if (onChangeCallback) onChangeCallback();
+      }, excludeIds);
+      return;
+    }
+
+    // Click on existing reference item to change it
+    if (e.target.closest('.edit-reference-item')) {
+      const item = e.target.closest('.reference-item');
+      const referenceField = e.target.closest('.reference-field');
+      const collectionName = referenceField.dataset.collection;
+      const fieldPath = referenceField.dataset.field;
+      const currentId = item.dataset.id;
+
+      // Get all OTHER selected IDs to exclude (not the current one being edited)
+      const existingItems = referenceField.querySelectorAll('.reference-item');
+      const excludeIds = Array.from(existingItems)
+        .map(i => i.dataset.id)
+        .filter(id => id !== currentId);
+
+      openReferencePicker(collectionName, (selectedId, selectedData) => {
+        // Replace the current item
+        replaceReferenceItem(item, fieldPath, selectedId, selectedData);
+        if (onChangeCallback) onChangeCallback();
+      }, excludeIds);
+      return;
+    }
+
+    // Remove reference item button
+    if (e.target.matches('.remove-reference-item')) {
+      const item = e.target.closest('.reference-item');
+      const referenceField = e.target.closest('.reference-field');
+      item.remove();
+      reindexReferenceItems(referenceField);
+
+      // Show empty message if no items left
+      const items = referenceField.querySelectorAll('.reference-item');
+      if (items.length === 0) {
+        const itemsContainer = referenceField.querySelector('.reference-items');
+        itemsContainer.innerHTML = '<div class="reference-empty">No items selected. Click "Add" to select.</div>';
+      }
+
+      if (onChangeCallback) onChangeCallback();
+      return;
+    }
+  });
+}
+
+/**
+ * Load preview data for all reference items
+ */
+async function loadReferenceItemPreviews(form) {
+  const referenceFields = form.querySelectorAll('.reference-field');
+
+  for (const field of referenceFields) {
+    const collectionName = field.dataset.collection;
+    if (!collectionName) continue;
+
+    try {
+      const response = await fetch(`/api/collections/${collectionName}/entries?preview=true`);
+      const data = await response.json();
+
+      if (data.success && data.entries) {
+        // Create a lookup map
+        const entriesMap = {};
+        for (const entry of data.entries) {
+          entriesMap[entry.slug] = entry;
+        }
+
+        // Update all preview elements in this field
+        const items = field.querySelectorAll('.reference-item');
+        for (const item of items) {
+          const itemId = item.dataset.id;
+          const entry = entriesMap[itemId];
+
+          const titleEl = item.querySelector('.reference-item-title');
+          const previewEl = item.querySelector('.reference-item-preview');
+
+          if (entry) {
+            if (titleEl) titleEl.textContent = entry.title || itemId;
+            if (previewEl) previewEl.textContent = entry.preview || '';
+          } else {
+            if (previewEl) previewEl.textContent = '';
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to load previews for ${collectionName}:`, error);
+    }
+  }
+}
+
+/**
+ * Add a reference item to the field
+ */
+function addReferenceItem(referenceField, fieldPath, itemId, itemData = null) {
+  const itemsContainer = referenceField.querySelector('.reference-items');
+
+  // Remove empty message if present
+  const emptyMsg = itemsContainer.querySelector('.reference-empty');
+  if (emptyMsg) emptyMsg.remove();
+
+  const index = itemsContainer.querySelectorAll('.reference-item').length;
+  const title = itemData?.title || itemId;
+  const preview = itemData?.preview || '';
+
+  const newItem = document.createElement('div');
+  newItem.className = 'reference-item';
+  newItem.dataset.index = index;
+  newItem.dataset.id = itemId;
+  newItem.innerHTML = `
+    <input type="hidden" name="${fieldPath}[${index}]" value="${escapeHtml(itemId)}">
+    <div class="reference-item-content edit-reference-item" title="Click to change">
+      <span class="reference-item-title">${escapeHtml(title)}</span>
+      <span class="reference-item-preview">${escapeHtml(preview)}</span>
+    </div>
+    <button type="button" class="btn btn-sm btn-danger remove-reference-item" title="Remove">×</button>
+  `;
+
+  itemsContainer.appendChild(newItem);
+}
+
+/**
+ * Replace a reference item with a new selection
+ */
+function replaceReferenceItem(item, fieldPath, newId, itemData = null) {
+  const index = item.dataset.index;
+  const title = itemData?.title || newId;
+  const preview = itemData?.preview || '';
+
+  // Update the item
+  item.dataset.id = newId;
+
+  const input = item.querySelector('input[type="hidden"]');
+  if (input) input.value = newId;
+
+  const titleEl = item.querySelector('.reference-item-title');
+  if (titleEl) titleEl.textContent = title;
+
+  const previewEl = item.querySelector('.reference-item-preview');
+  if (previewEl) previewEl.textContent = preview;
+}
+
+/**
+ * Reindex reference items after removal
+ */
+function reindexReferenceItems(referenceField) {
+  const fieldPath = referenceField.dataset.field;
+  const items = referenceField.querySelectorAll('.reference-item');
+
+  items.forEach((item, newIndex) => {
+    item.dataset.index = newIndex;
+
+    const input = item.querySelector('input[type="hidden"]');
+    if (input) {
+      input.name = `${fieldPath}[${newIndex}]`;
+    }
+  });
+}
+
+/**
+ * Escape HTML to prevent XSS
+ */
+function escapeHtml(str) {
+  if (typeof str !== 'string') return str;
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 // Collapse all blocks by default

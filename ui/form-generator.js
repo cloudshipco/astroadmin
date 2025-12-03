@@ -555,11 +555,14 @@ function generateReferenceField(name, schema, value, fullPath, id, collectionNam
       <label class="form-label">${getFieldLabel(name, schema)}</label>
       <div class="reference-field" data-field="${fullPath}" data-collection="${collectionName}">
         <div class="reference-items">
-          ${items.length === 0 ? '<div class="reference-empty">No items selected</div>' : ''}
+          ${items.length === 0 ? '<div class="reference-empty">No items selected. Click "Add" to select.</div>' : ''}
           ${items.map((itemId, index) => `
             <div class="reference-item" data-index="${index}" data-id="${escapeHtml(itemId)}">
               <input type="hidden" name="${fullPath}[${index}]" value="${escapeHtml(itemId)}">
-              <span class="reference-item-label">${escapeHtml(itemId)}</span>
+              <div class="reference-item-content edit-reference-item" title="Click to change">
+                <span class="reference-item-title">${escapeHtml(itemId)}</span>
+                <span class="reference-item-preview" data-preview-for="${escapeHtml(itemId)}">Loading...</span>
+              </div>
               <button type="button" class="btn btn-sm btn-danger remove-reference-item" title="Remove">×</button>
             </div>
           `).join('\n')}
