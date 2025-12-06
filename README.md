@@ -1,14 +1,35 @@
 # AstroAdmin
 
-Admin interface for Astro Content Collections. Auto-generates forms from your Zod schemas.
+Admin interface for [Astro Content Collections](https://docs.astro.build/en/guides/content-collections/). Auto-generates forms from your Zod schemas.
 
 ## Features
 
-- **Auto-detects schemas** from `src/content/config.ts`
-- **Block editor** for discriminated unions
-- **Live preview** via iframe (Astro dev server)
-- **Git integration** for commits
-- **Image uploads**
+- **Schema-driven forms** - Auto-generates fields from `src/content/config.ts`
+- **Block editor** - Visual editing for discriminated unions (page builders)
+- **Live preview** - See changes in real-time via iframe
+- **Image uploads** - Upload and manage images with alt text
+- **Git integration** - Commit changes directly from the admin
+- **Collection management** - Create and delete entries
+
+## Requirements
+
+Before using AstroAdmin, ensure your project has:
+
+- [ ] **Node.js 18+**
+- [ ] **Astro 4.0+** with `astro.config.mjs` or `astro.config.ts`
+- [ ] **Content Collections** set up in `src/content/config.ts`
+
+```
+your-astro-site/
+├── astro.config.mjs       ← Required
+├── src/
+│   └── content/
+│       ├── config.ts      ← Required (collection schemas)
+│       └── pages/         ← Your collections
+│           └── home.md
+```
+
+**Don't have Content Collections?** See the [setup guide](./docs/content-collections.md).
 
 ## Installation
 
@@ -22,16 +43,18 @@ npm install astroadmin
 # Start admin server (from your Astro project root)
 npx astroadmin dev
 
-# With a specific port (default auto-selects a free port)
+# With options
 npx astroadmin dev --port 3030 --project ./my-astro-site
 ```
 
-The server URL will be printed when it starts.
+The server URL will be printed when it starts. Default credentials: `admin` / `admin`
 
-## Requirements
+## Documentation
 
-- Astro 4.0+
-- Content Collections with Zod schemas in `src/content/config.ts`
+- [Getting Started](./docs/getting-started.md) - Full setup guide
+- [Requirements](./docs/requirements.md) - Detailed requirements
+- [Content Collections](./docs/content-collections.md) - Schema setup guide
+- [Configuration](./docs/configuration.md) - Customization options
 
 ## Configuration (optional)
 
@@ -48,6 +71,28 @@ export default {
   },
 };
 ```
+
+## Troubleshooting
+
+### "Invalid Astro project" error
+
+This means AstroAdmin couldn't find the required files:
+
+1. **Run from project root** - Where `astro.config.mjs` is located
+2. **Set up Content Collections** - Create `src/content/config.ts`
+
+```bash
+# Quick fix
+mkdir -p src/content
+touch src/content/config.ts
+```
+
+See [Requirements](./docs/requirements.md) for details.
+
+### Preview not loading
+
+1. Start your Astro dev server: `npm run dev`
+2. Check the preview URL in your config matches the Astro server
 
 ## How it works
 

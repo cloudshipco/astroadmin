@@ -43,9 +43,15 @@ program
       // Validate project structure
       const validation = await validateProject();
       if (!validation.valid) {
-        console.error('\n❌ Invalid Astro project:');
-        validation.errors.forEach(err => console.error(`   - ${err}`));
-        console.error('\nMake sure you run astroadmin from an Astro project directory.');
+        console.error('\n❌ Invalid Astro project:\n');
+        validation.errors.forEach(err => {
+          console.error(`   • ${err.message}`);
+          if (err.hint) {
+            console.error(`     → ${err.hint}`);
+          }
+        });
+        console.error('\nAstroAdmin requires Astro Content Collections.');
+        console.error('See: https://github.com/cloudship-dev/astroadmin/blob/main/docs/requirements.md\n');
         process.exit(1);
       }
 
@@ -76,8 +82,15 @@ program
 
       const validation = await validateProject();
       if (!validation.valid) {
-        console.error('\n❌ Invalid Astro project:');
-        validation.errors.forEach(err => console.error(`   - ${err}`));
+        console.error('\n❌ Invalid Astro project:\n');
+        validation.errors.forEach(err => {
+          console.error(`   • ${err.message}`);
+          if (err.hint) {
+            console.error(`     → ${err.hint}`);
+          }
+        });
+        console.error('\nAstroAdmin requires Astro Content Collections.');
+        console.error('See: https://github.com/cloudship-dev/astroadmin/blob/main/docs/requirements.md\n');
         process.exit(1);
       }
 

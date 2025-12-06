@@ -177,28 +177,21 @@ export function logConfig() {
 
 /**
  * Validate that the project root looks like an Astro project
+ * Returns structured errors with hints for fixing issues
  */
 export async function validateProject() {
-  const checks = [
-    { path: path.join(PROJECT_ROOT, 'src/content'), name: 'src/content directory' },
-    { path: path.join(PROJECT_ROOT, 'astro.config.mjs'), name: 'astro.config.mjs', optional: true },
-    { path: path.join(PROJECT_ROOT, 'astro.config.ts'), name: 'astro.config.ts', optional: true },
-  ];
-
   const errors = [];
 
-  // Check for content directory
-  try {
-    await fs.access(checks[0].path);
-  } catch {
-    errors.push(`Missing ${checks[0].name} at ${checks[0].path}`);
-  }
-
   // Check for astro config (either .mjs or .ts)
+  const astroConfigPaths = [
+    path.join(PROJECT_ROOT, 'astro.config.mjs'),
+    path.join(PROJECT_ROOT, 'astro.config.ts'),
+  ];
+
   let hasAstroConfig = false;
-  for (const check of checks.slice(1)) {
+  for (const configPath of astroConfigPaths) {
     try {
-      await fs.access(check.path);
+      await fs.access(configPath);
       hasAstroConfig = true;
       break;
     } catch {
@@ -207,7 +200,21 @@ export async function validateProject() {
   }
 
   if (!hasAstroConfig) {
-    errors.push('No astro.config.mjs or astro.config.ts found. Is this an Astro project?');
+    errors.push({
+      message: 'Not an Astro project (no astro.config.mjs or astro.config.ts found)',
+      hint: 'Run astroadmin from your Astro project root directory, or use --project flag',
+    });
+  }
+
+  // Check for content directory
+  const contentPath = path.join(PROJECT_ROOT, 'src/content');
+  try {
+    await fs.access(contentPath);
+  } catch {
+    errors.push({
+      message: 'Missing src/content directory (Content Collections not set up)',
+      hint: 'mkdir -p src/content && touch src/content/config.ts',
+    });
   }
 
   return { valid: errors.length === 0, errors };
