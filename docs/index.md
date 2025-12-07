@@ -44,5 +44,5 @@ AstroAdmin is a visual admin interface for [Astro Content Collections](https://d
 
 ## Getting Help
 
-- [GitHub Issues](https://github.com/YOUR_USERNAME/astroadmin/issues) - Report bugs or request features
+- [GitHub Issues](https://github.com/cloudshipco/astroadmin/issues) - Report bugs or request features
 - [Astro Discord](https://astro.build/chat) - Community support

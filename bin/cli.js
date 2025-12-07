@@ -51,7 +51,7 @@ program
           }
         });
         console.error('\nAstroAdmin requires Astro Content Collections.');
-        console.error('See: https://github.com/cloudship-dev/astroadmin/blob/main/docs/requirements.md\n');
+        console.error('See: https://github.com/cloudshipco/astroadmin/blob/main/docs/requirements.md\n');
         process.exit(1);
       }
 
@@ -90,7 +90,7 @@ program
           }
         });
         console.error('\nAstroAdmin requires Astro Content Collections.');
-        console.error('See: https://github.com/cloudship-dev/astroadmin/blob/main/docs/requirements.md\n');
+        console.error('See: https://github.com/cloudshipco/astroadmin/blob/main/docs/requirements.md\n');
         process.exit(1);
       }
 
