@@ -10,23 +10,52 @@ import {
   deleteContent,
   contentExists,
 } from '../utils/content.js';
+import { getConfig } from '../config.js';
 
 const router = express.Router();
 
 /**
+ * Extract locale from request query param
+ * Returns null if i18n is disabled or no valid locale specified
+ * @param {Request} req - Express request
+ * @returns {Promise<string|null>} - Locale code or null
+ */
+async function getLocaleFromRequest(req) {
+  const fullConfig = await getConfig();
+
+  // If i18n is disabled, always return null
+  if (!fullConfig.i18n?.enabled) {
+    return null;
+  }
+
+  const locale = req.query.locale;
+
+  // Validate locale is in configured list
+  if (locale && fullConfig.i18n.locales.includes(locale)) {
+    return locale;
+  }
+
+  // Return default locale if none specified
+  return fullConfig.i18n.defaultLocale;
+}
+
+/**
  * GET /api/content/:collection/:slug
  * Read a content entry
+ * Query params: ?locale=en (optional, uses default locale if i18n enabled)
  */
 router.get('/:collection/:slug', async (req, res) => {
   try {
     const { collection, slug } = req.params;
+    const locale = await getLocaleFromRequest(req);
 
-    const content = await readContent(collection, slug);
+    const content = await readContent(collection, slug, locale);
 
     res.json({
       success: true,
       collection,
       slug,
+      locale,
       ...content,
     });
   } catch (error) {
@@ -51,11 +80,13 @@ router.get('/:collection/:slug', async (req, res) => {
 /**
  * POST /api/content/:collection/:slug
  * Create or update a content entry
+ * Query params: ?locale=en (optional, uses default locale if i18n enabled)
  */
 router.post('/:collection/:slug', async (req, res) => {
   try {
     const { collection, slug } = req.params;
     const { data, body, type } = req.body;
+    const locale = await getLocaleFromRequest(req);
 
     // Validate request
     if (!data) {
@@ -70,12 +101,13 @@ router.post('/:collection/:slug', async (req, res) => {
       data,
       body,
       type: type || 'content',
-    });
+    }, locale);
 
     res.json({
       success: true,
       collection,
       slug,
+      locale,
       ...result,
       message: 'Content saved successfully',
     });
@@ -92,19 +124,22 @@ router.post('/:collection/:slug', async (req, res) => {
 /**
  * PUT /api/content/:collection/:slug
  * Update a content entry (alias for POST)
+ * Query params: ?locale=en (optional, uses default locale if i18n enabled)
  */
 router.put('/:collection/:slug', async (req, res) => {
   try {
     const { collection, slug } = req.params;
     const { data, body, type } = req.body;
+    const locale = await getLocaleFromRequest(req);
 
     // Check if content exists
-    const exists = await contentExists(collection, slug);
+    const exists = await contentExists(collection, slug, locale);
     if (!exists) {
+      const localeHint = locale ? ` (${locale})` : '';
       return res.status(404).json({
         success: false,
         error: 'Content not found',
-        message: `Cannot update non-existent content: ${collection}/${slug}`,
+        message: `Cannot update non-existent content: ${collection}/${slug}${localeHint}`,
       });
     }
 
@@ -113,12 +148,13 @@ router.put('/:collection/:slug', async (req, res) => {
       data,
       body,
       type: type || 'content',
-    });
+    }, locale);
 
     res.json({
       success: true,
       collection,
       slug,
+      locale,
       ...result,
       message: 'Content updated successfully',
     });
@@ -135,17 +171,20 @@ router.put('/:collection/:slug', async (req, res) => {
 /**
  * DELETE /api/content/:collection/:slug
  * Delete a content entry
+ * Query params: ?locale=en (optional, uses default locale if i18n enabled)
  */
 router.delete('/:collection/:slug', async (req, res) => {
   try {
     const { collection, slug } = req.params;
+    const locale = await getLocaleFromRequest(req);
 
-    const result = await deleteContent(collection, slug);
+    const result = await deleteContent(collection, slug, locale);
 
     res.json({
       success: true,
       collection,
       slug,
+      locale,
       ...result,
       message: 'Content deleted successfully',
     });

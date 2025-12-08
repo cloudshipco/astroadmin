@@ -106,6 +106,14 @@ const defaultConfig = {
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: IS_DEV ? 1000 : 100, // Loose in dev, strict in prod
   },
+
+  // Internationalization (i18n)
+  // When enabled, content files use locale suffixes: page.en.md, page.fr.md
+  i18n: {
+    enabled: false,              // Disabled by default for backwards compatibility
+    defaultLocale: 'en',         // Default locale when none specified
+    locales: ['en'],             // Supported locales (add more when enabled)
+  },
 };
 
 // User config (loaded asynchronously)

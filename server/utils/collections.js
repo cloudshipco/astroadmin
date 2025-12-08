@@ -76,8 +76,10 @@ export async function getCollectionNames() {
 
 /**
  * Get all entry slugs for a collection
+ * @param {string} collectionName - Collection name
+ * @param {object} options - { i18nEnabled: boolean, locales: string[] }
  */
-export async function getCollectionEntries(collectionName) {
+export async function getCollectionEntries(collectionName, options = {}) {
   try {
     const collectionDir = path.join(config.paths.content, collectionName);
 
@@ -97,7 +99,24 @@ export async function getCollectionEntries(collectionName) {
       file.endsWith('.json')
     );
 
-    // Convert filenames to slugs (remove extension)
+    // When i18n is enabled, deduplicate entries by base slug
+    // e.g., home.en.md and home.fr.md both become "home"
+    if (options.i18nEnabled && options.locales?.length > 1) {
+      // Build regex to match locale suffixes: .en, .fr, etc.
+      const localePattern = new RegExp(`\\.(${options.locales.join('|')})$`, 'i');
+
+      const baseSlugs = contentFiles.map(file => {
+        const ext = path.extname(file);
+        const nameWithoutExt = path.basename(file, ext);
+        // Remove locale suffix if present
+        return nameWithoutExt.replace(localePattern, '');
+      });
+
+      // Deduplicate
+      return [...new Set(baseSlugs)];
+    }
+
+    // Non-i18n: return slugs as-is (including locale suffix if any)
     const slugs = contentFiles.map(file => {
       const ext = path.extname(file);
       return path.basename(file, ext);
@@ -108,6 +127,32 @@ export async function getCollectionEntries(collectionName) {
     console.error(`Error reading collection ${collectionName}:`, error);
     return [];
   }
+}
+
+/**
+ * Get entries with their available locales (for i18n sites)
+ * @param {string} collectionName - Collection name
+ * @param {string[]} locales - Configured locales
+ * @returns {Promise<Array<{slug: string, locales: string[]}>>}
+ */
+export async function getCollectionEntriesWithLocales(collectionName, locales) {
+  const { getAvailableLocales } = await import('./content.js');
+  const slugs = await getCollectionEntries(collectionName, {
+    i18nEnabled: true,
+    locales,
+  });
+
+  const entries = await Promise.all(
+    slugs.map(async (slug) => {
+      const availableLocales = await getAvailableLocales(collectionName, slug, locales);
+      return {
+        slug,
+        locales: availableLocales,
+      };
+    })
+  );
+
+  return entries;
 }
 
 /**
@@ -171,8 +216,9 @@ export async function getCollectionSchema(collectionName) {
 
 /**
  * Get all collections with their metadata
+ * @param {object} options - { i18nEnabled: boolean, locales: string[] }
  */
-export async function getAllCollections() {
+export async function getAllCollections(options = {}) {
   const collectionNames = await getCollectionNames();
 
   // Try to load schemas (don't fail if it doesn't work)
@@ -185,7 +231,8 @@ export async function getAllCollections() {
 
   const collections = await Promise.all(
     collectionNames.map(async (name) => {
-      const entries = await getCollectionEntries(name);
+      // Pass i18n options to getCollectionEntries for proper deduplication
+      const entries = await getCollectionEntries(name, options);
       const schemaInfo = schemas[name] || {};
 
       return {

@@ -15,6 +15,15 @@ let allPages = []; // Store all pages for dropdown
 let allCollections = []; // Store collection info for new entries
 let isNewEntry = false; // Track if current entry is new (unsaved)
 
+// i18n state
+let i18nConfig = {
+  enabled: false,
+  defaultLocale: 'en',
+  locales: ['en'],
+};
+let currentLocale = null; // Current locale being edited (null if i18n disabled)
+let entryLocales = []; // Which locales exist for current entry
+
 // Check authentication
 async function checkAuth() {
   try {
@@ -36,6 +45,14 @@ async function loadConfig() {
     const response = await fetch('/api/config');
     const data = await response.json();
     previewUrl = data.previewUrl;
+
+    // Load i18n config
+    if (data.i18n) {
+      i18nConfig = data.i18n;
+      if (i18nConfig.enabled) {
+        currentLocale = i18nConfig.defaultLocale;
+      }
+    }
   } catch (error) {
     console.error('Failed to load config:', error);
   }
@@ -49,7 +66,16 @@ async function loadPages() {
 
     if (data.success) {
       allCollections = data.collections; // Store for new entry creation
-      populatePageSelector(data.collections);
+
+      // Update i18n config from collections response (authoritative source)
+      if (data.i18n) {
+        i18nConfig = data.i18n;
+        if (i18nConfig.enabled && !currentLocale) {
+          currentLocale = i18nConfig.defaultLocale;
+        }
+      }
+
+      populatePageSelector(data.collections, data.i18n);
     }
   } catch (error) {
     console.error('Failed to load collections:', error);
@@ -57,7 +83,7 @@ async function loadPages() {
 }
 
 // Populate page selector dropdown
-function populatePageSelector(collections) {
+function populatePageSelector(collections, i18nInfo = null) {
   const selector = document.getElementById('pageSelector');
   const previousValue = selector.value; // Preserve selection if reloading
   selector.innerHTML = '<option value="">Select page...</option>';
@@ -112,6 +138,118 @@ function singularize(word) {
   if (word.endsWith('s')) return word.slice(0, -1);
   return word;
 }
+
+// ============================================
+// Locale Tab Functions (i18n)
+// ============================================
+
+/**
+ * Render locale tabs in the editor header
+ */
+function renderLocaleTabs() {
+  const container = document.getElementById('localeTabs');
+
+  // Hide tabs if i18n disabled or only one locale
+  if (!i18nConfig.enabled || i18nConfig.locales.length <= 1) {
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = 'flex';
+
+  container.innerHTML = i18nConfig.locales.map(locale => {
+    const isActive = locale === currentLocale;
+    const exists = entryLocales.includes(locale);
+    const statusIcon = exists ? '' : ' <span class="locale-missing" title="Translation not yet created">+</span>';
+
+    return `
+      <button
+        type="button"
+        class="locale-tab ${isActive ? 'active' : ''} ${exists ? '' : 'locale-tab-missing'}"
+        data-locale="${locale}"
+      >
+        ${locale.toUpperCase()}${statusIcon}
+      </button>
+    `;
+  }).join('');
+}
+
+/**
+ * Load which locales exist for an entry
+ */
+async function loadEntryLocales(collection, slug) {
+  if (!i18nConfig.enabled) {
+    entryLocales = [];
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/collections/${collection}/entries-with-locales`);
+    const data = await response.json();
+
+    if (data.success) {
+      const entry = data.entries.find(e => e.slug === slug);
+      entryLocales = entry?.locales || [];
+    } else {
+      entryLocales = [];
+    }
+  } catch (error) {
+    console.error('Failed to load entry locales:', error);
+    entryLocales = [];
+  }
+}
+
+/**
+ * Create a new translation for an existing entry
+ */
+async function createTranslation(collection, slug) {
+  document.getElementById('editorTitle').textContent = `New Translation: ${slug} (${currentLocale.toUpperCase()})`;
+  updateSaveStatus('New translation - unsaved');
+
+  try {
+    const schemaResponse = await fetch(`/api/collections/${collection}`);
+    const schemaData = await schemaResponse.json();
+
+    if (!schemaData.success) {
+      throw new Error('Failed to load collection schema');
+    }
+
+    const contentType = schemaData.collection.type === 'data' ? 'data' : 'content';
+
+    currentData = {
+      data: {},
+      body: '',
+      type: contentType,
+      schema: schemaData.collection.schema,
+      locale: currentLocale,
+    };
+
+    renderEditorForNewEntry(schemaData.collection.schema, contentType);
+
+  } catch (error) {
+    console.error('Failed to create translation:', error);
+    document.getElementById('editorForm').innerHTML = `
+      <p class="text-red-500">Failed to initialize: ${error.message}</p>
+    `;
+  }
+}
+
+// Locale tab click handler
+document.getElementById('localeTabs').addEventListener('click', async (e) => {
+  const tab = e.target.closest('.locale-tab');
+  if (!tab) return;
+
+  const newLocale = tab.dataset.locale;
+  if (newLocale === currentLocale) return;
+
+  currentLocale = newLocale;
+  renderLocaleTabs();
+
+  // Reload entry for new locale
+  if (currentCollection && currentSlug) {
+    await loadEntry(currentCollection, currentSlug, false);
+  }
+});
 
 // Handle page selector change
 document.getElementById('pageSelector').addEventListener('change', (e) => {
@@ -358,19 +496,36 @@ async function loadEntry(collection, slug, updateUrl = true) {
   const selector = document.getElementById('pageSelector');
   selector.value = `${collection}/${slug}`;
 
-  document.getElementById('editorTitle').textContent = `Editing: ${slug}`;
+  // Fetch available locales for this entry (if i18n enabled)
+  if (i18nConfig.enabled) {
+    await loadEntryLocales(collection, slug);
+    renderLocaleTabs();
+  }
+
+  const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
+  document.getElementById('editorTitle').textContent = `Editing: ${slug}${localeLabel}`;
   document.getElementById('editorForm').innerHTML = '<p class="placeholder-text">Loading...</p>';
   document.getElementById('saveBtn').style.display = 'inline-block';
   document.getElementById('deleteEntryBtn').style.display = 'inline-block';
 
   try {
-    const response = await fetch(`/api/content/${collection}/${slug}`);
+    // Build URL with locale query param if i18n enabled
+    let apiUrl = `/api/content/${collection}/${slug}`;
+    if (i18nConfig.enabled && currentLocale) {
+      apiUrl += `?locale=${currentLocale}`;
+    }
+
+    const response = await fetch(apiUrl);
     const data = await response.json();
 
     if (data.success) {
       currentData = data;
       renderEditor(data);
       updatePreview();
+    } else if (response.status === 404 && i18nConfig.enabled) {
+      // Entry doesn't exist for this locale - show empty form for new translation
+      isNewEntry = true;
+      await createTranslation(collection, slug);
     }
   } catch (error) {
     console.error('Failed to load entry:', error);
@@ -864,7 +1019,13 @@ async function saveContent(silent = false) {
   }
 
   try {
-    const response = await fetch(`/api/content/${currentCollection}/${currentSlug}`, {
+    // Build URL with locale query param if i18n enabled
+    let apiUrl = `/api/content/${currentCollection}/${currentSlug}`;
+    if (i18nConfig.enabled && currentLocale) {
+      apiUrl += `?locale=${currentLocale}`;
+    }
+
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -884,14 +1045,21 @@ async function saveContent(silent = false) {
         showNotification('Changes saved!', 'success');
       }
 
-      // Handle first save of new entry
+      // Handle first save of new entry/translation
       if (isNewEntry) {
         isNewEntry = false;
-        document.getElementById('editorTitle').textContent = `Editing: ${currentSlug}`;
+        const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
+        document.getElementById('editorTitle').textContent = `Editing: ${currentSlug}${localeLabel}`;
         // Refresh dropdown to include the new entry
         await loadPages();
         // Select the new entry in dropdown
         document.getElementById('pageSelector').value = `${currentCollection}/${currentSlug}`;
+
+        // Refresh entry locales after save (new locale now exists)
+        if (i18nConfig.enabled) {
+          await loadEntryLocales(currentCollection, currentSlug);
+          renderLocaleTabs();
+        }
       }
 
       // Update changes badge
@@ -954,10 +1122,16 @@ async function updatePreview() {
   placeholder.style.display = 'none';
   previewControls.style.display = 'flex';
 
-  // Determine preview page URL
-  const pageUrl = currentCollection === 'pages' && currentSlug === 'home'
-    ? `${previewUrl}/`
-    : `${previewUrl}/${currentSlug}`;
+  // Determine preview page URL (with locale prefix for non-default locales)
+  let pageUrl;
+  const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
+  const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
+
+  if (currentCollection === 'pages' && currentSlug === 'home') {
+    pageUrl = isDefaultLocale ? `${previewUrl}/` : `${previewUrl}${localePrefix}`;
+  } else {
+    pageUrl = `${previewUrl}${localePrefix}/${currentSlug}`;
+  }
 
   // Save current scroll position before reload
   const scrollToRestore = lastPreviewScrollY;
@@ -1068,18 +1242,29 @@ document.addEventListener('keydown', (e) => {
 document.getElementById('deleteEntryBtn').addEventListener('click', async () => {
   if (!currentCollection || !currentSlug || isNewEntry) return;
 
-  const confirmed = confirm(`Are you sure you want to delete "${currentSlug}" from ${currentCollection}?\n\nThis cannot be undone.`);
+  const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
+  const deleteMessage = i18nConfig.enabled && currentLocale
+    ? `Are you sure you want to delete the ${currentLocale.toUpperCase()} translation of "${currentSlug}"?\n\nThis cannot be undone.`
+    : `Are you sure you want to delete "${currentSlug}" from ${currentCollection}?\n\nThis cannot be undone.`;
+
+  const confirmed = confirm(deleteMessage);
   if (!confirmed) return;
 
   try {
-    const response = await fetch(`/api/content/${currentCollection}/${currentSlug}`, {
+    // Build URL with locale query param if i18n enabled
+    let apiUrl = `/api/content/${currentCollection}/${currentSlug}`;
+    if (i18nConfig.enabled && currentLocale) {
+      apiUrl += `?locale=${currentLocale}`;
+    }
+
+    const response = await fetch(apiUrl, {
       method: 'DELETE',
     });
 
     const result = await response.json();
 
     if (result.success) {
-      showNotification(`Deleted "${currentSlug}"`, 'success');
+      showNotification(`Deleted "${currentSlug}"${localeLabel}`, 'success');
 
       // Refresh the page list
       await loadPages();
