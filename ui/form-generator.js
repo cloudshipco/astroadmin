@@ -152,7 +152,9 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
   if (isImageField(name, schema)) {
     // Look for corresponding alt text in sibling data (e.g., imageAlt for image)
     const altValue = siblingData[`${name}Alt`] || siblingData[`${name}_alt`] || '';
-    return generateImageField(name, schema, value, fullPath, id, altValue);
+    // Hide built-in alt if parent object has its own 'alt' field (e.g., gallery images with {src, alt})
+    const hideBuiltinAlt = name.toLowerCase() === 'src' && 'alt' in siblingData;
+    return generateImageField(name, schema, value, fullPath, id, altValue, hideBuiltinAlt);
   }
 
   // Check if this is a color field
@@ -363,10 +365,22 @@ function isImageField(name, schema) {
 /**
  * Generate an image picker field
  */
-function generateImageField(name, schema, value, fullPath, id, altValue = '') {
+function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false) {
   const hasValue = value && value.trim();
   const previewClass = hasValue ? '' : 'hidden';
   const placeholderClass = hasValue ? 'hidden' : '';
+
+  // Only show built-in alt field if not hidden (e.g., parent object doesn't have its own alt field)
+  const altFieldHtml = hideBuiltinAlt ? '' : `
+        <input
+          type="text"
+          class="form-input image-picker-alt"
+          style="margin-top: 0.5rem;"
+          name="${fullPath}Alt"
+          value="${escapeHtml(altValue || '')}"
+          placeholder="Alt text for accessibility"
+          data-alt-input
+        >`;
 
   return `
     <div class="form-group">
@@ -395,16 +409,7 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '') {
           value="${escapeHtml(value || '')}"
           class="image-picker-input"
           ${schema.required ? 'required' : ''}
-        >
-        <input
-          type="text"
-          class="form-input image-picker-alt"
-          style="margin-top: 0.5rem;"
-          name="${fullPath}Alt"
-          value="${escapeHtml(altValue || '')}"
-          placeholder="Alt text for accessibility"
-          data-alt-input
-        >
+        >${altFieldHtml}
       </div>
     </div>
   `;
@@ -768,6 +773,15 @@ export function setupFormHandlers(formElement, onBlockChange) {
       // Add to DOM
       blocksList.insertAdjacentHTML('beforeend', blockHtml);
 
+      // Collapse all existing blocks first (accordion behavior)
+      blocksList.querySelectorAll('.block-item').forEach(block => {
+        if (!block.classList.contains('collapsed')) {
+          block.classList.add('collapsed');
+          const blockIcon = block.querySelector('.block-expand-icon');
+          if (blockIcon) blockIcon.textContent = '▶';
+        }
+      });
+
       // Get the newly added block and expand it
       const newBlockEl = blocksList.lastElementChild;
       newBlockEl.classList.remove('collapsed');
@@ -801,11 +815,25 @@ export function setupFormHandlers(formElement, onBlockChange) {
     }
   });
 
-  // Toggle block collapse - clicking anywhere on header
+  // Toggle block collapse - clicking anywhere on header (accordion: only one open at a time)
   formElement.addEventListener('click', (e) => {
     const header = e.target.closest('.toggle-block-header');
     if (header && !e.target.closest('.block-actions') && !e.target.closest('.block-drag-handle')) {
       const blockItem = header.closest('.block-item');
+      const blocksList = blockItem.closest('.blocks-list');
+      const isCurrentlyCollapsed = blockItem.classList.contains('collapsed');
+
+      // If opening this block, collapse all others first (accordion behavior)
+      if (isCurrentlyCollapsed && blocksList) {
+        blocksList.querySelectorAll('.block-item').forEach(otherBlock => {
+          if (otherBlock !== blockItem && !otherBlock.classList.contains('collapsed')) {
+            otherBlock.classList.add('collapsed');
+            const otherIcon = otherBlock.querySelector('.block-expand-icon');
+            if (otherIcon) otherIcon.textContent = '▶';
+          }
+        });
+      }
+
       blockItem.classList.toggle('collapsed');
       const icon = blockItem.querySelector('.block-expand-icon');
       if (icon) {
