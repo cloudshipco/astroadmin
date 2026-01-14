@@ -6,6 +6,7 @@ import { generateForm, extractFormData, setupFormHandlers } from './form-generat
 import { openImageLibrary, uploadNewImage } from './image-library.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount } from './changes-panel.js';
+import { openGalleryEditor } from './gallery-editor.js';
 
 let currentCollection = null;
 let currentSlug = null;
@@ -651,8 +652,59 @@ function setupImagePickers(form, onChangeCallback) {
       if (onChangeCallback) onChangeCallback();
       return;
     }
+
+    // Gallery edit button
+    if (e.target.matches('[data-edit-gallery]')) {
+      const fieldPath = e.target.dataset.editGallery;
+      const galleryField = e.target.closest('.gallery-field');
+      const currentValue = decodeGalleryValue(galleryField.dataset.galleryValue);
+
+      openGalleryEditor(currentValue, (newImages) => {
+        // Update the stored value (encoded)
+        galleryField.dataset.galleryValue = btoa(encodeURIComponent(JSON.stringify(newImages)));
+
+        // Update the preview
+        updateGalleryFieldPreview(galleryField, newImages);
+
+        if (onChangeCallback) onChangeCallback();
+      });
+      return;
+    }
   });
 
+}
+
+/**
+ * Decode gallery value from base64-encoded JSON
+ */
+function decodeGalleryValue(encoded) {
+  if (!encoded) return [];
+  try {
+    return JSON.parse(decodeURIComponent(atob(encoded)));
+  } catch (e) {
+    console.error('Failed to decode gallery value:', e);
+    return [];
+  }
+}
+
+/**
+ * Update gallery field preview after editing
+ */
+function updateGalleryFieldPreview(galleryField, images) {
+  const preview = galleryField.querySelector('.gallery-field-preview');
+  const editBtn = galleryField.querySelector('.gallery-field-edit');
+  const previewImages = images.slice(0, 6);
+  const moreCount = images.length - 6;
+
+  preview.innerHTML = previewImages.length > 0
+    ? previewImages.map(img => `
+        <div class="gallery-field-thumb">
+          <img src="${img.src || ''}" alt="">
+        </div>
+      `).join('') + (moreCount > 0 ? `<div class="gallery-field-more">+${moreCount}</div>` : '')
+    : '<span class="gallery-field-empty">No images</span>';
+
+  editBtn.textContent = images.length > 0 ? `Edit ${images.length} images` : 'Add images';
 }
 
 /**

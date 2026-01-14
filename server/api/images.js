@@ -11,6 +11,37 @@ import { config } from '../config.js';
 
 const router = express.Router();
 
+// Metadata file path
+const METADATA_FILENAME = '.metadata.json';
+
+/**
+ * Load image metadata from .metadata.json
+ */
+async function loadMetadata() {
+  const metadataPath = path.join(config.paths.images, METADATA_FILENAME);
+  try {
+    const data = await fs.readFile(metadataPath, 'utf-8');
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Save image metadata to .metadata.json
+ */
+async function saveMetadata(metadata) {
+  const metadataPath = path.join(config.paths.images, METADATA_FILENAME);
+  await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+}
+
+/**
+ * Get metadata for a specific image
+ */
+function getImageMetadata(metadata, filename) {
+  return metadata[filename] || {};
+}
+
 // Allowed image extensions
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -68,6 +99,7 @@ router.get('/', async (req, res) => {
   try {
     const allImages = [];
     const seenFilenames = new Set();
+    const metadata = await loadMetadata();
 
     // Helper to get images from a directory
     async function getImagesFromDir(dirPath, source) {
@@ -76,6 +108,9 @@ router.get('/', async (req, res) => {
         const files = await fs.readdir(dirPath);
 
         for (const file of files) {
+          // Skip metadata file
+          if (file === METADATA_FILENAME) continue;
+
           const ext = path.extname(file).toLowerCase();
           if (!ALLOWED_EXTENSIONS.includes(ext)) continue;
           if (seenFilenames.has(file)) continue; // Skip duplicates
@@ -85,6 +120,7 @@ router.get('/', async (req, res) => {
             const stats = await fs.stat(filePath);
             if (!stats.isFile()) continue;
 
+            const imageMeta = getImageMetadata(metadata, file);
             seenFilenames.add(file);
             allImages.push({
               filename: file,
@@ -94,6 +130,8 @@ router.get('/', async (req, res) => {
               modified: stats.mtime.toISOString(),
               extension: ext.slice(1),
               source, // 'source' for src/assets/images, 'uploads' for public/images
+              alt: imageMeta.alt || '',
+              focalPoint: imageMeta.focalPoint || null,
             });
           } catch (err) {
             // Skip files we can't stat
@@ -160,6 +198,76 @@ router.post('/', upload.single('image'), (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to upload image',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/images/:filename/metadata
+ * Get metadata for a specific image
+ */
+router.get('/:filename/metadata', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const sanitizedFilename = path.basename(filename);
+    const metadata = await loadMetadata();
+    const imageMeta = getImageMetadata(metadata, sanitizedFilename);
+
+    res.json({
+      success: true,
+      filename: sanitizedFilename,
+      metadata: imageMeta,
+    });
+  } catch (error) {
+    console.error('Error getting image metadata:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get image metadata',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * PUT /api/images/:filename/metadata
+ * Update metadata for a specific image
+ */
+router.put('/:filename/metadata', express.json(), async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const sanitizedFilename = path.basename(filename);
+    const { alt, focalPoint } = req.body;
+
+    const metadata = await loadMetadata();
+
+    // Initialize metadata for this file if it doesn't exist
+    if (!metadata[sanitizedFilename]) {
+      metadata[sanitizedFilename] = {};
+    }
+
+    // Update fields that were provided
+    if (alt !== undefined) {
+      metadata[sanitizedFilename].alt = alt;
+    }
+    if (focalPoint !== undefined) {
+      metadata[sanitizedFilename].focalPoint = focalPoint;
+    }
+
+    await saveMetadata(metadata);
+
+    console.log(`Metadata updated for: ${sanitizedFilename}`);
+
+    res.json({
+      success: true,
+      filename: sanitizedFilename,
+      metadata: metadata[sanitizedFilename],
+    });
+  } catch (error) {
+    console.error('Error updating image metadata:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update image metadata',
       message: error.message,
     });
   }

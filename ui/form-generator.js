@@ -78,6 +78,11 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
       return generateReferenceField(name, schema, value, fullPath, id, refCollection);
     }
 
+    // Check if this is a gallery field (array of objects with 'src' property)
+    if (isGalleryField(schema)) {
+      return generateGalleryField(name, schema, value, fullPath, id);
+    }
+
     // Regular array of items
     const items = Array.isArray(value) ? value : [];
     return `
@@ -508,6 +513,47 @@ function colorToHex(color) {
 }
 
 /**
+ * Detect if a field is a gallery (array of image objects with 'src')
+ */
+function isGalleryField(schema) {
+  if (schema.type !== 'array') return false;
+  const items = schema.items;
+  if (!items || items.type !== 'object') return false;
+  // Check if items have a 'src' property (typical for image arrays)
+  return items.properties && 'src' in items.properties;
+}
+
+/**
+ * Generate a gallery field with thumbnail preview and edit button
+ */
+function generateGalleryField(name, schema, value, fullPath, id) {
+  const images = Array.isArray(value) ? value : [];
+  const previewImages = images.slice(0, 6); // Show up to 6 thumbnails
+  const moreCount = images.length - 6;
+  // Encode JSON to avoid breaking HTML attributes with quotes in alt text
+  const encodedValue = btoa(encodeURIComponent(JSON.stringify(images)));
+
+  return `
+    <div class="form-group">
+      <label>${formatLabel(name)}</label>
+      <div class="gallery-field" data-field="${fullPath}" data-gallery-value="${encodedValue}" data-gallery-encoded="true">
+        <div class="gallery-field-preview">
+          ${previewImages.length > 0 ? previewImages.map(img => `
+            <div class="gallery-field-thumb">
+              <img src="${escapeHtml(img.src || '')}" alt="">
+            </div>
+          `).join('') : '<span class="gallery-field-empty">No images</span>'}
+          ${moreCount > 0 ? `<div class="gallery-field-more">+${moreCount}</div>` : ''}
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm gallery-field-edit" data-edit-gallery="${fullPath}">
+          ${images.length > 0 ? `Edit ${images.length} images` : 'Add images'}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Detect if a field is a reference to another collection
  * Returns the collection name if it is, null otherwise
  */
@@ -644,6 +690,20 @@ export function extractFormData(formElement) {
     } catch (e) {
       console.error('Failed to parse JSON field:', input.name, e);
       data[input.name] = input.value;
+    }
+  });
+
+  // Handle gallery fields (store images in base64-encoded data-gallery-value attribute)
+  formElement.querySelectorAll('.gallery-field[data-field]').forEach(field => {
+    const fieldPath = field.dataset.field;
+    const galleryValue = field.dataset.galleryValue;
+    try {
+      // Decode from base64 + URI encoding
+      const decoded = JSON.parse(decodeURIComponent(atob(galleryValue || '')));
+      setNestedValue(data, fieldPath, decoded);
+    } catch (e) {
+      console.error('Failed to parse gallery field:', fieldPath, e);
+      setNestedValue(data, fieldPath, []);
     }
   });
 

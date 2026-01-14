@@ -78,8 +78,15 @@ function createModal() {
         </div>
       </div>
       <div class="image-modal-footer">
-        <div class="image-modal-selected-info" data-selected-info>
-          No image selected
+        <div class="image-modal-selected-details" data-selected-details>
+          <div class="image-modal-selected-info" data-selected-info>
+            No image selected
+          </div>
+          <div class="image-modal-alt-field hidden" data-alt-field>
+            <label class="image-modal-alt-label">Alt text:</label>
+            <input type="text" class="image-modal-alt-input" data-alt-input placeholder="Describe this image...">
+            <button type="button" class="btn btn-sm btn-ghost" data-save-alt>Save</button>
+          </div>
         </div>
         <div class="image-modal-actions">
           <button type="button" class="btn btn-secondary" data-cancel>Cancel</button>
@@ -154,6 +161,17 @@ function setupModalEvents(modal) {
     if (selectedImageUrl && currentCallback) {
       currentCallback(selectedImageUrl);
       closeImageLibrary();
+    }
+  });
+
+  // Save alt text button
+  modal.querySelector('[data-save-alt]').addEventListener('click', saveAltText);
+
+  // Save alt text on Enter
+  modal.querySelector('[data-alt-input]').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveAltText();
     }
   });
 
@@ -237,6 +255,8 @@ function selectImage(url) {
   const grid = modal.querySelector('[data-grid]');
   const selectBtn = modal.querySelector('[data-select]');
   const selectedInfo = modal.querySelector('[data-selected-info]');
+  const altField = modal.querySelector('[data-alt-field]');
+  const altInput = modal.querySelector('[data-alt-input]');
 
   // Update selection visuals
   grid.querySelectorAll('.image-library-item').forEach(item => {
@@ -248,6 +268,57 @@ function selectImage(url) {
   if (image) {
     selectedInfo.textContent = `${image.filename} (${image.sizeFormatted})`;
     selectBtn.disabled = false;
+
+    // Show alt text field
+    altField.classList.remove('hidden');
+    altInput.value = image.alt || '';
+  }
+}
+
+/**
+ * Save alt text for selected image
+ */
+async function saveAltText() {
+  if (!selectedImageUrl) return;
+
+  const modal = document.getElementById('imageLibraryModal');
+  const altInput = modal.querySelector('[data-alt-input]');
+  const saveBtn = modal.querySelector('[data-save-alt]');
+  const image = currentImages.find(img => img.url === selectedImageUrl);
+
+  if (!image) return;
+
+  const newAlt = altInput.value.trim();
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving...';
+
+  try {
+    const response = await fetch(`/api/images/${encodeURIComponent(image.filename)}/metadata`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alt: newAlt }),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      // Update local cache
+      image.alt = newAlt;
+      saveBtn.textContent = 'Saved!';
+      setTimeout(() => {
+        saveBtn.textContent = 'Save';
+        saveBtn.disabled = false;
+      }, 1500);
+    } else {
+      alert('Failed to save alt text: ' + data.error);
+      saveBtn.textContent = 'Save';
+      saveBtn.disabled = false;
+    }
+  } catch (error) {
+    console.error('Error saving alt text:', error);
+    alert('Error saving alt text: ' + error.message);
+    saveBtn.textContent = 'Save';
+    saveBtn.disabled = false;
   }
 }
 
