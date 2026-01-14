@@ -10,7 +10,6 @@
  * 5. Updates nginx config with domains
  */
 
-import { $ } from "bun";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
 import { join } from "path";
 import * as readline from "readline";
@@ -101,7 +100,18 @@ async function generateSshKey(path: string, comment: string): Promise<void> {
     return;
   }
 
-  await $`ssh-keygen -t ed25519 -f ${keyPath} -N "" -C ${comment}`.quiet();
+  // Use spawn directly to avoid shell escaping issues with empty passphrase
+  const proc = Bun.spawn(["ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-C", comment], {
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`ssh-keygen failed: ${stderr}`);
+  }
+
   success(`Generated SSH key: ${path}/id_ed25519`);
 }
 
@@ -117,7 +127,18 @@ async function cloneRepo(url: string, targetDir: string, keyPath: string): Promi
   const sshCommand = `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=accept-new`;
 
   try {
-    await $`GIT_SSH_COMMAND=${sshCommand} git clone ${url} ${fullPath}`.quiet();
+    const proc = Bun.spawn(["git", "clone", url, fullPath], {
+      env: { ...process.env, GIT_SSH_COMMAND: sshCommand },
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      throw new Error(stderr);
+    }
+
     success(`Cloned repository to ${targetDir}`);
     return true;
   } catch (e) {
