@@ -1,0 +1,22 @@
+# Astro Dev Server Dockerfile
+# Copy this to your Astro project as Dockerfile.dev
+# Used for live preview in AstroAdmin
+
+FROM node:20-alpine
+
+WORKDIR /site
+
+# Copy package files for dependency caching
+# Note: In production, these are mounted as volumes instead
+COPY package*.json ./
+RUN npm ci
+
+# Copy source files
+COPY . .
+
+# Expose Astro dev server port
+ENV HOST=0.0.0.0
+EXPOSE 4321
+
+# Run Astro dev server with host binding
+CMD ["npm", "run", "dev", "--", "--host"]

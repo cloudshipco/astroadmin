@@ -1,0 +1,93 @@
+# AstroAdmin Production Docker Compose
+#
+# Prerequisites:
+#   1. Clone your Astro site to ./site
+#   2. Clone your Astro site to ./site-live (for builder)
+#   3. Add Dockerfile.dev to your site (copy from Dockerfile.dev.example)
+#   4. Create SSH keys in ./ssh/rw (read-write) and ./ssh/ro (read-only)
+#   5. Copy .env.example to .env and fill in values
+#
+# Usage:
+#   docker-compose up -d
+
+services:
+  # AstroAdmin - Content editing interface
+  astroadmin:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - GIT_ENABLED=true
+      - GIT_AUTO_PUSH=${GIT_AUTO_PUSH:-false}
+      # Preview URL must be browser-accessible (iframe loads from user's browser)
+      - PREVIEW_URL=${PREVIEW_URL:-http://localhost:4321}
+    volumes:
+      - ./site:/site
+      - ./ssh/rw:/root/.ssh:ro
+    networks:
+      - internal
+    depends_on:
+      - astro-dev
+
+  # Astro Dev Server - Live preview for editing
+  astro-dev:
+    build:
+      context: ./site
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+    volumes:
+      # Mount site as read-only - AstroAdmin writes, astro-dev reads
+      - ./site:/site:ro
+    working_dir: /site
+    networks:
+      - internal
+
+  # Builder - Polls for changes and rebuilds production site
+  builder:
+    build:
+      context: .
+      dockerfile: Dockerfile.builder
+    restart: unless-stopped
+    environment:
+      - POLL_INTERVAL=${POLL_INTERVAL:-60}
+      - BRANCH=${BRANCH:-main}
+    volumes:
+      - ./site-live:/site-live
+      - ./dist:/dist
+      - ./ssh/ro:/root/.ssh:ro
+    networks:
+      - internal
+
+  # nginx - Public site and reverse proxy
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./dist:/var/www/html:ro
+      - ./certs:/etc/nginx/certs:ro
+    networks:
+      - frontend
+      - internal
+    depends_on:
+      - astroadmin
+      - astro-dev
+
+networks:
+  # Internal network - not exposed to internet
+  internal:
+    internal: true
+  # Frontend network - public-facing
+  frontend:
