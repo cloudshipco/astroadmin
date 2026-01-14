@@ -12,11 +12,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --production
 
-# Copy application code
+# Copy application code (CSS is pre-built and committed)
 COPY . .
-
-# Build CSS for production
-RUN npm run build:css
 
 # Setup SSH directory for Git operations
 RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
