@@ -77,9 +77,45 @@
     @apply flex flex-1 overflow-hidden;
   }
 
-  /* Editor Panel - Narrow left side */
+  /* Editor Panel - Narrow left side, resizable */
   .editor-panel {
-    @apply w-[380px] bg-white border-r border-gray-200 flex flex-col flex-shrink-0;
+    @apply bg-white border-r border-gray-200 flex flex-col flex-shrink-0;
+    width: var(--editor-width, 380px);
+    min-width: 300px;
+    max-width: 60%;
+  }
+
+  /* Panel Resizer */
+  .panel-resizer {
+    @apply w-1 bg-gray-200 cursor-col-resize flex-shrink-0 hover:bg-primary-400 transition-colors;
+    position: relative;
+  }
+
+  .panel-resizer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -4px;
+    right: -4px;
+    bottom: 0;
+  }
+
+  .panel-resizer.dragging,
+  .panel-resizer:hover {
+    @apply bg-primary-500;
+  }
+
+  body.resizing {
+    cursor: col-resize !important;
+    user-select: none;
+  }
+
+  body.resizing * {
+    cursor: col-resize !important;
+  }
+
+  body.resizing iframe {
+    pointer-events: none;
   }
 
   .editor-panel-header {

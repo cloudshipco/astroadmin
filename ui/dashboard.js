@@ -1331,11 +1331,66 @@ window.addEventListener('fileReverted', () => {
   }
 });
 
+// Panel Resizer functionality
+function initPanelResizer() {
+  const resizer = document.getElementById('panelResizer');
+  const editorPanel = document.querySelector('.editor-panel');
+
+  if (!resizer || !editorPanel) return;
+
+  // Load saved width from localStorage
+  const savedWidth = localStorage.getItem('astroadmin-editor-width');
+  if (savedWidth) {
+    editorPanel.style.setProperty('--editor-width', savedWidth);
+  }
+
+  let isResizing = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  resizer.addEventListener('mousedown', (e) => {
+    isResizing = true;
+    startX = e.clientX;
+    startWidth = editorPanel.offsetWidth;
+
+    document.body.classList.add('resizing');
+    resizer.classList.add('dragging');
+
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isResizing) return;
+
+    const deltaX = e.clientX - startX;
+    const newWidth = Math.max(300, Math.min(startWidth + deltaX, window.innerWidth * 0.6));
+
+    editorPanel.style.setProperty('--editor-width', `${newWidth}px`);
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isResizing) return;
+
+    isResizing = false;
+    document.body.classList.remove('resizing');
+    resizer.classList.remove('dragging');
+
+    // Save width to localStorage
+    const currentWidth = editorPanel.style.getPropertyValue('--editor-width');
+    if (currentWidth) {
+      localStorage.setItem('astroadmin-editor-width', currentWidth);
+    }
+  });
+}
+
 // Initialize
 async function init() {
   await checkAuth();
   await loadConfig();
   await loadPages();
+
+  // Initialize panel resizer
+  initPanelResizer();
 
   // Update changes badge
   updateChangesBadge();
