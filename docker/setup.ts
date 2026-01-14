@@ -358,7 +358,7 @@ async function main() {
     }
     console.log(`  ${useHttps ? "4" : "3"}. Start the services:`);
     console.log();
-    log("     docker-compose up -d", colors.green);
+    log("     docker compose up -d", colors.green);
     console.log();
     console.log("  Then access your admin at:");
     log(`     ${protocol}://${adminDomain}`, colors.cyan);

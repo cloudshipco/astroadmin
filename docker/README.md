@@ -128,7 +128,7 @@ mkdir -p dist
 ### 8. Start the services
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ## Usage
@@ -153,11 +153,11 @@ When you push changes:
 
 ```bash
 # All services
-docker-compose logs -f
+docker compose logs -f
 
 # Specific service
-docker-compose logs -f builder
-docker-compose logs -f astroadmin
+docker compose logs -f builder
+docker compose logs -f astroadmin
 ```
 
 ## SSL/TLS Setup
@@ -189,12 +189,12 @@ Then update `nginx/conf.d/default.conf` to use HTTPS.
 
 Check the builder logs:
 ```bash
-docker-compose logs builder
+docker compose logs builder
 ```
 
 Verify the SSH key is working:
 ```bash
-docker-compose exec builder ssh -T git@github.com
+docker compose exec builder ssh -T git@github.com
 ```
 
 ### Preview not loading
