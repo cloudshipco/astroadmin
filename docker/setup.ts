@@ -463,28 +463,40 @@ async function main() {
     if (proxyMode) {
       log("Next steps:", colors.bold);
       console.log();
-      console.log("  1. Copy the nginx config to your host:");
+      console.log("  1. Create DNS records (if not using wildcard DNS):");
+      log(`     ${mainDomain}      → A record → <server IP>`, colors.dim);
+      log(`     www.${mainDomain}  → A record → <server IP>`, colors.dim);
+      log(`     ${adminDomain}   → A record → <server IP>`, colors.dim);
+      log(`     ${previewDomain} → A record → <server IP>`, colors.dim);
+      console.log();
+      console.log("  2. Copy the nginx config to your host:");
       log(`     sudo cp host-nginx.conf /etc/nginx/sites-available/astroadmin.conf`, colors.dim);
       log(`     sudo ln -s /etc/nginx/sites-available/astroadmin.conf /etc/nginx/sites-enabled/`, colors.dim);
       console.log();
-      console.log("  2. Test and reload nginx:");
+      console.log("  3. Test and reload nginx:");
       log(`     sudo nginx -t && sudo systemctl reload nginx`, colors.dim);
       console.log();
-      console.log("  3. Get SSL certificates with certbot:");
+      console.log("  4. Get SSL certificates with certbot:");
       log(`     sudo certbot --nginx -d ${mainDomain} -d www.${mainDomain} -d ${adminDomain} -d ${previewDomain}`, colors.dim);
       console.log();
-      console.log("  4. Start the Docker services:");
+      console.log("  5. Start the Docker services:");
       log(`     docker compose up -d`, colors.green);
       console.log();
     } else {
       log("Next steps:", colors.bold);
       console.log();
-      console.log("  1. Review the generated .env file");
-      console.log("  2. Review nginx/conf.d/default.conf");
+      console.log("  1. Create DNS records (if not using wildcard DNS):");
+      log(`     ${mainDomain}      → A record → <server IP>`, colors.dim);
+      log(`     www.${mainDomain}  → A record → <server IP>`, colors.dim);
+      log(`     ${adminDomain}   → A record → <server IP>`, colors.dim);
+      log(`     ${previewDomain} → A record → <server IP>`, colors.dim);
+      console.log();
+      console.log("  2. Review the generated .env file");
+      console.log("  3. Review nginx/conf.d/default.conf");
       if (useHttps) {
-        console.log("  3. Set up SSL certificates in ./certs");
+        console.log("  4. Set up SSL certificates in ./certs");
       }
-      console.log(`  ${useHttps ? "4" : "3"}. Start the services:`);
+      console.log(`  ${useHttps ? "5" : "4"}. Start the services:`);
       log(`     docker compose up -d`, colors.green);
       console.log();
     }
