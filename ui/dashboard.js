@@ -1070,6 +1070,17 @@ async function saveContent(silent = false) {
     saveBtn.disabled = true;
   }
 
+  // Capture current preview HTML hash BEFORE save (for change detection)
+  let originalHash = null;
+  const previewPageUrl = getPreviewPageUrl();
+  if (previewPageUrl) {
+    try {
+      const response = await fetch(previewPageUrl + '?t=' + Date.now(), { cache: 'no-store' });
+      const html = await response.text();
+      originalHash = quickHash(html);
+    } catch (err) { /* proceed without hash */ }
+  }
+
   try {
     // Build URL with locale query param if i18n enabled
     let apiUrl = `/api/content/${currentCollection}/${currentSlug}`;
@@ -1116,7 +1127,43 @@ async function saveContent(silent = false) {
 
       // Update changes badge
       updateChangesBadge();
-      // Astro's content watcher handles preview refresh automatically
+
+      // Wait for Astro to rebuild - HMR may auto-refresh, or we refresh manually
+      const iframe = document.getElementById('previewFrame');
+      if (originalHash && iframe) {
+        iframe.classList.add('loading');
+
+        // Wait for fresh content to be available
+        const result = await waitForContentChange(originalHash);
+        console.log('[Preview] Content ' + (result.changed ? 'ready' : 'timeout') + ' after ' + result.waited + 'ms');
+
+        // Check if iframe already shows fresh content (HMR may have updated it)
+        let iframeFresh = false;
+        try {
+          // Access iframe content to check its hash
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (iframeDoc) {
+            const iframeHash = quickHash(iframeDoc.documentElement.outerHTML);
+            // Fetch current server content hash
+            const response = await fetch(getPreviewPageUrl() + '?t=' + Date.now(), { cache: 'no-store' });
+            const serverHtml = await response.text();
+            const serverHash = quickHash(serverHtml);
+            iframeFresh = (iframeHash === serverHash);
+          }
+        } catch (e) {
+          // Cross-origin or other error - can't check, so refresh
+        }
+
+        if (iframeFresh) {
+          console.log('[Preview] HMR already updated iframe');
+        } else {
+          console.log('[Preview] Refreshing iframe');
+          updatePreview();
+        }
+        iframe.classList.remove('loading');
+      } else {
+        updatePreview();
+      }
     } else {
       updateSaveStatus('Error');
       if (!silent) {
@@ -1140,19 +1187,59 @@ async function saveContent(silent = false) {
 // Store scroll position (received from iframe via postMessage)
 let lastPreviewScrollY = 0;
 
-// Refresh preview after save
-// HMR is unreliable (often triggers before rebuild completes), so we use manual refresh
-function waitForPreviewUpdate() {
-  const iframe = document.getElementById('previewFrame');
-  if (!iframe) return;
+// Simple hash function for change detection
+function quickHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash.toString(36);
+}
 
-  // Show loading indicator
-  iframe.classList.add('loading');
+// Get current preview page URL
+function getPreviewPageUrl() {
+  if (!previewUrl) return null;
 
-  // Wait for Astro to fully rebuild (2s is safe for most content changes)
-  setTimeout(() => {
-    updatePreview();
-  }, 2000);
+  const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
+  const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
+
+  if (currentCollection === 'pages' && currentSlug === 'home') {
+    return isDefaultLocale ? `${previewUrl}/` : `${previewUrl}${localePrefix}`;
+  }
+  return `${previewUrl}${localePrefix}/${currentSlug}`;
+}
+
+// Wait for content to actually change before refreshing preview
+// Polls until HTML hash changes or timeout (2.5s)
+async function waitForContentChange(originalHash, maxWaitMs = 2500) {
+  const pageUrl = getPreviewPageUrl();
+  if (!pageUrl || !originalHash) return { changed: false, waited: 0 };
+
+  const startTime = Date.now();
+  let pollDelay = 150;
+
+  while (Date.now() - startTime < maxWaitMs) {
+    await new Promise(r => setTimeout(r, pollDelay));
+
+    try {
+      const response = await fetch(pageUrl + '?t=' + Date.now(), {
+        cache: 'no-store'
+      });
+      const html = await response.text();
+      const newHash = quickHash(html);
+
+      if (newHash !== originalHash) {
+        console.log(`[Preview] Content changed after ${Date.now() - startTime}ms`);
+        return { changed: true, waited: Date.now() - startTime };
+      }
+    } catch (err) { /* keep polling */ }
+
+    pollDelay = Math.min(pollDelay * 1.3, 400); // gentle exponential backoff
+  }
+
+  console.log('[Preview] Timeout waiting for content change, refreshing anyway');
+  return { changed: false, waited: maxWaitMs };
 }
 
 // Listen for messages from preview iframe
@@ -1179,7 +1266,8 @@ async function updatePreview() {
   const placeholder = document.getElementById('previewPlaceholder');
   const previewControls = document.getElementById('previewControls');
 
-  if (!previewUrl) {
+  const pageUrl = getPreviewPageUrl();
+  if (!pageUrl) {
     return;
   }
 
@@ -1187,17 +1275,6 @@ async function updatePreview() {
   iframe.style.display = 'block';
   placeholder.style.display = 'none';
   previewControls.style.display = 'flex';
-
-  // Determine preview page URL (with locale prefix for non-default locales)
-  let pageUrl;
-  const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
-  const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
-
-  if (currentCollection === 'pages' && currentSlug === 'home') {
-    pageUrl = isDefaultLocale ? `${previewUrl}/` : `${previewUrl}${localePrefix}`;
-  } else {
-    pageUrl = `${previewUrl}${localePrefix}/${currentSlug}`;
-  }
 
   // Save current scroll position before reload
   const scrollToRestore = lastPreviewScrollY;
