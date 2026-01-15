@@ -1034,6 +1034,34 @@ export function setupFormHandlers(formElement, onBlockChange) {
       if (onBlockChange) onBlockChange();
     }
   });
+
+  // Update block preview text when preview fields change
+  const previewFields = ['heading', 'title', 'content', 'description', 'name'];
+  formElement.addEventListener('input', (e) => {
+    const blockItem = e.target.closest('.block-item');
+    if (!blockItem) return;
+
+    // Check if this input is a preview field
+    const inputName = e.target.name || '';
+    const fieldName = inputName.split('.').pop();
+    if (!previewFields.includes(fieldName)) return;
+
+    // Find the first non-empty preview field (by priority)
+    let previewText = '';
+    for (const field of previewFields) {
+      const input = blockItem.querySelector(`[name$=".${field}"]`);
+      if (input && input.value) {
+        previewText = input.value;
+        break;
+      }
+    }
+
+    // Update the preview text
+    const previewEl = blockItem.querySelector('.block-preview-text');
+    if (previewEl) {
+      previewEl.textContent = previewText.length > 50 ? previewText.substring(0, 50) + '...' : previewText;
+    }
+  });
 }
 
 /**
