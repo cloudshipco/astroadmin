@@ -1141,40 +1141,19 @@ async function saveContent(silent = false) {
 // Store scroll position (received from iframe via postMessage)
 let lastPreviewScrollY = 0;
 
-// Track if HMR refreshed the preview
-let hmrRefreshed = false;
-let hmrTimeout = null;
-
-// Called after save - waits for HMR, falls back to manual refresh
+// Refresh preview after save
+// HMR is unreliable (often triggers before rebuild completes), so we use manual refresh
 function waitForPreviewUpdate() {
   const iframe = document.getElementById('previewFrame');
   if (!iframe) return;
 
-  hmrRefreshed = false;
-
-  // Show subtle loading indicator
+  // Show loading indicator
   iframe.classList.add('loading');
 
-  // Listen for iframe load (indicates HMR triggered a reload)
-  const onLoad = () => {
-    hmrRefreshed = true;
-    iframe.classList.remove('loading');
-    iframe.removeEventListener('load', onLoad);
-    if (hmrTimeout) {
-      clearTimeout(hmrTimeout);
-      hmrTimeout = null;
-    }
-  };
-  iframe.addEventListener('load', onLoad);
-
-  // Fallback: if no HMR reload after 1.5s, manually refresh
-  hmrTimeout = setTimeout(() => {
-    iframe.removeEventListener('load', onLoad);
-    if (!hmrRefreshed) {
-      updatePreview();
-    }
-    hmrTimeout = null;
-  }, 1500);
+  // Wait for Astro to fully rebuild (2s is safe for most content changes)
+  setTimeout(() => {
+    updatePreview();
+  }, 2000);
 }
 
 // Listen for messages from preview iframe
