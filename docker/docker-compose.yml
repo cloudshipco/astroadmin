@@ -49,6 +49,7 @@ services:
     working_dir: /site
     networks:
       - internal
+      - frontend  # Needs internet access for npm install at startup
 
   # Builder - Polls for changes and rebuilds production site
   builder:
