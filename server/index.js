@@ -76,14 +76,26 @@ export function createServer() {
   app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
 
+    console.log(`[Login] Attempt for user: ${username}`);
+
     if (
       username === config.auth.username &&
       password === config.auth.password
     ) {
       req.session.authenticated = true;
       req.session.user = username;
-      res.json({ success: true, user: username });
+
+      // Explicitly save session to ensure cookie is set
+      req.session.save((err) => {
+        if (err) {
+          console.error('[Login] Session save error:', err);
+          return res.status(500).json({ success: false, error: 'Session error' });
+        }
+        console.log(`[Login] Success for user: ${username}, session ID: ${req.sessionID}`);
+        res.json({ success: true, user: username });
+      });
     } else {
+      console.log(`[Login] Failed for user: ${username}`);
       res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
   });
