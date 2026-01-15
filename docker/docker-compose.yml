@@ -65,6 +65,7 @@ services:
       - ./ssh/ro:/root/.ssh:ro
     networks:
       - internal
+      - frontend  # Needs internet access for git fetch
 
   # nginx - Public site and reverse proxy
   nginx:
