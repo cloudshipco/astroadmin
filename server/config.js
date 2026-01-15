@@ -44,11 +44,10 @@ const defaultConfig = {
 
   // Preview strategy
   preview: {
-    // Development: Use Astro dev server (hot reload)
-    // Production: Use staging build (static preview)
-    url: IS_DEV
-      ? (process.env.PREVIEW_URL || 'http://localhost:4321')
-      : (process.env.STAGING_URL || 'http://localhost:4322'),
+    // PREVIEW_URL: browser-accessible URL for the preview iframe
+    // In dev: typically http://localhost:4321 (Astro dev server)
+    // In prod: typically https://preview.example.com (proxied to Astro dev)
+    url: process.env.PREVIEW_URL || (IS_DEV ? 'http://localhost:4321' : 'http://localhost:4322'),
 
     // How to update preview
     method: IS_DEV ? 'hot-reload' : 'build',
