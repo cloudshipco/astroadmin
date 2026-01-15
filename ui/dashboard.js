@@ -1116,8 +1116,9 @@ async function saveContent(silent = false) {
 
       // Update changes badge
       updateChangesBadge();
-      // Don't force preview reload - Astro's HMR handles it automatically
-      // The file save triggers Vite's watcher which hot-reloads the iframe
+      // Refresh preview after a short delay to let Astro rebuild
+      // (HMR may not work reliably through proxy setups)
+      setTimeout(() => updatePreview(), 500);
     } else {
       updateSaveStatus('Error');
       if (!silent) {
