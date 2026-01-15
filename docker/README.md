@@ -2,6 +2,15 @@
 
 Deploy AstroAdmin with your Astro site using Docker Compose.
 
+## Prerequisites
+
+- **Docker** and **Docker Compose**
+- **Bun** - Install using the official installer:
+  ```bash
+  curl -fsSL https://bun.sh/install | bash
+  ```
+  > **Note:** Do not use snap (`snap install bun`) as it sandboxes filesystem access and won't work in `/var/www/` or similar directories.
+
 ## Quick Start
 
 Run the interactive setup script:
