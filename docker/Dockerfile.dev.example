@@ -6,17 +6,10 @@ FROM node:20-alpine
 
 WORKDIR /site
 
-# Copy package files for dependency caching
-# Note: In production, these are mounted as volumes instead
-COPY package*.json ./
-RUN npm ci
-
-# Copy source files
-COPY . .
-
 # Expose Astro dev server port
 ENV HOST=0.0.0.0
 EXPOSE 4321
 
-# Run Astro dev server with host binding
-CMD ["npm", "run", "dev", "--", "--host"]
+# Install dependencies at startup (since volume mount overwrites image files)
+# Then run Astro dev server
+CMD sh -c "npm install && npm run dev -- --host"

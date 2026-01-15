@@ -2,8 +2,6 @@
 # AstroAdmin Builder Script
 # Polls for changes in the remote repo and rebuilds when detected
 
-set -e
-
 POLL_INTERVAL=${POLL_INTERVAL:-60}
 BRANCH=${BRANCH:-main}
 
@@ -15,11 +13,20 @@ echo "[$(date)] Polling every ${POLL_INTERVAL}s for changes on ${BRANCH}"
 # Initial build on startup if dist is empty
 if [ ! -f "/dist/index.html" ]; then
     echo "[$(date)] Initial build..."
-    npm ci --silent
-    npm run build
-    rm -rf /dist/* 2>/dev/null || true
-    cp -r dist/* /dist/
-    echo "[$(date)] Initial build complete"
+
+    echo "[$(date)] Installing dependencies..."
+    if ! npm ci; then
+        echo "[$(date)] Error: npm ci failed, will retry on next poll"
+    else
+        echo "[$(date)] Building site..."
+        if ! npm run build; then
+            echo "[$(date)] Error: build failed, will retry on next poll"
+        else
+            rm -rf /dist/* 2>/dev/null || true
+            cp -r dist/* /dist/
+            echo "[$(date)] Initial build complete"
+        fi
+    fi
 fi
 
 while true; do
@@ -44,7 +51,7 @@ while true; do
         }
 
         echo "[$(date)] Installing dependencies..."
-        npm ci --silent || {
+        npm ci || {
             echo "[$(date)] Error: npm ci failed"
             sleep "$POLL_INTERVAL"
             continue

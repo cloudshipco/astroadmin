@@ -45,8 +45,7 @@ services:
     environment:
       - HOST=0.0.0.0
     volumes:
-      # Mount site as read-only - AstroAdmin writes, astro-dev reads
-      - ./site:/site:ro
+      - ./site:/site
     working_dir: /site
     networks:
       - internal
@@ -72,8 +71,7 @@ services:
     image: nginx:alpine
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
+      - "${DOCKER_BIND:-127.0.0.1}:${DOCKER_PORT:-8080}:80"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./dist:/var/www/html:ro
