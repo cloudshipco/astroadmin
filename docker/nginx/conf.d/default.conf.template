@@ -90,9 +90,5 @@ server {
         # WebSocket support for HMR (Hot Module Replacement)
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-
-        # Disable caching for preview (always serve fresh content)
-        add_header Cache-Control "no-store, no-cache, must-revalidate";
-        expires -1;
     }
 }
