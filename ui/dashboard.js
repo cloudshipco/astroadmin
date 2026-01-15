@@ -1116,8 +1116,7 @@ async function saveContent(silent = false) {
 
       // Update changes badge
       updateChangesBadge();
-      // Wait for HMR to refresh preview, fallback to manual refresh
-      waitForPreviewUpdate();
+      // Astro's content watcher handles preview refresh automatically
     } else {
       updateSaveStatus('Error');
       if (!silent) {
