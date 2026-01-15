@@ -14,13 +14,25 @@ bun setup.ts
 This will prompt you for:
 - Git repository URL
 - Domain names
+- Deployment mode (behind host proxy or direct)
 - Admin credentials
 
 And automatically:
 - Generate SSH deploy keys
 - Clone your repositories
 - Create configuration files
-- Update nginx with your domains
+- Generate appropriate nginx configs
+
+### Deployment Modes
+
+**Behind Host Proxy (recommended)** - For servers already running nginx/caddy:
+- Docker listens on localhost:8080
+- Host nginx handles SSL termination and proxies to Docker
+- Setup generates `host-nginx.conf` with certbot instructions
+
+**Direct** - For dedicated servers:
+- Docker nginx listens on port 80/443 directly
+- You manage SSL certificates manually
 
 ## Architecture
 
