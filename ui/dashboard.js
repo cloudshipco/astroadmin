@@ -1116,9 +1116,8 @@ async function saveContent(silent = false) {
 
       // Update changes badge
       updateChangesBadge();
-      // Refresh preview after a short delay to let Astro rebuild
-      // (HMR may not work reliably through proxy setups)
-      setTimeout(() => updatePreview(), 500);
+      // Wait for preview to reload via HMR, with fallback manual refresh
+      waitForPreviewUpdate();
     } else {
       updateSaveStatus('Error');
       if (!silent) {
@@ -1142,14 +1141,56 @@ async function saveContent(silent = false) {
 // Store scroll position (received from iframe via postMessage)
 let lastPreviewScrollY = 0;
 
+// Track pending preview update (waiting for HMR to refresh)
+let previewUpdateTimeout = null;
+let previewUpdateResolve = null;
+
+// Wait for preview to reload via HMR, with fallback manual refresh
+function waitForPreviewUpdate() {
+  const iframe = document.getElementById('previewFrame');
+  if (!iframe) return;
+
+  // Show loading state
+  iframe.classList.add('loading');
+
+  // Clear any existing timeout
+  if (previewUpdateTimeout) {
+    clearTimeout(previewUpdateTimeout);
+  }
+
+  // Set up a promise that resolves when preview signals it reloaded
+  return new Promise((resolve) => {
+    previewUpdateResolve = resolve;
+
+    // Fallback: if no HMR message received in 2 seconds, force refresh
+    previewUpdateTimeout = setTimeout(() => {
+      console.log('Preview HMR timeout, forcing refresh');
+      previewUpdateResolve = null;
+      updatePreview();
+      resolve();
+    }, 2000);
+  });
+}
+
 // Listen for messages from preview iframe
 window.addEventListener('message', (event) => {
   if (event.data?.type === 'scrollPosition') {
     lastPreviewScrollY = event.data.scrollY;
   }
-  // Handle page navigation in preview - sync admin to show that page
+  // Handle page navigation/reload in preview
   if (event.data?.type === 'pageNavigation') {
     const pathname = event.data.pathname;
+
+    // If we were waiting for preview update, it's now done
+    if (previewUpdateResolve) {
+      clearTimeout(previewUpdateTimeout);
+      previewUpdateResolve();
+      previewUpdateResolve = null;
+      const iframe = document.getElementById('previewFrame');
+      if (iframe) iframe.classList.remove('loading');
+      console.log('Preview updated via HMR');
+    }
+
     // Map pathname to collection/slug (only for pages collection)
     // e.g., "/" -> pages/home, "/teaching" -> pages/teaching
     let slug = pathname === '/' ? 'home' : pathname.replace(/^\/|\/$/g, '');
