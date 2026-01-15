@@ -1116,8 +1116,7 @@ async function saveContent(silent = false) {
 
       // Update changes badge
       updateChangesBadge();
-      // Wait for preview to reload via HMR, with fallback manual refresh
-      waitForPreviewUpdate();
+      // Preview updates automatically via Vite HMR (no manual refresh needed)
     } else {
       updateSaveStatus('Error');
       if (!silent) {
