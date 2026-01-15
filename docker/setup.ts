@@ -158,9 +158,11 @@ async function cloneRepo(url: string, targetDir: string, keyPath: string): Promi
   }
 }
 
-function updateDockerNginxConfig(mainDomain: string, adminDomain: string, previewDomain: string): void {
+function generateDockerNginxConfig(mainDomain: string, adminDomain: string, previewDomain: string): void {
+  const templatePath = join(DOCKER_DIR, "nginx/conf.d/default.conf.template");
   const configPath = join(DOCKER_DIR, "nginx/conf.d/default.conf");
-  let config = readFileSync(configPath, "utf-8");
+
+  let config = readFileSync(templatePath, "utf-8");
 
   // Replace example domains
   config = config.replace(/example\.com/g, mainDomain);
@@ -168,7 +170,7 @@ function updateDockerNginxConfig(mainDomain: string, adminDomain: string, previe
   config = config.replace(/preview\.example\.com/g, previewDomain);
 
   writeFileSync(configPath, config);
-  success(`Updated Docker nginx config with your domains`);
+  success(`Generated Docker nginx config with your domains`);
 }
 
 function createHostNginxConfig(config: {
@@ -434,7 +436,7 @@ async function main() {
       proxyPort,
     });
 
-    updateDockerNginxConfig(mainDomain, adminDomain, previewDomain);
+    generateDockerNginxConfig(mainDomain, adminDomain, previewDomain);
 
     if (proxyMode) {
       updateDockerComposeForProxy(proxyPort);

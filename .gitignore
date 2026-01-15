@@ -5,3 +5,13 @@ dist/
 .env
 .env.local
 .claude/
+
+# Docker deployment (generated/site-specific)
+docker/nginx/conf.d/default.conf
+docker/host-nginx.conf
+docker/.env
+docker/site/
+docker/site-live/
+docker/ssh/
+docker/dist/
+docker/certs/
