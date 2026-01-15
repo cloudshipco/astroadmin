@@ -26,8 +26,8 @@ program
 program
   .command('dev')
   .description('Start admin development server')
-  .option('-p, --port <port>', 'Port to run on (0 for auto)', '0')
-  .option('-H, --host <host>', 'Host to bind to', 'localhost')
+  .option('-p, --port <port>', 'Port to run on (default: from PORT env or auto)')
+  .option('-H, --host <host>', 'Host to bind to (default: from HOST env or localhost)')
   .option('--project <path>', 'Astro project root directory', process.cwd())
   .action(async (options) => {
     try {
@@ -70,8 +70,8 @@ program
 program
   .command('start')
   .description('Start admin server (alias for dev)')
-  .option('-p, --port <port>', 'Port to run on (0 for auto)', '0')
-  .option('-H, --host <host>', 'Host to bind to', 'localhost')
+  .option('-p, --port <port>', 'Port to run on (default: from PORT env or auto)')
+  .option('-H, --host <host>', 'Host to bind to (default: from HOST env or localhost)')
   .option('--project <path>', 'Astro project root directory', process.cwd())
   .action(async (options) => {
     // Same as dev

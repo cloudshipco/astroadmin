@@ -170,8 +170,8 @@ export function createServer() {
 }
 
 export async function startServer(options = {}) {
-  const port = options.port || config.port;
-  const host = options.host || config.host;
+  const port = options.port !== undefined ? options.port : config.port;
+  const host = options.host !== undefined ? options.host : config.host;
 
   // Log configuration
   logConfig();
