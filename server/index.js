@@ -23,6 +23,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export function createServer() {
   const app = express();
 
+  // Trust proxy (for secure cookies behind nginx/reverse proxy)
+  if (IS_PROD) {
+    app.set('trust proxy', 1);
+  }
+
   // Middleware
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
