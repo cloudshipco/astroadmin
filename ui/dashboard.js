@@ -1116,7 +1116,8 @@ async function saveContent(silent = false) {
 
       // Update changes badge
       updateChangesBadge();
-      // Preview updates automatically via Vite HMR (no manual refresh needed)
+      // Wait for HMR to refresh preview, fallback to manual refresh
+      waitForPreviewUpdate();
     } else {
       updateSaveStatus('Error');
       if (!silent) {
@@ -1140,19 +1141,40 @@ async function saveContent(silent = false) {
 // Store scroll position (received from iframe via postMessage)
 let lastPreviewScrollY = 0;
 
-// Refresh preview after save with delay for Astro rebuild
+// Track if HMR refreshed the preview
+let hmrRefreshed = false;
+let hmrTimeout = null;
+
+// Called after save - waits for HMR, falls back to manual refresh
 function waitForPreviewUpdate() {
   const iframe = document.getElementById('previewFrame');
   if (!iframe) return;
 
+  hmrRefreshed = false;
+
   // Show subtle loading indicator
   iframe.classList.add('loading');
 
-  // Wait for Astro to detect file change and rebuild (typically < 1s)
-  // Using 1.2s to be safe across different server speeds
-  setTimeout(() => {
-    updatePreview();
-  }, 1200);
+  // Listen for iframe load (indicates HMR triggered a reload)
+  const onLoad = () => {
+    hmrRefreshed = true;
+    iframe.classList.remove('loading');
+    iframe.removeEventListener('load', onLoad);
+    if (hmrTimeout) {
+      clearTimeout(hmrTimeout);
+      hmrTimeout = null;
+    }
+  };
+  iframe.addEventListener('load', onLoad);
+
+  // Fallback: if no HMR reload after 1.5s, manually refresh
+  hmrTimeout = setTimeout(() => {
+    iframe.removeEventListener('load', onLoad);
+    if (!hmrRefreshed) {
+      updatePreview();
+    }
+    hmrTimeout = null;
+  }, 1500);
 }
 
 // Listen for messages from preview iframe
