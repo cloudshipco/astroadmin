@@ -178,6 +178,61 @@ router.post('/push', async (req, res) => {
 });
 
 /**
+ * POST /api/git/publish
+ * Commit any uncommitted changes and push to remote
+ */
+router.post('/publish', async (req, res) => {
+  try {
+    const { message } = req.body;
+    const commitMessage = message?.trim() || 'Content update';
+
+    // Check for uncommitted changes
+    const status = await git.status();
+    const hasChanges = status.modified.length > 0 ||
+                       status.created.length > 0 ||
+                       status.deleted.length > 0 ||
+                       status.staged.length > 0;
+
+    let committed = false;
+    let commitResult = null;
+
+    if (hasChanges) {
+      // Stage all content changes
+      await git.add(['src/content/', 'src/styles/', 'public/images/']);
+
+      // Commit
+      commitResult = await git.commit(commitMessage);
+      committed = true;
+      console.log(`✅ Committed: ${commitMessage}`);
+    }
+
+    // Push to remote
+    const pushResult = await git.push();
+    console.log('✅ Pushed to remote');
+
+    res.json({
+      success: true,
+      committed,
+      pushed: true,
+      commit: commitResult ? {
+        hash: commitResult.commit,
+        summary: commitResult.summary,
+      } : null,
+      message: committed
+        ? 'Changes committed and published'
+        : 'Published (no new changes to commit)',
+    });
+  } catch (error) {
+    console.error('Error publishing:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to publish',
+      message: error.message,
+    });
+  }
+});
+
+/**
  * GET /api/git/diff
  * Get diff of uncommitted changes or between commits
  */

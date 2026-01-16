@@ -230,6 +230,19 @@ async function showDiff(file) {
         </div>
       </div>
     `;
+
+    // Add event listeners for the modal (since it's outside the panel's event delegation)
+    modal.querySelectorAll('[data-close-diff]').forEach(btn => {
+      btn.addEventListener('click', closeDiffModal);
+    });
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeDiffModal(); // Click on overlay
+    });
+    modal.querySelector('[data-revert-file]').addEventListener('click', async () => {
+      if (confirm(`Revert all changes to ${file}?\n\nThis cannot be undone.`)) {
+        await revertFile(file);
+      }
+    });
   } catch (error) {
     console.error('Error loading diff:', error);
     alert('Failed to load diff');

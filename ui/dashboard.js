@@ -1128,42 +1128,13 @@ async function saveContent(silent = false) {
       // Update changes badge
       updateChangesBadge();
 
-      // Wait for Astro to rebuild - HMR may auto-refresh, or we refresh manually
-      const iframe = document.getElementById('previewFrame');
-      if (originalHash && iframe) {
-        iframe.classList.add('loading');
-
-        // Wait for fresh content to be available
-        const result = await waitForContentChange(originalHash);
-        console.log('[Preview] Content ' + (result.changed ? 'ready' : 'timeout') + ' after ' + result.waited + 'ms');
-
-        // Check if iframe already shows fresh content (HMR may have updated it)
-        let iframeFresh = false;
-        try {
-          // Access iframe content to check its hash
-          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-          if (iframeDoc) {
-            const iframeHash = quickHash(iframeDoc.documentElement.outerHTML);
-            // Fetch current server content hash
-            const response = await fetch(getPreviewPageUrl() + '?t=' + Date.now(), { cache: 'no-store' });
-            const serverHtml = await response.text();
-            const serverHash = quickHash(serverHtml);
-            iframeFresh = (iframeHash === serverHash);
-          }
-        } catch (e) {
-          // Cross-origin or other error - can't check, so refresh
-        }
-
-        if (iframeFresh) {
-          console.log('[Preview] HMR already updated iframe');
-        } else {
-          console.log('[Preview] Refreshing iframe');
-          updatePreview();
-        }
-        iframe.classList.remove('loading');
-      } else {
-        updatePreview();
+      // Wait for Astro to rebuild, then refresh preview
+      // Note: HMR causes 2-3 white flashes due to Vite parallel environments bug
+      // See: https://github.com/withastro/astro/issues/13138
+      if (originalHash) {
+        await waitForContentChange(originalHash);
       }
+      updatePreview();
     } else {
       updateSaveStatus('Error');
       if (!silent) {
@@ -1448,6 +1419,40 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
     window.location.href = '/login';
   } catch (error) {
     console.error('Logout failed:', error);
+  }
+});
+
+// Publish changes
+document.getElementById('publishBtn').addEventListener('click', async () => {
+  const message = prompt('Commit message (leave blank for "Content update"):');
+  if (message === null) return; // User cancelled
+
+  const publishBtn = document.getElementById('publishBtn');
+  const originalText = publishBtn.textContent;
+  publishBtn.textContent = 'Publishing...';
+  publishBtn.disabled = true;
+
+  try {
+    const response = await fetch('/api/git/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: message || undefined }),
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      showNotification(result.message, 'success');
+      updateChangesBadge();
+    } else {
+      showNotification('Failed to publish: ' + result.error, 'error');
+    }
+  } catch (error) {
+    console.error('Publish failed:', error);
+    showNotification('Failed to publish', 'error');
+  } finally {
+    publishBtn.textContent = originalText;
+    publishBtn.disabled = false;
   }
 });
 
