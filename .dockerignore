@@ -1,0 +1,22 @@
+# Dependencies (reinstalled in container)
+node_modules
+
+# Git history (not needed in image)
+.git
+
+# Docker site folders (mounted as volumes, not needed in image)
+docker/site
+docker/site-live
+docker/dist
+docker/ssh
+docker/certs
+docker/nginx
+
+# Development files
+*.log
+.env*
+.DS_Store
+
+# IDE
+.vscode
+.idea
