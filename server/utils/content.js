@@ -140,8 +140,6 @@ export async function writeContent(collection, slug, { data, body, type }, local
     content = matter.stringify(body || '', data);
   }
 
-  // Write directly - the double reload issue is likely Astro/Vite behavior
-  // not something we can easily fix from this side
   await fs.writeFile(filePath, content, 'utf-8');
 
   return { filePath, locale };
