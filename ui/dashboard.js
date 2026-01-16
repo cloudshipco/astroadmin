@@ -1037,7 +1037,16 @@ function debounce(func, wait) {
 
 // Setup auto-save on form changes
 function setupAutoSave(form, debouncedSave) {
+  // Show loading overlay early (500ms) for immediate visual feedback
+  const showLoadingEarly = debounce(() => {
+    const iframe = document.getElementById('previewFrame');
+    if (iframe) {
+      iframe.classList.add('loading');
+    }
+  }, 500);
+
   form.addEventListener('input', () => {
+    showLoadingEarly();
     debouncedSave();
   });
 }
