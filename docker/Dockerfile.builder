@@ -14,6 +14,9 @@ RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
 # Configure Git to use SSH
 RUN git config --global core.sshCommand "ssh -o StrictHostKeyChecking=accept-new"
 
+# Mark /site-live as safe directory (volume has different ownership)
+RUN git config --global --add safe.directory /site-live
+
 # Copy the builder script
 COPY builder.sh /builder.sh
 RUN chmod +x /builder.sh
