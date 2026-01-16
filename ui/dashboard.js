@@ -1134,6 +1134,10 @@ async function saveContent(silent = false) {
       if (originalHash) {
         await waitForContentChange(originalHash);
       }
+      // WORKAROUND: Additional delay for Astro/Vite rebuild reliability
+      // Astro's dev server sometimes needs extra time after content change is detected.
+      // This may be fixed in future Astro versions. See: https://github.com/withastro/astro/issues/13138
+      await new Promise(r => setTimeout(r, 2000));
       updatePreview();
     } else {
       updateSaveStatus('Error');
