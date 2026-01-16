@@ -15,8 +15,8 @@ if [ ! -f "/dist/index.html" ]; then
     echo "[$(date)] Initial build..."
 
     echo "[$(date)] Installing dependencies..."
-    if ! npm install; then
-        echo "[$(date)] Error: npm install failed, will retry on next poll"
+    if ! npm ci; then
+        echo "[$(date)] Error: npm ci failed, will retry on next poll"
     else
         echo "[$(date)] Building site..."
         if ! npm run build; then
@@ -44,6 +44,9 @@ while true; do
         echo "[$(date)] Changes detected (${LOCAL:0:7} -> ${REMOTE:0:7})"
         echo "[$(date)] Pulling changes..."
 
+        # Discard any local changes (e.g. package-lock.json modified by npm)
+        git checkout -- .
+
         git pull origin "$BRANCH" --ff-only || {
             echo "[$(date)] Error: git pull failed"
             sleep "$POLL_INTERVAL"
@@ -51,8 +54,8 @@ while true; do
         }
 
         echo "[$(date)] Installing dependencies..."
-        npm install || {
-            echo "[$(date)] Error: npm install failed"
+        npm ci || {
+            echo "[$(date)] Error: npm ci failed"
             sleep "$POLL_INTERVAL"
             continue
         }
