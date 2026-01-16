@@ -180,11 +180,12 @@
 
   .preview-iframe {
     @apply w-full h-full border-0 bg-white;
-    transition: opacity 0.2s ease-in-out;
+    transition: opacity 0.2s ease-in-out, filter 0.2s ease-in-out;
   }
 
   .preview-iframe.loading {
-    opacity: 0.85;
+    opacity: 0.5;
+    filter: blur(2px) saturate(0.7);
   }
 
   .preview-frame-wrapper {
