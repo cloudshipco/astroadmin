@@ -24,6 +24,10 @@ RUN git config --global core.sshCommand "ssh -o StrictHostKeyChecking=accept-new
 # Mark /site as safe directory (volume has different ownership)
 RUN git config --global --add safe.directory /site
 
+# Default git identity for commits (can be overridden via env vars at runtime)
+RUN git config --global user.email "admin@astroadmin.local" && \
+    git config --global user.name "AstroAdmin"
+
 # Environment defaults
 ENV NODE_ENV=production
 ENV PORT=3000
