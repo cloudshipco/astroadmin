@@ -33,6 +33,7 @@ services:
       - ./ssh/rw:/root/.ssh:ro
     networks:
       - internal
+      - frontend  # Needs internet access for git push
     depends_on:
       - astro-dev
 
