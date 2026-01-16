@@ -196,6 +196,15 @@ router.post('/publish', async (req, res) => {
     let committed = false;
     let commitResult = null;
 
+    // Pull any remote changes first (rebase to keep history clean)
+    try {
+      await git.pull(['--rebase']);
+      console.log('✅ Pulled latest changes');
+    } catch (pullError) {
+      // Ignore if nothing to pull or not tracking
+      console.log('Pull skipped:', pullError.message);
+    }
+
     if (hasChanges) {
       // Stage all content changes
       await git.add(['src/content/', 'src/styles/', 'public/images/']);
@@ -207,7 +216,7 @@ router.post('/publish', async (req, res) => {
     }
 
     // Push to remote
-    const pushResult = await git.push();
+    await git.push();
     console.log('✅ Pushed to remote');
 
     res.json({
