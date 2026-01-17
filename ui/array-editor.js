@@ -477,3 +477,84 @@ function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
+
+/**
+ * Open a single item editor directly (without the array list modal)
+ * @param {Object} item - The item to edit
+ * @param {Object} schema - Schema for the item
+ * @param {Function} onSave - Callback when saved with updated item
+ */
+export function openSingleItemEditor(item, schema, onSave) {
+  let editModal = document.getElementById('arrayItemEditModal');
+  if (!editModal) {
+    editModal = document.createElement('div');
+    editModal.id = 'arrayItemEditModal';
+    document.body.appendChild(editModal);
+  }
+
+  const fields = generateItemFields(item, schema);
+
+  editModal.className = 'array-item-edit-overlay';
+  editModal.innerHTML = `
+    <div class="array-item-edit-modal">
+      <div class="array-item-edit-header">
+        <h3>Edit Item</h3>
+        <button type="button" class="array-item-edit-close" data-close>&times;</button>
+      </div>
+      <div class="array-item-edit-body">
+        <form id="arrayItemEditForm">
+          ${fields}
+        </form>
+      </div>
+      <div class="array-item-edit-footer">
+        <button type="button" class="btn btn-secondary" data-cancel>Cancel</button>
+        <button type="button" class="btn btn-primary" data-save>Done</button>
+      </div>
+    </div>
+  `;
+
+  const closeEditModal = () => {
+    editModal.remove();
+  };
+
+  const saveAndClose = () => {
+    const form = editModal.querySelector('#arrayItemEditForm');
+    const formData = new FormData(form);
+    const updatedItem = { ...item };
+
+    for (const [key, value] of formData.entries()) {
+      updatedItem[key] = value;
+    }
+
+    // Handle checkboxes (unchecked ones don't appear in FormData)
+    form.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      updatedItem[cb.name] = cb.checked;
+    });
+
+    if (onSave) onSave(updatedItem);
+    closeEditModal();
+  };
+
+  editModal.querySelectorAll('[data-close], [data-cancel]').forEach(btn => {
+    btn.addEventListener('click', closeEditModal);
+  });
+  editModal.querySelector('[data-save]').addEventListener('click', saveAndClose);
+  editModal.addEventListener('click', (e) => {
+    if (e.target === editModal) closeEditModal();
+  });
+
+  // Handle keyboard
+  editModal.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeEditModal();
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      saveAndClose();
+    }
+  });
+
+  // Focus first input
+  setTimeout(() => {
+    const firstInput = editModal.querySelector('input, textarea, select');
+    if (firstInput) firstInput.focus();
+  }, 100);
+}

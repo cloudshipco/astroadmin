@@ -1264,23 +1264,28 @@ export function setupFormHandlers(formElement, onBlockChange) {
     if (!cardsContainer) return;
 
     const index = parseInt(editBtn.dataset.editCard, 10);
-    const fieldName = cardsContainer.dataset.fieldName;
     const schema = JSON.parse(cardsContainer.dataset.schema || '{}');
     const hiddenInput = cardsContainer.parentElement.querySelector('[data-array-data]');
     const items = JSON.parse(hiddenInput?.value || '[]');
+    const item = items[index];
+
+    if (!item) return;
 
     // Dynamic import
-    const { openArrayEditor } = await import('./array-editor.js');
+    const { openSingleItemEditor } = await import('./array-editor.js');
 
-    // Open editor with specific item pre-selected for editing
-    openArrayEditor(fieldName, items, schema, (updatedItems) => {
+    // Open editor directly for this specific item
+    openSingleItemEditor(item, schema, (updatedItem) => {
+      // Update item in array
+      items[index] = updatedItem;
+
       // Update hidden input
       if (hiddenInput) {
-        hiddenInput.value = JSON.stringify(updatedItems);
+        hiddenInput.value = JSON.stringify(items);
       }
 
       // Re-render cards
-      cardsContainer.innerHTML = updatedItems.map((item, i) => generateArrayCard(item, i)).join('');
+      cardsContainer.innerHTML = items.map((it, i) => generateArrayCard(it, i)).join('');
 
       // Trigger change callback
       if (onBlockChange) onBlockChange();
@@ -1323,33 +1328,28 @@ export function setupFormHandlers(formElement, onBlockChange) {
     const cardsContainer = formGroup?.querySelector('[data-array-cards]');
     if (!cardsContainer) return;
 
-    const fieldName = cardsContainer.dataset.fieldName;
     const schema = JSON.parse(cardsContainer.dataset.schema || '{}');
     const hiddenInput = formGroup.querySelector('[data-array-data]');
     const items = JSON.parse(hiddenInput?.value || '[]');
 
     // Create empty item based on schema
     const newItem = createEmptyArrayItem(schema);
-    items.push(newItem);
 
-    // Update hidden input
-    if (hiddenInput) {
-      hiddenInput.value = JSON.stringify(items);
-    }
+    // Open editor for the new item directly
+    const { openSingleItemEditor } = await import('./array-editor.js');
+    openSingleItemEditor(newItem, schema, (savedItem) => {
+      // Add to items array
+      items.push(savedItem);
 
-    // Re-render cards
-    cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i)).join('');
-
-    // Trigger change callback
-    if (onBlockChange) onBlockChange();
-
-    // Open editor for the new item
-    const { openArrayEditor } = await import('./array-editor.js');
-    openArrayEditor(fieldName, items, schema, (updatedItems) => {
+      // Update hidden input
       if (hiddenInput) {
-        hiddenInput.value = JSON.stringify(updatedItems);
+        hiddenInput.value = JSON.stringify(items);
       }
-      cardsContainer.innerHTML = updatedItems.map((item, i) => generateArrayCard(item, i)).join('');
+
+      // Re-render cards
+      cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i)).join('');
+
+      // Trigger change callback
       if (onBlockChange) onBlockChange();
     });
   });
