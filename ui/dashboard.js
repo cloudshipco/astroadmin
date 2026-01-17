@@ -1270,7 +1270,10 @@ async function updatePreview() {
   const newUrl = pageUrl + '?t=' + Date.now();
 
   // Listen for load to restore scroll position
+  let loadHandled = false;
   const onLoad = () => {
+    if (loadHandled) return;
+    loadHandled = true;
     iframe.removeEventListener('load', onLoad);
     // Remove loading state
     iframe.classList.remove('loading');
@@ -1285,6 +1288,16 @@ async function updatePreview() {
     });
   };
   iframe.addEventListener('load', onLoad);
+
+  // Safety timeout: remove loading class after 10s if load event doesn't fire
+  setTimeout(() => {
+    if (!loadHandled) {
+      loadHandled = true;
+      iframe.removeEventListener('load', onLoad);
+      iframe.classList.remove('loading');
+      console.warn('Preview load timeout - removed loading state');
+    }
+  }, 10000);
 
   if (iframe.contentWindow) {
     iframe.contentWindow.location.replace(newUrl);

@@ -356,12 +356,12 @@ function getBlockPreview(block) {
   }
 
   // Check for array fields with items that have titles
-  const arrayFields = ['features', 'items', 'cards', 'slides', 'steps', 'list'];
+  const arrayFields = ['features', 'items', 'cards', 'slides', 'steps', 'list', 'stats'];
   for (const field of arrayFields) {
     if (Array.isArray(block[field]) && block[field].length > 0) {
       const firstItem = block[field][0];
       // Try to get a title from first item
-      for (const titleField of ['title', 'heading', 'name', 'label']) {
+      for (const titleField of ['title', 'heading', 'name', 'label', 'value']) {
         if (firstItem[titleField]) {
           const count = block[field].length;
           const suffix = count > 1 ? ` (+${count - 1} more)` : '';
