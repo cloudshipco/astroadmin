@@ -112,12 +112,14 @@ export async function parseAstroSchemas(projectRoot) {
             build.onLoad({ filter: /.*/, namespace: 'astro-content-shim' }, () => ({
               contents: ASTRO_CONTENT_SHIM,
               loader: 'js',
+              resolveDir: projectRoot, // So esbuild can find 'zod' in project's node_modules
             }));
 
             // Provide astro/loaders shim
             build.onLoad({ filter: /.*/, namespace: 'astro-loaders-shim' }, () => ({
               contents: ASTRO_LOADERS_SHIM,
               loader: 'js',
+              resolveDir: projectRoot,
             }));
           },
         },
