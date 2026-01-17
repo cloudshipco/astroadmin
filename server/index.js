@@ -206,6 +206,14 @@ export async function createServer() {
   app.use('/images', express.static(config.paths.srcImages));
   app.use('/images', express.static(config.paths.images));
 
+  // Serve assets for content-relative image paths
+  // Content files use relative paths like ../assets/posts/... which resolve to src/content/assets/
+  // Also check src/assets for project-level assets
+  const contentAssetsDir = path.join(config.paths.projectRoot, 'src/content/assets');
+  const srcAssetsDir = path.join(config.paths.projectRoot, 'src/assets');
+  app.use('/assets', express.static(contentAssetsDir));
+  app.use('/assets', express.static(srcAssetsDir));
+
   // Catch-all for API routes (404)
   app.get('*', (req, res) => {
     if (req.path.startsWith('/api/')) {

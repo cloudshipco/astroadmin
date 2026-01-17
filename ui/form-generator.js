@@ -153,10 +153,9 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
             type="checkbox"
             name="${fullPath}"
             id="${id}"
-            class="rounded border-gray-300 text-primary-500 focus:ring-primary-500"
             ${value ? 'checked' : ''}
           >
-          <span class="text-sm text-gray-700">${formatLabel(name)}</span>
+          <span>${formatLabel(name)}</span>
         </label>
       </div>
     `;
@@ -209,17 +208,51 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
     return generateColorField(name, schema, value, fullPath, id);
   }
 
-  // Default: string input
+  // Check if this is a date field by name or schema
+  const lowerName = name.toLowerCase();
+  const dateFieldNames = ['createdat', 'updatedat', 'publishedat', 'date', 'pubdate', 'publishdate', 'modifiedat', 'modifieddate'];
+  const isDateByName = dateFieldNames.some(d => lowerName === d || lowerName.endsWith(d));
+  const isDateField = schema.format === 'date' || schema.format === 'date-time' || isDateByName;
+
+  // Default: string input (with date detection)
   const inputType = schema.format === 'email' ? 'email' :
                     schema.format === 'url' ? 'url' :
-                    schema.format === 'date' ? 'date' : 'text';
+                    isDateField ? 'date' : 'text';
+
+  // Date fields should use date input, not textarea
+  if (isDateField) {
+    let formattedValue = value ?? '';
+    // Convert ISO date strings or Date objects to YYYY-MM-DD format for date input
+    if (formattedValue) {
+      try {
+        const dateObj = new Date(formattedValue);
+        if (!isNaN(dateObj.getTime())) {
+          formattedValue = dateObj.toISOString().split('T')[0];
+        }
+      } catch (e) {
+        // Keep original value if parsing fails
+      }
+    }
+    return `
+      <div class="form-group">
+        <label for="${id}" class="form-label">${getFieldLabel(name, schema)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
+        <input
+          type="date"
+          name="${fullPath}"
+          id="${id}"
+          value="${escapeHtml(formattedValue)}"
+          class="form-input"
+          ${schema.required ? 'required' : ''}
+        >
+      </div>
+    `;
+  }
 
   // Large text field for long content
   // Default to textarea unless:
   // - maxLength is short (under 100 chars), OR
   // - field name suggests it's a short field (title, link, etc.)
   const shortFieldNames = ['text', 'link', 'href', 'url', 'title', 'heading', 'name', 'label', 'icon', 'value', 'number'];
-  const lowerName = name.toLowerCase();
   const isShortByName = shortFieldNames.some(short => lowerName === short || lowerName.endsWith(short));
   const isShortByLength = schema.maxLength && schema.maxLength < 100;
   const isLongByName = lowerName.includes('description') || lowerName.includes('content') || lowerName.includes('subheading');
@@ -256,6 +289,7 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
     `;
   }
 
+  // Default text/email/url input
   return `
     <div class="form-group">
       <label for="${id}" class="form-label">${getFieldLabel(name, schema)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
@@ -512,6 +546,39 @@ function isImageField(name, schema) {
 }
 
 /**
+ * Resolve an image path to a URL that can be displayed in the admin
+ * Handles relative paths like ../assets/posts/... by converting to /assets/posts/...
+ * @param {string} imagePath - The image path from content
+ * @returns {string} - Resolved URL for display
+ */
+function resolveImageUrl(imagePath) {
+  if (!imagePath || typeof imagePath !== 'string') return '';
+
+  // Already an absolute URL or root-relative path
+  if (imagePath.startsWith('http://') || imagePath.startsWith('https://') || imagePath.startsWith('/')) {
+    return imagePath;
+  }
+
+  // Handle relative paths like ../assets/posts/... or ./assets/...
+  // Convert to /assets/... for serving by AstroAdmin
+  if (imagePath.startsWith('../assets/') || imagePath.startsWith('./assets/')) {
+    // Remove leading ../ or ./ and keep from 'assets/' onwards
+    const assetsIndex = imagePath.indexOf('assets/');
+    if (assetsIndex !== -1) {
+      return '/' + imagePath.slice(assetsIndex);
+    }
+  }
+
+  // For other relative paths, try prepending /images/ (library images)
+  if (!imagePath.includes('/')) {
+    return `/images/${imagePath}`;
+  }
+
+  // Return as-is for unrecognized patterns
+  return imagePath;
+}
+
+/**
  * Get friendly label and help text for known image fields
  */
 function getImageFieldInfo(name) {
@@ -552,13 +619,16 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
           data-alt-input
         >`;
 
+  // Resolve the image URL for preview (handles relative paths)
+  const previewSrc = resolveImageUrl(value || '');
+
   return `
     <div class="form-group">
       <label for="${id}" class="form-label">${label} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
       ${helpHtml}
       <div class="image-picker" data-field="${fullPath}">
         <div class="image-picker-preview ${previewClass}" data-preview>
-          <img src="${escapeHtml(value || '')}" alt="Preview" class="image-picker-img" data-preview-img>
+          <img src="${escapeHtml(previewSrc)}" alt="Preview" class="image-picker-img" data-preview-img>
           <button type="button" class="image-picker-clear" data-clear title="Clear image">&times;</button>
         </div>
         <div class="image-picker-placeholder ${placeholderClass}" data-placeholder>
@@ -1652,6 +1722,27 @@ function openTextareaModal(textarea, onBlockChange) {
   // Get the label text
   const formGroup = textarea.closest('.form-group');
   const label = formGroup?.querySelector('.form-label')?.textContent?.replace('*', '').trim() || 'Edit Text';
+  const isMarkdown = textarea.dataset.markdown === 'true' || label.toLowerCase().includes('markdown') || label.toLowerCase().includes('content');
+
+  // Markdown toolbar HTML
+  const markdownToolbar = isMarkdown ? `
+    <div class="markdown-toolbar">
+      <button type="button" class="markdown-btn" data-md="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>
+      <button type="button" class="markdown-btn" data-md="italic" title="Italic (Ctrl+I)"><em>I</em></button>
+      <button type="button" class="markdown-btn" data-md="code" title="Inline Code">&lt;/&gt;</button>
+      <span class="markdown-separator"></span>
+      <button type="button" class="markdown-btn" data-md="h2" title="Heading 2">H2</button>
+      <button type="button" class="markdown-btn" data-md="h3" title="Heading 3">H3</button>
+      <span class="markdown-separator"></span>
+      <button type="button" class="markdown-btn" data-md="ul" title="Bullet List">• List</button>
+      <button type="button" class="markdown-btn" data-md="ol" title="Numbered List">1. List</button>
+      <button type="button" class="markdown-btn" data-md="quote" title="Blockquote">" Quote</button>
+      <span class="markdown-separator"></span>
+      <button type="button" class="markdown-btn" data-md="link" title="Link">[Link]</button>
+      <button type="button" class="markdown-btn" data-md="image" title="Image">🖼️</button>
+      <button type="button" class="markdown-btn" data-md="codeblock" title="Code Block">{ }</button>
+    </div>
+  ` : '';
 
   // Create modal
   let modal = document.getElementById('textareaModal');
@@ -1663,13 +1754,14 @@ function openTextareaModal(textarea, onBlockChange) {
 
   modal.className = 'textarea-modal-overlay';
   modal.innerHTML = `
-    <div class="textarea-modal">
+    <div class="textarea-modal ${isMarkdown ? 'textarea-modal-markdown' : ''}">
       <div class="textarea-modal-header">
         <h3>${label}</h3>
         <button type="button" class="textarea-modal-close" data-close-textarea-modal>&times;</button>
       </div>
+      ${markdownToolbar}
       <div class="textarea-modal-body">
-        <textarea id="textareaModalInput" class="textarea-modal-input" placeholder="Enter your text...">${textarea.value}</textarea>
+        <textarea id="textareaModalInput" class="textarea-modal-input ${isMarkdown ? 'markdown-input' : ''}" placeholder="Enter your text...">${textarea.value}</textarea>
       </div>
       <div class="textarea-modal-footer">
         <span class="textarea-char-count">${textarea.value.length} characters</span>
@@ -1723,13 +1815,146 @@ function openTextareaModal(textarea, onBlockChange) {
       e.preventDefault();
       saveAndClose();
     }
+    // Markdown shortcuts
+    if (isMarkdown && (e.metaKey || e.ctrlKey)) {
+      if (e.key === 'b') {
+        e.preventDefault();
+        insertMarkdown(modalInput, 'bold');
+      } else if (e.key === 'i') {
+        e.preventDefault();
+        insertMarkdown(modalInput, 'italic');
+      } else if (e.key === 'k') {
+        e.preventDefault();
+        insertMarkdown(modalInput, 'link');
+      }
+    }
   });
+
+  // Markdown toolbar button handlers
+  if (isMarkdown) {
+    modal.querySelectorAll('[data-md]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.md;
+        insertMarkdown(modalInput, action);
+        modalInput.focus();
+      });
+    });
+  }
 
   // Focus the modal input and move cursor to end
   setTimeout(() => {
     modalInput.focus();
     modalInput.setSelectionRange(modalInput.value.length, modalInput.value.length);
   }, 100);
+}
+
+/**
+ * Insert markdown formatting at cursor position
+ */
+function insertMarkdown(textarea, action) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const text = textarea.value;
+  const selected = text.substring(start, end);
+
+  let before = '';
+  let after = '';
+  let placeholder = '';
+  let cursorOffset = 0;
+
+  switch (action) {
+    case 'bold':
+      before = '**';
+      after = '**';
+      placeholder = 'bold text';
+      cursorOffset = 2;
+      break;
+    case 'italic':
+      before = '_';
+      after = '_';
+      placeholder = 'italic text';
+      cursorOffset = 1;
+      break;
+    case 'code':
+      before = '`';
+      after = '`';
+      placeholder = 'code';
+      cursorOffset = 1;
+      break;
+    case 'h2':
+      // Insert at beginning of line
+      const lineStart2 = text.lastIndexOf('\n', start - 1) + 1;
+      textarea.setSelectionRange(lineStart2, lineStart2);
+      before = '## ';
+      after = '';
+      placeholder = '';
+      cursorOffset = 3;
+      break;
+    case 'h3':
+      const lineStart3 = text.lastIndexOf('\n', start - 1) + 1;
+      textarea.setSelectionRange(lineStart3, lineStart3);
+      before = '### ';
+      after = '';
+      placeholder = '';
+      cursorOffset = 4;
+      break;
+    case 'ul':
+      before = '- ';
+      after = '';
+      placeholder = 'list item';
+      cursorOffset = 2;
+      break;
+    case 'ol':
+      before = '1. ';
+      after = '';
+      placeholder = 'list item';
+      cursorOffset = 3;
+      break;
+    case 'quote':
+      before = '> ';
+      after = '';
+      placeholder = 'quote';
+      cursorOffset = 2;
+      break;
+    case 'link':
+      before = '[';
+      after = '](url)';
+      placeholder = 'link text';
+      cursorOffset = 1;
+      break;
+    case 'image':
+      before = '![';
+      after = '](image-url)';
+      placeholder = 'alt text';
+      cursorOffset = 2;
+      break;
+    case 'codeblock':
+      before = '\n```\n';
+      after = '\n```\n';
+      placeholder = 'code';
+      cursorOffset = 5;
+      break;
+  }
+
+  const actualStart = textarea.selectionStart;
+  const actualEnd = textarea.selectionEnd;
+  const actualSelected = textarea.value.substring(actualStart, actualEnd);
+  const insert = actualSelected || placeholder;
+  const newText = textarea.value.substring(0, actualStart) + before + insert + after + textarea.value.substring(actualEnd);
+
+  textarea.value = newText;
+
+  // Position cursor appropriately
+  if (actualSelected) {
+    // If text was selected, select it again
+    textarea.setSelectionRange(actualStart + before.length, actualStart + before.length + insert.length);
+  } else {
+    // Position cursor inside the markdown markers
+    textarea.setSelectionRange(actualStart + cursorOffset, actualStart + cursorOffset + placeholder.length);
+  }
+
+  // Trigger input event for character count update
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /**

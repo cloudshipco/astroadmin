@@ -407,13 +407,21 @@
     @apply w-full text-center;
   }
 
-  /* Checkbox */
+  /* Checkbox - larger and more prominent */
   .checkbox-label {
-    @apply flex items-center gap-2 cursor-pointer;
+    @apply flex items-center gap-3 cursor-pointer py-2;
   }
 
   .checkbox-label input[type="checkbox"] {
-    @apply w-auto cursor-pointer;
+    @apply w-5 h-5 cursor-pointer rounded border-2 border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors;
+  }
+
+  .checkbox-label input[type="checkbox"]:checked {
+    @apply bg-primary-600 border-primary-600;
+  }
+
+  .checkbox-label span {
+    @apply text-base text-gray-700 font-medium;
   }
 
   /* Block Editor Styles */
@@ -1415,6 +1423,39 @@
 
   .textarea-modal-actions {
     @apply flex gap-2;
+  }
+
+  /* Markdown Editor Styles */
+  .textarea-modal-markdown {
+    @apply max-w-5xl h-[85vh];
+  }
+
+  .textarea-modal-markdown .textarea-modal-input {
+    @apply font-mono text-sm leading-relaxed;
+  }
+
+  .markdown-toolbar {
+    @apply flex items-center gap-1 px-4 py-2 border-b border-gray-200 bg-gray-50 flex-wrap;
+  }
+
+  .markdown-btn {
+    @apply px-2.5 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-100 hover:border-gray-400 transition-colors;
+  }
+
+  .markdown-btn:hover {
+    @apply bg-gray-100;
+  }
+
+  .markdown-btn:active {
+    @apply bg-gray-200;
+  }
+
+  .markdown-separator {
+    @apply w-px h-6 bg-gray-300 mx-1;
+  }
+
+  .markdown-input {
+    @apply font-mono text-sm;
   }
 
   /* Changes button badge */

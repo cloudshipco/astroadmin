@@ -630,16 +630,31 @@ async function renderEditor(entryData) {
   // Only show markdown body editor for content types that DON'T use blocks
   // Pages use blocks, so they don't need a body field
   const hasBlocks = schemaData.collection.schema?.properties?.blocks;
+  const bodyContent = entryData.body || '';
+  const bodyLineCount = (bodyContent.match(/\n/g) || []).length + 1;
+  const bodyCharRows = Math.ceil(bodyContent.length / 60);
+  const bodyRows = Math.max(8, Math.min(20, Math.max(bodyLineCount, bodyCharRows)));
   const bodyEditor = (entryData.type === 'content' && !hasBlocks) ? `
     <div class="form-group">
       <label for="markdown-body" class="form-label">Content (Markdown)</label>
-      <textarea
-        id="markdown-body"
-        name="body"
-        rows="6"
-        class="form-input"
-        placeholder="Enter markdown content..."
-      >${entryData.body || ''}</textarea>
+      <div class="textarea-wrapper">
+        <textarea
+          id="markdown-body"
+          name="body"
+          rows="${bodyRows}"
+          class="form-input textarea-autogrow"
+          placeholder="Enter markdown content..."
+          data-markdown="true"
+        >${bodyContent}</textarea>
+        <button type="button" class="textarea-expand-btn" data-expand-textarea="markdown-body" title="Expand editor">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <polyline points="9 21 3 21 3 15"></polyline>
+            <line x1="21" y1="3" x2="14" y2="10"></line>
+            <line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
+        </button>
+      </div>
     </div>
   ` : '';
 
