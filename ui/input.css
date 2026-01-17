@@ -1010,6 +1010,60 @@
     @apply flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-200 bg-gray-50;
   }
 
+  /* Commit Dialog */
+  .commit-modal-overlay {
+    @apply fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4;
+  }
+
+  .commit-modal {
+    @apply bg-white rounded-xl shadow-2xl w-full max-w-md;
+  }
+
+  .commit-modal-header {
+    @apply flex items-center justify-between px-6 py-4 border-b border-gray-200;
+  }
+
+  .commit-modal-header h3 {
+    @apply font-semibold text-gray-900 text-lg;
+  }
+
+  .commit-modal-close {
+    @apply text-gray-400 hover:text-gray-600 text-2xl cursor-pointer leading-none;
+  }
+
+  .commit-modal-body {
+    @apply p-6;
+  }
+
+  .commit-label {
+    @apply block text-sm font-medium text-gray-700 mb-2;
+  }
+
+  .commit-optional {
+    @apply text-gray-400 font-normal;
+  }
+
+  .commit-input {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500;
+  }
+
+  .commit-hint {
+    @apply text-xs text-gray-500 mt-2;
+  }
+
+  .commit-modal-footer {
+    @apply flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl;
+  }
+
+  /* Success Toast */
+  .success-toast {
+    @apply fixed bottom-6 right-6 bg-green-600 text-white px-4 py-3 rounded-lg shadow-lg z-50 transition-opacity duration-300;
+  }
+
+  .success-toast-hidden {
+    @apply opacity-0;
+  }
+
   /* Changes button badge */
   .changes-badge {
     @apply absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold;

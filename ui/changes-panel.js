@@ -288,18 +288,121 @@ async function revertFile(file) {
 }
 
 /**
+ * Show publish dialog and return promise with message
+ * @param {Object} options - Dialog options
+ * @param {string} options.title - Dialog title
+ * @param {string} options.confirmText - Text for confirm button
+ * @returns {Promise<string|null>} Resolves with message (or empty string), null if cancelled
+ */
+export function showPublishDialog(options = {}) {
+  const {
+    title = 'Publish Your Changes',
+    confirmText = 'Publish'
+  } = options;
+
+  return new Promise((resolve) => {
+    let modal = document.getElementById('commitModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'commitModal';
+      document.body.appendChild(modal);
+    }
+
+    const closeAndResolve = (value) => {
+      modal.remove();
+      resolve(value);
+    };
+
+    modal.className = 'commit-modal-overlay';
+    modal.innerHTML = `
+      <div class="commit-modal">
+        <div class="commit-modal-header">
+          <h3>${title}</h3>
+          <button type="button" class="commit-modal-close" data-close-commit>&times;</button>
+        </div>
+        <div class="commit-modal-body">
+          <label for="commitMessage" class="commit-label">
+            Add a note about your changes
+            <span class="commit-optional">(optional)</span>
+          </label>
+          <textarea
+            id="commitMessage"
+            class="commit-input"
+            placeholder="e.g. Updated opening hours, Added new menu item..."
+            rows="3"
+          ></textarea>
+          <p class="commit-hint">If left blank, we'll create a note based on what was changed.</p>
+        </div>
+        <div class="commit-modal-footer">
+          <button type="button" class="btn btn-sm btn-secondary" data-close-commit>Cancel</button>
+          <button type="button" class="btn btn-sm btn-primary" data-confirm-commit>${confirmText}</button>
+        </div>
+      </div>
+    `;
+
+    // Event listeners
+    modal.querySelectorAll('[data-close-commit]').forEach(btn => {
+      btn.addEventListener('click', () => closeAndResolve(null));
+    });
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeAndResolve(null);
+    });
+    modal.querySelector('[data-confirm-commit]').addEventListener('click', () => {
+      const message = document.getElementById('commitMessage').value.trim();
+      closeAndResolve(message);
+    });
+
+    // Focus the textarea
+    setTimeout(() => {
+      document.getElementById('commitMessage').focus();
+    }, 100);
+
+    // Handle Enter key (with shift for newline), Escape to cancel
+    modal.querySelector('#commitMessage').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        modal.querySelector('[data-confirm-commit]').click();
+      }
+      if (e.key === 'Escape') {
+        closeAndResolve(null);
+      }
+    });
+  });
+}
+
+/**
+ * Show commit dialog (internal use for changes panel)
+ */
+function showCommitDialog() {
+  showPublishDialog({ title: 'Save Your Changes', confirmText: 'Save Changes' })
+    .then(message => {
+      if (message !== null) {
+        performCommit(message);
+      }
+    });
+}
+
+/**
  * Commit all changes
  */
-async function commitChanges() {
-  const message = prompt('Enter commit message:');
-  if (!message) return;
+function commitChanges() {
+  showCommitDialog();
+}
+
+/**
+ * Perform the actual commit
+ * @param {string} message - Optional commit message
+ */
+async function performCommit(message) {
+  // Generate a default message if none provided
+  const commitMessage = message || generateDefaultMessage();
 
   try {
     const res = await fetch('/api/git/commit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        message,
+        message: commitMessage,
         files: ['src/content/', 'src/styles/', 'public/images/']
       })
     });
@@ -308,7 +411,7 @@ async function commitChanges() {
 
     if (data.success) {
       await loadStatus();
-      alert('Changes committed successfully!');
+      showSuccessToast('Changes saved successfully!');
     } else {
       alert('Failed to commit: ' + data.error);
     }
@@ -316,6 +419,44 @@ async function commitChanges() {
     console.error('Error committing:', error);
     alert('Failed to commit changes');
   }
+}
+
+/**
+ * Generate a default commit message based on changes
+ */
+function generateDefaultMessage() {
+  if (!currentStatus) return 'Content updates';
+
+  const parts = [];
+  const modified = currentStatus.modified.length;
+  const created = currentStatus.created.length;
+  const deleted = currentStatus.deleted.length;
+
+  if (created > 0) parts.push(`Added ${created} file${created > 1 ? 's' : ''}`);
+  if (modified > 0) parts.push(`Updated ${modified} file${modified > 1 ? 's' : ''}`);
+  if (deleted > 0) parts.push(`Removed ${deleted} file${deleted > 1 ? 's' : ''}`);
+
+  return parts.length > 0 ? parts.join(', ') : 'Content updates';
+}
+
+/**
+ * Show a success toast notification
+ */
+function showSuccessToast(message) {
+  let toast = document.getElementById('successToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'successToast';
+    document.body.appendChild(toast);
+  }
+
+  toast.className = 'success-toast';
+  toast.textContent = message;
+
+  setTimeout(() => {
+    toast.classList.add('success-toast-hidden');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
 }
 
 /**

@@ -5,7 +5,7 @@
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
 import { openImageLibrary, uploadNewImage } from './image-library.js';
 import { openReferencePicker } from './reference-picker.js';
-import { toggleChangesPanel, getChangesCount } from './changes-panel.js';
+import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
 import { openGalleryEditor } from './gallery-editor.js';
 
 let currentCollection = null;
@@ -1437,7 +1437,7 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 
 // Publish changes
 document.getElementById('publishBtn').addEventListener('click', async () => {
-  const message = prompt('Commit message (leave blank for "Content update"):');
+  const message = await showPublishDialog();
   if (message === null) return; // User cancelled
 
   const publishBtn = document.getElementById('publishBtn');
