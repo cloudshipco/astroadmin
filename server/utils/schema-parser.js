@@ -96,6 +96,11 @@ export async function parseAstroSchemas(projectRoot) {
         {
           name: 'astro-shims',
           setup(build) {
+            // Resolve 'zod' to the project's node_modules
+            build.onResolve({ filter: /^zod$/ }, () => ({
+              path: path.join(projectRoot, 'node_modules', 'zod', 'index.js'),
+            }));
+
             // Intercept astro:content import
             build.onResolve({ filter: /^astro:content$/ }, () => ({
               path: 'astro:content',
