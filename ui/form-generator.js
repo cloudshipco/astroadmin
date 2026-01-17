@@ -108,20 +108,37 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
       `;
     }
 
-    // Simple array of items (inline editing)
+    // Simple array of items (inline editing) - card-style layout
     const items = Array.isArray(value) ? value : [];
+    const singularName = name.endsWith('s') ? name.slice(0, -1) : name;
     return `
       <div class="form-group">
-        <label>${formatLabel(name)}</label>
+        <label class="form-label">${formatLabel(name)}</label>
         <div class="array-field" data-field="${fullPath}" data-schema='${JSON.stringify(schema.items || {})}'>
           ${items.map((item, index) => `
-            <div class="array-item" data-index="${index}">
-              ${generateArrayItem(fullPath, schema.items, item, index)}
-              <button type="button" class="btn btn-danger btn-sm remove-array-item">Remove</button>
+            <div class="array-item" data-index="${index}" draggable="true">
+              <div class="array-item-handle" title="Drag to reorder">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="9" cy="5" r="2"/><circle cx="15" cy="5" r="2"/>
+                  <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
+                  <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
+                </svg>
+              </div>
+              <div class="array-item-content">
+                ${generateArrayItem(fullPath, schema.items, item, index)}
+              </div>
+              <div class="array-item-actions">
+                <button type="button" class="array-item-btn array-item-delete remove-array-item" title="Delete">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
+              </div>
             </div>
           `).join('\n')}
-          <button type="button" class="btn btn-secondary btn-sm add-array-item" data-field="${fullPath}">
-            Add ${formatLabel(name)}
+          <button type="button" class="btn btn-secondary btn-sm add-array-item w-full text-center" data-field="${fullPath}">
+            + Add ${formatLabel(singularName)}
           </button>
         </div>
       </div>
@@ -744,31 +761,60 @@ function detectReferenceCollection(name, schema) {
 }
 
 /**
- * Generate a reference picker field
+ * Generate a reference picker field (card-style layout with drag handles)
  */
 function generateReferenceField(name, schema, value, fullPath, id, collectionName) {
   const items = Array.isArray(value) ? value : [];
   const singularName = collectionName.endsWith('s') ? collectionName.slice(0, -1) : collectionName;
+  // Use collection name as label instead of field name (e.g., "Testimonials" not "Testimonial Ids")
+  const label = formatLabel(collectionName);
 
   return `
     <div class="form-group">
-      <label class="form-label">${getFieldLabel(name, schema)}</label>
+      <label class="form-label">${label}</label>
       <div class="reference-field" data-field="${fullPath}" data-collection="${collectionName}">
-        <div class="reference-items">
+        <div class="reference-cards" data-reference-cards>
           ${items.length === 0 ? '<div class="reference-empty">No items selected. Click "Add" to select.</div>' : ''}
-          ${items.map((itemId, index) => `
-            <div class="reference-item" data-index="${index}" data-id="${escapeHtml(itemId)}">
-              <input type="hidden" name="${fullPath}[${index}]" value="${escapeHtml(itemId)}">
-              <div class="reference-item-content edit-reference-item" title="Click to change">
-                <span class="reference-item-title">${escapeHtml(itemId)}</span>
-                <span class="reference-item-preview" data-preview-for="${escapeHtml(itemId)}">Loading...</span>
-              </div>
-              <button type="button" class="btn btn-sm btn-danger remove-reference-item" title="Remove">×</button>
-            </div>
-          `).join('\n')}
+          ${items.map((itemId, index) => generateReferenceCard(itemId, index, fullPath)).join('')}
         </div>
-        <button type="button" class="btn btn-secondary btn-sm add-reference-item" data-field="${fullPath}" data-collection="${collectionName}">
-          Add ${formatLabel(singularName)}
+        <button type="button" class="btn btn-secondary btn-sm reference-cards-add add-reference-item" data-field="${fullPath}" data-collection="${collectionName}">
+          + Add ${formatLabel(singularName)}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Generate a single reference card (matching array-card style)
+ */
+function generateReferenceCard(itemId, index, fullPath) {
+  return `
+    <div class="reference-card" data-index="${index}" data-id="${escapeHtml(itemId)}" draggable="true">
+      <div class="reference-card-handle" title="Drag to reorder">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="9" cy="5" r="2"/><circle cx="15" cy="5" r="2"/>
+          <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
+          <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
+        </svg>
+      </div>
+      <input type="hidden" name="${fullPath}[${index}]" value="${escapeHtml(itemId)}">
+      <div class="reference-card-content edit-reference-item" title="Click to change">
+        <div class="reference-card-title">${escapeHtml(itemId)}</div>
+        <div class="reference-card-preview" data-preview-for="${escapeHtml(itemId)}">Loading...</div>
+      </div>
+      <div class="reference-card-actions">
+        <button type="button" class="reference-card-btn reference-card-edit open-reference-editor" title="Edit">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
+        <button type="button" class="reference-card-btn reference-card-delete remove-reference-item" title="Remove">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
         </button>
       </div>
     </div>
@@ -1167,7 +1213,7 @@ export function setupFormHandlers(formElement, onBlockChange) {
     removeDropIndicator();
   });
 
-  // Add array item (for non-block arrays)
+  // Add array item (for non-block arrays) - card-style layout
   formElement.addEventListener('click', (e) => {
     if (e.target.classList.contains('add-array-item')) {
       const arrayField = e.target.closest('.array-field');
@@ -1178,9 +1224,26 @@ export function setupFormHandlers(formElement, onBlockChange) {
       const newItem = document.createElement('div');
       newItem.className = 'array-item';
       newItem.dataset.index = index;
+      newItem.draggable = true;
       newItem.innerHTML = `
-        ${generateArrayItem(fieldPath, itemSchema, null, index)}
-        <button type="button" class="btn btn-danger btn-sm remove-array-item">Remove</button>
+        <div class="array-item-handle" title="Drag to reorder">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="9" cy="5" r="2"/><circle cx="15" cy="5" r="2"/>
+            <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
+            <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
+          </svg>
+        </div>
+        <div class="array-item-content">
+          ${generateArrayItem(fieldPath, itemSchema, null, index)}
+        </div>
+        <div class="array-item-actions">
+          <button type="button" class="array-item-btn array-item-delete remove-array-item" title="Delete">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+        </div>
       `;
 
       arrayField.insertBefore(newItem, e.target);
@@ -1190,8 +1253,9 @@ export function setupFormHandlers(formElement, onBlockChange) {
 
   // Remove array item
   formElement.addEventListener('click', (e) => {
-    if (e.target.classList.contains('remove-array-item')) {
-      const item = e.target.closest('.array-item');
+    const removeBtn = e.target.closest('.remove-array-item');
+    if (removeBtn) {
+      const item = removeBtn.closest('.array-item');
       item.remove();
       reindexArrayItems(e.target.closest('.array-field'));
       if (onBlockChange) onBlockChange();
@@ -1380,13 +1444,58 @@ export function setupFormHandlers(formElement, onBlockChange) {
     });
   });
 
-  // Inline array cards - Drag and drop reordering
+  // Initialize sortable for array cards (features, stats, etc.)
+  initSortableCards(formElement, {
+    cardSelector: '.array-card',
+    containerSelector: '[data-array-cards]',
+    onReorder: (container, fromIndex, toIndex) => {
+      // Update JSON data in hidden input
+      const hiddenInput = container.parentElement?.querySelector('[data-array-data]');
+      if (hiddenInput) {
+        const items = JSON.parse(hiddenInput.value || '[]');
+        const [moved] = items.splice(fromIndex, 1);
+        items.splice(toIndex, 0, moved);
+        hiddenInput.value = JSON.stringify(items);
+      }
+    },
+    onChange: onBlockChange
+  });
+
+  // Initialize sortable for reference cards (testimonials, etc.)
+  initSortableCards(formElement, {
+    cardSelector: '.reference-card',
+    containerSelector: '[data-reference-cards]',
+    onReorder: (container) => {
+      // Update hidden input names with new indices
+      const referenceField = container.closest('.reference-field');
+      const fieldPath = referenceField?.dataset.field;
+      if (fieldPath) {
+        const cards = container.querySelectorAll('.reference-card');
+        cards.forEach((card, index) => {
+          const input = card.querySelector('input[type="hidden"]');
+          if (input) {
+            input.name = `${fieldPath}[${index}]`;
+          }
+        });
+      }
+    },
+    onChange: onBlockChange
+  });
+}
+
+/**
+ * Reusable sortable cards initialization
+ * Uses DOM manipulation for reliable drag-and-drop reordering
+ */
+function initSortableCards(formElement, options) {
+  const { cardSelector, containerSelector, onReorder, onChange } = options;
+
   let draggedCard = null;
-  let cardDropTarget = null;
-  let cardDropPosition = null;
+  let dropTarget = null;
+  let dropPosition = null;
 
   formElement.addEventListener('dragstart', (e) => {
-    const card = e.target.closest('.array-card');
+    const card = e.target.closest(cardSelector);
     if (!card) return;
 
     draggedCard = card;
@@ -1395,83 +1504,103 @@ export function setupFormHandlers(formElement, onBlockChange) {
   });
 
   formElement.addEventListener('dragend', (e) => {
-    const card = e.target.closest('.array-card');
+    const card = e.target.closest(cardSelector);
     if (card) {
       card.classList.remove('dragging');
     }
-    draggedCard = null;
-    cardDropTarget = null;
-    cardDropPosition = null;
 
-    // Remove all drop indicators
-    document.querySelectorAll('.array-card').forEach(c => {
-      c.classList.remove('drop-before', 'drop-after');
+    // Clean up all drop indicators
+    formElement.querySelectorAll(cardSelector).forEach(c => {
+      c.classList.remove('drop-before', 'drop-after', 'dragging');
     });
+
+    draggedCard = null;
+    dropTarget = null;
+    dropPosition = null;
   });
 
   formElement.addEventListener('dragover', (e) => {
-    const card = e.target.closest('.array-card');
-    const cardsContainer = e.target.closest('[data-array-cards]');
+    const card = e.target.closest(cardSelector);
+    const container = e.target.closest(containerSelector);
 
-    if (!draggedCard || !cardsContainer) return;
+    if (!draggedCard || !container) return;
+
+    // Make sure we're in the same container
+    if (draggedCard.closest(containerSelector) !== container) return;
+
     if (card && !card.classList.contains('dragging')) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
 
-      // Remove existing indicators
-      cardsContainer.querySelectorAll('.array-card').forEach(c => {
+      // Remove existing indicators in this container
+      container.querySelectorAll(cardSelector).forEach(c => {
         c.classList.remove('drop-before', 'drop-after');
       });
 
       // Determine drop position based on cursor location
       const rect = card.getBoundingClientRect();
       const midY = rect.top + rect.height / 2;
-      cardDropPosition = e.clientY < midY ? 'before' : 'after';
-      cardDropTarget = card;
+      dropPosition = e.clientY < midY ? 'before' : 'after';
+      dropTarget = card;
 
-      card.classList.add(cardDropPosition === 'before' ? 'drop-before' : 'drop-after');
+      card.classList.add(dropPosition === 'before' ? 'drop-before' : 'drop-after');
     }
   });
 
   formElement.addEventListener('drop', (e) => {
-    if (!draggedCard || !cardDropTarget || !cardDropPosition) return;
+    if (!draggedCard || !dropTarget || !dropPosition) return;
 
     e.preventDefault();
+    e.stopPropagation();
 
-    const cardsContainer = draggedCard.closest('[data-array-cards]');
-    if (!cardsContainer) return;
+    const container = draggedCard.closest(containerSelector);
+    if (!container) return;
 
-    const hiddenInput = cardsContainer.parentElement.querySelector('[data-array-data]');
-    const items = JSON.parse(hiddenInput?.value || '[]');
+    const cardToMove = draggedCard;
+    const targetCard = dropTarget;
+    const position = dropPosition;
+    const fromIndex = parseInt(cardToMove.dataset.index, 10);
+    let toIndex = parseInt(targetCard.dataset.index, 10);
 
-    const fromIndex = parseInt(draggedCard.dataset.index, 10);
-    let toIndex = parseInt(cardDropTarget.dataset.index, 10);
+    // Cleanup state immediately
+    draggedCard = null;
+    dropTarget = null;
+    dropPosition = null;
+    targetCard.classList.remove('drop-before', 'drop-after');
+    cardToMove.classList.remove('dragging');
 
-    if (cardDropPosition === 'after') toIndex += 1;
+    // Calculate actual target index
+    if (position === 'after') toIndex += 1;
     if (fromIndex < toIndex) toIndex -= 1;
 
-    if (fromIndex !== toIndex) {
-      // Reorder array
-      const [moved] = items.splice(fromIndex, 1);
-      items.splice(toIndex, 0, moved);
+    // Only proceed if position changed
+    if (fromIndex === toIndex) return;
 
-      // Update hidden input
-      if (hiddenInput) {
-        hiddenInput.value = JSON.stringify(items);
-      }
-
-      // Re-render cards
-      cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i)).join('');
-
-      // Trigger change callback
-      if (onBlockChange) onBlockChange();
+    // Move the DOM element
+    if (position === 'before') {
+      container.insertBefore(cardToMove, targetCard);
+    } else {
+      container.insertBefore(cardToMove, targetCard.nextSibling);
     }
 
-    // Cleanup
-    cardDropTarget.classList.remove('drop-before', 'drop-after');
-    draggedCard = null;
-    cardDropTarget = null;
-    cardDropPosition = null;
+    // Reindex all cards
+    const cards = container.querySelectorAll(cardSelector);
+    cards.forEach((card, newIndex) => {
+      card.dataset.index = newIndex;
+    });
+
+    // Call reorder callback for type-specific logic
+    if (onReorder) {
+      onReorder(container, fromIndex, toIndex);
+    }
+
+    // Dispatch event for immediate save (bypasses debounce)
+    formElement.dispatchEvent(new CustomEvent('cards-reordered', { bubbles: true }));
+
+    // Also trigger normal change callback
+    if (onChange) {
+      onChange();
+    }
   });
 }
 

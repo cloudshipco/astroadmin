@@ -175,7 +175,20 @@
   }
 
   .preview-panel-header {
-    @apply px-4 py-3 border-b border-gray-200 font-semibold text-sm bg-gray-50 flex items-center justify-between;
+    @apply px-4 py-3 border-b border-gray-200 font-semibold text-sm bg-gray-50 flex items-center justify-between gap-3;
+  }
+
+  /* Block selector for component preview */
+  .preview-block-selector {
+    @apply flex items-center gap-2 text-sm font-normal;
+  }
+
+  .preview-block-selector label {
+    @apply text-gray-500;
+  }
+
+  .block-selector-dropdown {
+    @apply bg-white border border-gray-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none;
   }
 
   .preview-panel-body {
@@ -235,15 +248,45 @@
 
   /* Array Fields */
   .array-field {
-    @apply border border-gray-200 rounded-lg p-2 bg-gray-50 space-y-2;
+    @apply space-y-2 mb-3;
   }
 
   .array-item {
-    @apply bg-white p-3 pt-2 rounded border border-gray-200 relative;
+    @apply flex items-center gap-2 p-2.5 bg-white border border-gray-200 rounded-lg transition-all duration-150;
   }
 
-  .array-item .remove-array-item {
-    @apply absolute top-2 right-2 py-1 px-2 text-xs;
+  .array-item:hover {
+    @apply border-gray-300 shadow-sm;
+  }
+
+  .array-item-handle {
+    @apply text-gray-400 cursor-grab active:cursor-grabbing p-1 flex-shrink-0;
+  }
+
+  .array-item-content {
+    @apply flex-1 min-w-0;
+  }
+
+  .array-item-content input {
+    @apply w-full px-3 py-1.5 border border-gray-200 rounded text-sm bg-transparent;
+  }
+
+  .array-item-content input:focus {
+    @apply border-primary-300 ring-1 ring-primary-300 outline-none;
+  }
+
+  .array-item-actions {
+    @apply flex items-center gap-1 flex-shrink-0;
+  }
+
+  .array-item-btn {
+    @apply w-7 h-7 flex items-center justify-center text-gray-400 rounded transition-colors cursor-pointer;
+    background: none;
+    border: none;
+  }
+
+  .array-item-delete:hover {
+    @apply text-red-600 bg-red-50;
   }
 
   .array-item-input {
@@ -512,15 +555,6 @@
 
   .image-picker-url {
     @apply text-xs;
-  }
-
-  /* Compact gallery/image array items */
-  .array-item {
-    @apply bg-white p-2 rounded border border-gray-200 relative;
-  }
-
-  .array-item .remove-array-item {
-    @apply absolute top-1 right-1 py-0.5 px-1.5 text-xs opacity-50 hover:opacity-100;
   }
 
   /* Hide labels inside simple array items - context is clear */
@@ -1402,20 +1436,80 @@
     @apply border border-gray-200 rounded-lg p-3 bg-gray-50;
   }
 
-  .reference-items {
+  .reference-cards {
     @apply space-y-2 mb-3;
   }
 
-  .reference-item {
-    @apply flex items-center gap-2 bg-white p-2 rounded border border-gray-200;
+  .reference-card {
+    @apply flex items-center gap-2 p-2.5 bg-white border border-gray-200 rounded-lg transition-all duration-150;
   }
 
-  .reference-item-label {
-    @apply flex-1 text-sm text-gray-700 truncate;
+  .reference-card:hover {
+    @apply border-gray-300 shadow-sm;
+  }
+
+  .reference-card.dragging {
+    @apply opacity-50 bg-gray-50;
+  }
+
+  .reference-card.drop-before {
+    @apply relative;
+  }
+
+  .reference-card.drop-before::before {
+    content: '';
+    @apply absolute left-0 right-0 h-0.5 bg-primary-500 rounded;
+    top: -5px;
+  }
+
+  .reference-card.drop-after {
+    @apply relative;
+  }
+
+  .reference-card.drop-after::after {
+    content: '';
+    @apply absolute left-0 right-0 h-0.5 bg-primary-500 rounded;
+    bottom: -5px;
+  }
+
+  .reference-card-handle {
+    @apply text-gray-400 cursor-grab active:cursor-grabbing p-1 flex-shrink-0;
+  }
+
+  .reference-card-content {
+    @apply flex-1 min-w-0 cursor-pointer;
+  }
+
+  .reference-card-title {
+    @apply text-sm font-medium text-gray-900 truncate;
+  }
+
+  .reference-card-preview {
+    @apply text-xs text-gray-500 truncate mt-0.5;
+  }
+
+  .reference-card-actions {
+    @apply flex items-center gap-1 flex-shrink-0;
+  }
+
+  .reference-card-btn {
+    @apply w-7 h-7 flex items-center justify-center text-gray-400 rounded transition-colors cursor-pointer;
+  }
+
+  .reference-card-edit:hover {
+    @apply text-primary-600 bg-primary-50;
+  }
+
+  .reference-card-delete:hover {
+    @apply text-red-600 bg-red-50;
+  }
+
+  .reference-cards-add {
+    @apply w-full text-center;
   }
 
   .reference-empty {
-    @apply text-sm text-gray-400 py-2 text-center;
+    @apply text-sm text-gray-400 py-4 text-center bg-white rounded-lg border border-dashed border-gray-300;
   }
 
   /* Reference Picker Modal */
@@ -1460,7 +1554,7 @@
   }
 
   .reference-list-item {
-    @apply flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-primary-50 hover:border-primary-200 border border-transparent transition-colors;
+    @apply p-4 bg-gray-50 rounded-lg cursor-pointer hover:bg-primary-50 hover:border-primary-200 border border-transparent transition-colors relative;
   }
 
   .reference-list-item.disabled {
@@ -1480,7 +1574,40 @@
   }
 
   .reference-list-item-badge {
-    @apply text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full;
+    @apply text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full absolute top-2 right-2;
+  }
+
+  /* Reference Card Styles (for rich preview) */
+  .reference-card-header {
+    @apply mb-2;
+  }
+
+  .reference-card-name {
+    @apply font-semibold text-gray-900;
+  }
+
+  .reference-card-subtitle {
+    @apply text-sm text-gray-500;
+  }
+
+  .reference-card-quote {
+    @apply text-sm text-gray-700 leading-relaxed mb-2;
+  }
+
+  .reference-card-quote-mark {
+    @apply text-primary-400 font-serif text-lg mr-1;
+  }
+
+  .reference-card-meta {
+    @apply flex flex-wrap gap-2 text-xs text-gray-500 pt-2 border-t border-gray-200;
+  }
+
+  .reference-card-meta-item {
+    @apply inline-block;
+  }
+
+  .reference-card-rating {
+    @apply text-yellow-500;
   }
 
   .reference-loading, .reference-empty {
