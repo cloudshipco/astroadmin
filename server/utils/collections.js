@@ -7,12 +7,14 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import chokidar from 'chokidar';
 import { config } from '../config.js';
 import { parseAstroSchemas } from './schema-parser.js';
 
 // Cache for parsed schemas
 let cachedSchemas = null;
 let schemasLoading = null;
+let schemaWatcher = null;
 
 /**
  * Load and cache schemas from config.ts
@@ -53,6 +55,39 @@ export async function loadSchemas() {
 export function clearSchemaCache() {
   cachedSchemas = null;
   schemasLoading = null;
+}
+
+/**
+ * Start watching schema config file for changes
+ * Automatically clears cache when config.ts changes
+ */
+export function watchSchemaConfig() {
+  if (schemaWatcher) return; // Already watching
+
+  const projectRoot = config.paths.projectRoot;
+  const configPatterns = [
+    path.join(projectRoot, 'src/content/config.ts'),
+    path.join(projectRoot, 'src/content/config.mts'),
+    path.join(projectRoot, 'src/content/config.js'),
+  ];
+
+  schemaWatcher = chokidar.watch(configPatterns, {
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 500 }
+  });
+
+  schemaWatcher.on('change', (filePath) => {
+    console.log(`📝 Schema config changed: ${path.basename(filePath)}`);
+    clearSchemaCache();
+    // Pre-load schemas so next request is fast
+    loadSchemas().then(() => {
+      console.log('✅ Schemas automatically reloaded');
+    }).catch(err => {
+      console.error('❌ Failed to reload schemas:', err.message);
+    });
+  });
+
+  console.log('👁️ Watching schema config for changes');
 }
 
 /**

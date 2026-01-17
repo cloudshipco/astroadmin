@@ -18,7 +18,7 @@ import contentRouter from './api/content.js';
 import buildRouter from './api/build.js';
 import gitRouter from './api/git.js';
 import imagesRouter from './api/images.js';
-import { clearSchemaCache, loadSchemas } from './utils/collections.js';
+import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collections.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -237,6 +237,9 @@ export async function startServer(options = {}) {
 
   // Create Express app
   const { app } = await createServer();
+
+  // Start watching schema config for changes
+  watchSchemaConfig();
 
   // Start server
   const server = app.listen(port, host, () => {

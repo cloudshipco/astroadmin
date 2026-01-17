@@ -405,7 +405,6 @@ async function createNewEntry(collection, slug) {
 
   document.getElementById('editorTitle').textContent = `New: ${slug}`;
   document.getElementById('editorForm').innerHTML = '<p class="placeholder-text">Loading...</p>';
-  document.getElementById('saveBtn').style.display = 'inline-block';
   document.getElementById('deleteEntryBtn').style.display = 'none'; // Can't delete unsaved entry
   updateSaveStatus('New - unsaved');
 
@@ -506,7 +505,6 @@ async function loadEntry(collection, slug, updateUrl = true) {
   const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
   document.getElementById('editorTitle').textContent = `Editing: ${slug}${localeLabel}`;
   document.getElementById('editorForm').innerHTML = '<p class="placeholder-text">Loading...</p>';
-  document.getElementById('saveBtn').style.display = 'inline-block';
   document.getElementById('deleteEntryBtn').style.display = 'inline-block';
 
   try {
@@ -1066,18 +1064,10 @@ function updateSaveStatus(message) {
 // Save content
 async function saveContent(silent = false) {
   const form = document.getElementById('contentForm');
-  const saveBtn = document.getElementById('saveBtn');
 
   // Extract form data
   const formData = extractFormData(form);
   const body = document.getElementById('markdown-body')?.value || '';
-
-  // Show saving state (unless silent)
-  if (!silent && saveBtn) {
-    const originalText = saveBtn.textContent;
-    saveBtn.textContent = 'Saving...';
-    saveBtn.disabled = true;
-  }
 
   // Capture current preview HTML hash BEFORE save (for change detection)
   let originalHash = null;
@@ -1159,11 +1149,6 @@ async function saveContent(silent = false) {
     updateSaveStatus('Error');
     if (!silent) {
       showNotification('Failed to save changes', 'error');
-    }
-  } finally {
-    if (!silent && saveBtn) {
-      saveBtn.textContent = 'Save';
-      saveBtn.disabled = false;
     }
   }
 }
@@ -1363,11 +1348,6 @@ function showNotification(message, type = 'info') {
   }, 3000);
 }
 
-// Save button handler
-document.getElementById('saveBtn').addEventListener('click', () => {
-  saveContent();
-});
-
 // Keyboard shortcut: Cmd/Ctrl + S to save
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -1415,7 +1395,6 @@ document.getElementById('deleteEntryBtn').addEventListener('click', async () => 
       currentData = null;
       document.getElementById('editorTitle').textContent = 'Select a page to edit';
       document.getElementById('editorForm').innerHTML = '<p class="placeholder-text">Choose a page from the dropdown above to start editing.</p>';
-      document.getElementById('saveBtn').style.display = 'none';
       document.getElementById('deleteEntryBtn').style.display = 'none';
       document.getElementById('pageSelector').value = '';
 
