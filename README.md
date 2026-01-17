@@ -45,9 +45,12 @@ npx astroadmin dev
 
 # With options
 npx astroadmin dev --port 3030 --project ./my-astro-site
+
+# If you manage Astro dev server separately
+npx astroadmin dev --no-astro
 ```
 
-The server URL will be printed when it starts. Default credentials: `admin` / `admin`
+This automatically starts both AstroAdmin and the Astro dev server. The URLs will be printed when ready. Default credentials: `admin` / `admin`
 
 ## Documentation
 
@@ -111,8 +114,9 @@ See [Requirements](./docs/requirements.md) for details.
 
 ### Preview not loading
 
-1. Start your Astro dev server: `npm run dev`
-2. Check the preview URL in your config matches the Astro server
+1. AstroAdmin should auto-start Astro - check for `[astro]` prefixed output
+2. If using `--no-astro`, ensure your Astro dev server is running on port 4321
+3. Check the preview URL in your config matches the Astro server
 
 ## How it works
 
