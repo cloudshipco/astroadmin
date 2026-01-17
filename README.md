@@ -56,6 +56,26 @@ The server URL will be printed when it starts. Default credentials: `admin` / `a
 - [Content Collections](./docs/content-collections.md) - Schema setup guide
 - [Configuration](./docs/configuration.md) - Customization options
 
+## Astro Integration (optional)
+
+For collections that aren't pages (e.g., testimonials, team members), AstroAdmin can preview them rendered inside their block components. Add the integration to your Astro config:
+
+```javascript
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import astroadmin from 'astroadmin/integration';
+
+export default defineConfig({
+  integrations: [astroadmin()],
+});
+```
+
+This injects a `/component-preview/` route during development that renders your block components with the item being edited. Without this integration, non-page collections will show a 404 in the preview iframe.
+
+**Requirements:**
+- Block components in `src/components/blocks/` following the naming convention `{BlockType}Block.astro` (e.g., `TestimonialsBlock.astro`)
+- Fields referencing collections should use the naming convention `{collection}Ids` (e.g., `testimonialIds`)
+
 ## Configuration (optional)
 
 Create `astroadmin.config.js` in your project root:
