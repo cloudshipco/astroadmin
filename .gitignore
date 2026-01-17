@@ -6,8 +6,8 @@ dist/
 .env.local
 .claude/
 
-# Integration test sites (cloned third-party repos)
-integration/
+# Integration test sites (cloned third-party repos, not the integration source code)
+integration/*/
 
 # Docker deployment (generated/site-specific)
 docker/nginx/conf.d/default.conf
