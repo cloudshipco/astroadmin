@@ -31,12 +31,6 @@ your-astro-site/
 
 **Don't have Content Collections?** See the [setup guide](./docs/content-collections.md).
 
-## Installation
-
-```bash
-npm install astroadmin
-```
-
 ## Usage
 
 ```bash
