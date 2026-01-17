@@ -279,6 +279,83 @@
     @apply not-sr-only text-xs font-medium text-gray-600 mb-1;
   }
 
+  /* Inline Array Cards (for complex arrays) */
+  .array-cards {
+    @apply space-y-2 mb-3;
+  }
+
+  .array-card {
+    @apply flex items-center gap-2 p-2.5 bg-white border border-gray-200 rounded-lg transition-all duration-150;
+  }
+
+  .array-card:hover {
+    @apply border-gray-300 shadow-sm;
+  }
+
+  .array-card.dragging {
+    @apply opacity-50 bg-gray-50;
+  }
+
+  .array-card.drop-before {
+    @apply relative;
+  }
+
+  .array-card.drop-before::before {
+    content: '';
+    @apply absolute left-0 right-0 h-0.5 bg-primary-500 rounded;
+    top: -5px;
+  }
+
+  .array-card.drop-after {
+    @apply relative;
+  }
+
+  .array-card.drop-after::after {
+    content: '';
+    @apply absolute left-0 right-0 h-0.5 bg-primary-500 rounded;
+    bottom: -5px;
+  }
+
+  .array-card-handle {
+    @apply text-gray-400 cursor-grab active:cursor-grabbing p-1 flex-shrink-0;
+  }
+
+  .array-card-content {
+    @apply flex-1 min-w-0 cursor-pointer;
+  }
+
+  .array-card-title {
+    @apply text-sm font-medium text-gray-900 truncate;
+  }
+
+  .array-card-untitled {
+    @apply text-gray-400 font-normal italic;
+  }
+
+  .array-card-subtitle {
+    @apply text-xs text-gray-500 truncate mt-0.5;
+  }
+
+  .array-card-actions {
+    @apply flex items-center gap-1 flex-shrink-0;
+  }
+
+  .array-card-btn {
+    @apply w-7 h-7 flex items-center justify-center text-gray-400 rounded transition-colors cursor-pointer;
+  }
+
+  .array-card-edit:hover {
+    @apply text-primary-600 bg-primary-50;
+  }
+
+  .array-card-delete:hover {
+    @apply text-red-600 bg-red-50;
+  }
+
+  .array-cards-add {
+    @apply w-full text-center;
+  }
+
   /* Checkbox */
   .checkbox-label {
     @apply flex items-center gap-2 cursor-pointer;

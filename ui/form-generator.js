@@ -83,30 +83,26 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
       return generateGalleryField(name, schema, value, fullPath, id);
     }
 
-    // Check if this is a complex array (objects with 3+ properties) - use modal editor
+    // Check if this is a complex array (objects with 3+ properties) - use card view with modal editing
     const itemProps = schema.items?.properties || {};
     const isComplexArray = schema.items?.type === 'object' && Object.keys(itemProps).length >= 3;
 
     if (isComplexArray) {
       const items = Array.isArray(value) ? value : [];
-      const itemCount = items.length;
-      const previewText = itemCount === 0 ? 'No items' :
-                         itemCount === 1 ? '1 item' : `${itemCount} items`;
 
       return `
         <div class="form-group">
           <label class="form-label">${formatLabel(name)}</label>
-          <div class="array-field-compact"
-               data-array-editor
+          <div class="array-cards"
+               data-array-cards
                data-field="${fullPath}"
                data-field-name="${formatLabel(name)}"
-               data-schema='${JSON.stringify(schema.items || {})}'
-               data-items='${JSON.stringify(items)}'>
-            <div class="array-field-compact-header">
-              <span class="array-field-compact-info">${previewText}</span>
-              <button type="button" class="array-field-compact-btn" data-open-array-editor>Edit ${formatLabel(name)}</button>
-            </div>
+               data-schema='${JSON.stringify(schema.items || {})}'>
+            ${items.map((item, index) => generateArrayCard(item, index)).join('')}
           </div>
+          <button type="button" class="btn btn-secondary btn-sm array-cards-add" data-add-array-card>
+            + Add ${formatLabel(name).replace(/s$/, '')}
+          </button>
           <input type="hidden" name="${fullPath}" data-array-data value='${JSON.stringify(items)}'>
         </div>
       `;
@@ -414,6 +410,62 @@ function generateArrayItem(arrayPath, itemSchema, value, index) {
       class="array-item-input form-input"
       placeholder="Enter value..."
     >
+  `;
+}
+
+/**
+ * Generate an inline card for array items
+ */
+function generateArrayCard(item, index) {
+  const titleFields = ['title', 'name', 'heading', 'label'];
+  const subtitleFields = ['description', 'content', 'subtitle', 'text'];
+
+  let title = '';
+  let subtitle = '';
+
+  for (const field of titleFields) {
+    if (item[field]) {
+      title = String(item[field]);
+      break;
+    }
+  }
+
+  for (const field of subtitleFields) {
+    if (item[field]) {
+      const text = String(item[field]);
+      subtitle = text.length > 60 ? text.substring(0, 60) + '...' : text;
+      break;
+    }
+  }
+
+  return `
+    <div class="array-card" data-index="${index}" draggable="true">
+      <div class="array-card-handle" title="Drag to reorder">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="9" cy="5" r="2"/><circle cx="15" cy="5" r="2"/>
+          <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
+          <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
+        </svg>
+      </div>
+      <div class="array-card-content" data-edit-card="${index}">
+        <div class="array-card-title">${title ? escapeHtml(title) : '<span class="array-card-untitled">Untitled</span>'}</div>
+        ${subtitle ? `<div class="array-card-subtitle">${escapeHtml(subtitle)}</div>` : ''}
+      </div>
+      <div class="array-card-actions">
+        <button type="button" class="array-card-btn array-card-edit" data-edit-card="${index}" title="Edit">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
+        <button type="button" class="array-card-btn array-card-delete" data-delete-card="${index}" title="Delete">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+        </button>
+      </div>
+    </div>
   `;
 }
 
@@ -778,10 +830,24 @@ export function extractFormData(formElement) {
     }
   });
 
+  // Handle inline array card fields (store as JSON in hidden input)
+  formElement.querySelectorAll('input[data-array-data]').forEach(input => {
+    const fieldPath = input.name;
+    try {
+      const arrayValue = JSON.parse(input.value || '[]');
+      setNestedValue(data, fieldPath, arrayValue);
+    } catch (e) {
+      console.error('Failed to parse array field:', fieldPath, e);
+      setNestedValue(data, fieldPath, []);
+    }
+  });
+
   for (const [key, value] of formData.entries()) {
     // Skip JSON fields already processed
     const input = formElement.querySelector(`[name="${key}"]`);
     if (input?.dataset?.json === 'true') continue;
+    // Skip array data fields (already processed above)
+    if (input?.dataset?.arrayData !== undefined) continue;
 
     setNestedValue(data, key, value);
   }
@@ -1153,7 +1219,7 @@ export function setupFormHandlers(formElement, onBlockChange) {
     }
   });
 
-  // Open array editor for complex arrays
+  // Open array editor for complex arrays (compact trigger)
   formElement.addEventListener('click', async (e) => {
     const openBtn = e.target.closest('[data-open-array-editor]');
     if (openBtn) {
@@ -1188,6 +1254,227 @@ export function setupFormHandlers(formElement, onBlockChange) {
       });
     }
   });
+
+  // Inline array cards - Edit card
+  formElement.addEventListener('click', async (e) => {
+    const editBtn = e.target.closest('[data-edit-card]');
+    if (!editBtn) return;
+
+    const cardsContainer = editBtn.closest('[data-array-cards]');
+    if (!cardsContainer) return;
+
+    const index = parseInt(editBtn.dataset.editCard, 10);
+    const fieldName = cardsContainer.dataset.fieldName;
+    const schema = JSON.parse(cardsContainer.dataset.schema || '{}');
+    const hiddenInput = cardsContainer.parentElement.querySelector('[data-array-data]');
+    const items = JSON.parse(hiddenInput?.value || '[]');
+
+    // Dynamic import
+    const { openArrayEditor } = await import('./array-editor.js');
+
+    // Open editor with specific item pre-selected for editing
+    openArrayEditor(fieldName, items, schema, (updatedItems) => {
+      // Update hidden input
+      if (hiddenInput) {
+        hiddenInput.value = JSON.stringify(updatedItems);
+      }
+
+      // Re-render cards
+      cardsContainer.innerHTML = updatedItems.map((item, i) => generateArrayCard(item, i)).join('');
+
+      // Trigger change callback
+      if (onBlockChange) onBlockChange();
+    });
+  });
+
+  // Inline array cards - Delete card
+  formElement.addEventListener('click', (e) => {
+    const deleteBtn = e.target.closest('[data-delete-card]');
+    if (!deleteBtn) return;
+
+    const cardsContainer = deleteBtn.closest('[data-array-cards]');
+    if (!cardsContainer) return;
+
+    const index = parseInt(deleteBtn.dataset.deleteCard, 10);
+    const hiddenInput = cardsContainer.parentElement.querySelector('[data-array-data]');
+    const items = JSON.parse(hiddenInput?.value || '[]');
+
+    // Remove item
+    items.splice(index, 1);
+
+    // Update hidden input
+    if (hiddenInput) {
+      hiddenInput.value = JSON.stringify(items);
+    }
+
+    // Re-render cards
+    cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i)).join('');
+
+    // Trigger change callback
+    if (onBlockChange) onBlockChange();
+  });
+
+  // Inline array cards - Add new card
+  formElement.addEventListener('click', async (e) => {
+    const addBtn = e.target.closest('[data-add-array-card]');
+    if (!addBtn) return;
+
+    const formGroup = addBtn.closest('.form-group');
+    const cardsContainer = formGroup?.querySelector('[data-array-cards]');
+    if (!cardsContainer) return;
+
+    const fieldName = cardsContainer.dataset.fieldName;
+    const schema = JSON.parse(cardsContainer.dataset.schema || '{}');
+    const hiddenInput = formGroup.querySelector('[data-array-data]');
+    const items = JSON.parse(hiddenInput?.value || '[]');
+
+    // Create empty item based on schema
+    const newItem = createEmptyArrayItem(schema);
+    items.push(newItem);
+
+    // Update hidden input
+    if (hiddenInput) {
+      hiddenInput.value = JSON.stringify(items);
+    }
+
+    // Re-render cards
+    cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i)).join('');
+
+    // Trigger change callback
+    if (onBlockChange) onBlockChange();
+
+    // Open editor for the new item
+    const { openArrayEditor } = await import('./array-editor.js');
+    openArrayEditor(fieldName, items, schema, (updatedItems) => {
+      if (hiddenInput) {
+        hiddenInput.value = JSON.stringify(updatedItems);
+      }
+      cardsContainer.innerHTML = updatedItems.map((item, i) => generateArrayCard(item, i)).join('');
+      if (onBlockChange) onBlockChange();
+    });
+  });
+
+  // Inline array cards - Drag and drop reordering
+  let draggedCard = null;
+  let cardDropTarget = null;
+  let cardDropPosition = null;
+
+  formElement.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.array-card');
+    if (!card) return;
+
+    draggedCard = card;
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+
+  formElement.addEventListener('dragend', (e) => {
+    const card = e.target.closest('.array-card');
+    if (card) {
+      card.classList.remove('dragging');
+    }
+    draggedCard = null;
+    cardDropTarget = null;
+    cardDropPosition = null;
+
+    // Remove all drop indicators
+    document.querySelectorAll('.array-card').forEach(c => {
+      c.classList.remove('drop-before', 'drop-after');
+    });
+  });
+
+  formElement.addEventListener('dragover', (e) => {
+    const card = e.target.closest('.array-card');
+    const cardsContainer = e.target.closest('[data-array-cards]');
+
+    if (!draggedCard || !cardsContainer) return;
+    if (card && !card.classList.contains('dragging')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+
+      // Remove existing indicators
+      cardsContainer.querySelectorAll('.array-card').forEach(c => {
+        c.classList.remove('drop-before', 'drop-after');
+      });
+
+      // Determine drop position based on cursor location
+      const rect = card.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      cardDropPosition = e.clientY < midY ? 'before' : 'after';
+      cardDropTarget = card;
+
+      card.classList.add(cardDropPosition === 'before' ? 'drop-before' : 'drop-after');
+    }
+  });
+
+  formElement.addEventListener('drop', (e) => {
+    if (!draggedCard || !cardDropTarget || !cardDropPosition) return;
+
+    e.preventDefault();
+
+    const cardsContainer = draggedCard.closest('[data-array-cards]');
+    if (!cardsContainer) return;
+
+    const hiddenInput = cardsContainer.parentElement.querySelector('[data-array-data]');
+    const items = JSON.parse(hiddenInput?.value || '[]');
+
+    const fromIndex = parseInt(draggedCard.dataset.index, 10);
+    let toIndex = parseInt(cardDropTarget.dataset.index, 10);
+
+    if (cardDropPosition === 'after') toIndex += 1;
+    if (fromIndex < toIndex) toIndex -= 1;
+
+    if (fromIndex !== toIndex) {
+      // Reorder array
+      const [moved] = items.splice(fromIndex, 1);
+      items.splice(toIndex, 0, moved);
+
+      // Update hidden input
+      if (hiddenInput) {
+        hiddenInput.value = JSON.stringify(items);
+      }
+
+      // Re-render cards
+      cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i)).join('');
+
+      // Trigger change callback
+      if (onBlockChange) onBlockChange();
+    }
+
+    // Cleanup
+    cardDropTarget.classList.remove('drop-before', 'drop-after');
+    draggedCard = null;
+    cardDropTarget = null;
+    cardDropPosition = null;
+  });
+}
+
+/**
+ * Create an empty item based on schema
+ */
+function createEmptyArrayItem(schema) {
+  if (!schema || schema.type !== 'object') return {};
+
+  const item = {};
+  const props = schema.properties || {};
+
+  for (const [key, propSchema] of Object.entries(props)) {
+    if (propSchema.default !== undefined) {
+      item[key] = propSchema.default;
+    } else if (propSchema.type === 'string') {
+      item[key] = '';
+    } else if (propSchema.type === 'number') {
+      item[key] = 0;
+    } else if (propSchema.type === 'boolean') {
+      item[key] = false;
+    } else if (propSchema.type === 'array') {
+      item[key] = [];
+    } else if (propSchema.type === 'object') {
+      item[key] = {};
+    }
+  }
+
+  return item;
 }
 
 /**
