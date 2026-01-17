@@ -90,8 +90,8 @@ export async function parseAstroSchemas(projectRoot) {
       format: 'esm',
       platform: 'node',
       target: 'node18',
-      // Bundle zod into the output so the temp file is self-contained
-      // (newer zod versions have complex exports that may not resolve from cache paths)
+      // Tell esbuild where to find node_modules (for zod resolution)
+      nodePaths: [path.join(projectRoot, 'node_modules')],
       plugins: [
         {
           name: 'astro-shims',
@@ -112,7 +112,7 @@ export async function parseAstroSchemas(projectRoot) {
             build.onLoad({ filter: /.*/, namespace: 'astro-content-shim' }, () => ({
               contents: ASTRO_CONTENT_SHIM,
               loader: 'js',
-              resolveDir: projectRoot, // So esbuild can find 'zod' in project's node_modules
+              resolveDir: projectRoot,
             }));
 
             // Provide astro/loaders shim
