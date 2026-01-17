@@ -31,6 +31,8 @@ services:
     volumes:
       - ./site:/site
       - ./ssh/rw:/root/.ssh:ro
+      - ./data:/data
+      - ../ui:/app/ui:ro
     networks:
       - internal
       - frontend  # Needs internet access for git push

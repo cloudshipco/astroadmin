@@ -8,13 +8,13 @@
     "astroadmin": "./bin/cli.js"
   },
   "scripts": {
-    "dev": "NODE_ENV=development node --watch bin/cli.js dev",
-    "prod": "NODE_ENV=production node bin/cli.js dev",
-    "start": "node bin/cli.js dev",
+    "dev": "NODE_ENV=development bun --watch bin/cli.js dev",
+    "prod": "NODE_ENV=production bun bin/cli.js dev",
+    "start": "bun bin/cli.js dev",
     "build:css": "tailwindcss -i ./ui/input.css -o ./ui/styles.css --minify",
     "watch:css": "tailwindcss -i ./ui/input.css -o ./ui/styles.css --watch",
-    "test": "node tests/api.test.js",
-    "test:watch": "node --watch tests/api.test.js",
+    "test": "bun tests/api.test.js",
+    "test:watch": "bun --watch tests/api.test.js",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed"
@@ -62,7 +62,7 @@
     }
   },
   "engines": {
-    "node": ">=18.0.0"
+    "bun": ">=1.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",

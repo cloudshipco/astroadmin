@@ -72,6 +72,12 @@ const defaultConfig = {
     },
   },
 
+  // Session store (production only - dev uses in-memory)
+  sessionStore: IS_PROD ? {
+    path: process.env.SESSION_DB_PATH || '/data/sessions.db',
+    ttl: 1000 * 60 * 60 * 24 * 7, // 7 days (match cookie maxAge)
+  } : null,
+
   // Git integration
   git: {
     enabled: process.env.GIT_ENABLED !== 'false',

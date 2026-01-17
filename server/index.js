@@ -9,6 +9,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { mkdirSync } from 'fs';
 import { config, IS_DEV, IS_PROD, logConfig } from './config.js';
 
 // Import API routers
@@ -20,7 +21,7 @@ import imagesRouter from './api/images.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function createServer() {
+export async function createServer() {
   const app = express();
 
   // Trust proxy (for secure cookies behind nginx/reverse proxy)
@@ -45,13 +46,30 @@ export function createServer() {
     app.use('/api/', limiter);
   }
 
-  // Session management
-  app.use(session({
+  // Session management with SQLite store (when running under Bun)
+  const sessionConfig = {
     secret: config.auth.sessionSecret,
     resave: false,
     saveUninitialized: false,
     cookie: config.auth.sessionCookie,
-  }));
+  };
+
+  // Use SQLite store in production for persistence across restarts
+  // Only available when running under Bun (has built-in SQLite)
+  if (IS_PROD && config.sessionStore?.path && typeof Bun !== 'undefined') {
+    // Ensure data directory exists
+    const dataDir = path.dirname(config.sessionStore.path);
+    mkdirSync(dataDir, { recursive: true });
+
+    // Dynamic import since bun:sqlite only exists in Bun runtime
+    const { createSessionStore } = await import('./session-store.js');
+    sessionConfig.store = createSessionStore({
+      path: config.sessionStore.path,
+      ttl: config.sessionStore.ttl,
+    });
+  }
+
+  app.use(session(sessionConfig));
 
   // Health check
   app.get('/api/health', (req, res) => {
@@ -194,7 +212,7 @@ export async function startServer(options = {}) {
   logConfig();
 
   // Create Express app
-  const { app } = createServer();
+  const { app } = await createServer();
 
   // Start server
   const server = app.listen(port, host, () => {

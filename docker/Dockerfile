@@ -1,7 +1,7 @@
 # AstroAdmin Production Dockerfile
-# Builds a production-ready AstroAdmin image
+# Builds a production-ready AstroAdmin image using Bun
 
-FROM node:20-alpine
+FROM oven/bun:1-alpine
 
 # Install git and ssh for Git operations
 RUN apk add --no-cache git openssh-client
@@ -9,8 +9,8 @@ RUN apk add --no-cache git openssh-client
 WORKDIR /app
 
 # Copy package files first for better layer caching
-COPY package*.json ./
-RUN npm ci --production
+COPY package*.json bun.lock* ./
+RUN bun install --production --frozen-lockfile || bun install --production
 
 # Copy application code (CSS is pre-built and committed)
 COPY . .
@@ -36,4 +36,4 @@ ENV HOST=0.0.0.0
 EXPOSE 3000
 
 # Run AstroAdmin pointing to /site volume
-CMD ["node", "bin/cli.js", "dev", "--project", "/site"]
+CMD ["bun", "run", "bin/cli.js", "dev", "--project", "/site"]
