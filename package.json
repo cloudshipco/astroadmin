@@ -1,6 +1,6 @@
 {
   "name": "astroadmin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Admin interface for Astro Content Collections - auto-generates forms from your Zod schemas",
   "type": "module",
   "main": "server/index.js",
