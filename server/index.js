@@ -18,6 +18,7 @@ import contentRouter from './api/content.js';
 import buildRouter from './api/build.js';
 import gitRouter from './api/git.js';
 import imagesRouter from './api/images.js';
+import { clearSchemaCache, loadSchemas } from './utils/collections.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -135,6 +136,29 @@ export async function createServer() {
       });
     } else {
       res.json({ authenticated: false });
+    }
+  });
+
+  // Reload schemas endpoint (requires auth)
+  app.post('/api/reload-schemas', (req, res) => {
+    if (!req.session.authenticated) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    try {
+      console.log('🔄 Reloading schemas...');
+      clearSchemaCache();
+      // Trigger reload
+      loadSchemas().then(schemas => {
+        res.json({
+          success: true,
+          message: `Reloaded ${Object.keys(schemas).length} collection schemas`
+        });
+      }).catch(error => {
+        res.status(500).json({ error: error.message });
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
     }
   });
 
