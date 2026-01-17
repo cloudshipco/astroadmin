@@ -4,6 +4,10 @@
   "description": "Admin interface for Astro Content Collections - auto-generates forms from your Zod schemas",
   "type": "module",
   "main": "server/index.js",
+  "exports": {
+    ".": "./server/index.js",
+    "./integration": "./integration/index.js"
+  },
   "bin": {
     "astroadmin": "./bin/cli.js"
   },
@@ -75,6 +79,7 @@
     "bin/",
     "server/",
     "ui/",
+    "integration/",
     "README.md",
     "LICENSE"
   ]

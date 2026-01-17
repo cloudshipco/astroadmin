@@ -1,0 +1,114 @@
+---
+/**
+ * AstroAdmin Component Preview Route
+ *
+ * Renders a block component in isolation for previewing non-page collection items.
+ * Uses import.meta.glob to dynamically discover block components from the site.
+ *
+ * Route: /component-preview/[block]/[...slug]
+ * Example: /component-preview/testimonials/sue-altarelli
+ *
+ * The route creates a synthetic block object and renders the matching component.
+ */
+
+// Server-render this route (can't enumerate all possible preview paths)
+export const prerender = false;
+
+// Import site's global styles - Vite resolves from project root
+import '/src/styles/global.css';
+
+// Get route params
+const { block, slug } = Astro.params;
+
+// Parse slug (might be comma-separated for multiple IDs)
+const slugs = slug?.split('/').filter(Boolean) || [];
+
+// Dynamically discover block components from the site
+// Use Vite's glob import - the leading slash means project root
+const blockModules = import.meta.glob('/src/components/blocks/*Block.astro', { eager: true });
+
+// Build component map: testimonials -> TestimonialsBlock
+/** @type {Record<string, any>} */
+const blockComponents: Record<string, any> = {};
+
+for (const [modulePath, moduleExports] of Object.entries(blockModules)) {
+  // Extract block type from filename: TestimonialsBlock.astro -> testimonials
+  const filename = modulePath.split('/').pop()?.replace('.astro', '') || '';
+
+  // Convert TestimonialsBlock -> testimonials (lowercase, remove 'Block' suffix)
+  let blockType = filename.replace(/Block$/i, '').toLowerCase();
+
+  blockComponents[blockType] = (moduleExports as any).default;
+}
+
+// Build synthetic block data for the component
+// Maps: testimonials -> testimonialIds (singular + "Ids")
+function buildSyntheticBlock(blockType: string, ids: string[]) {
+  // Convert plural block type to singular field name
+  // testimonials -> testimonial, team -> team
+  const singular = blockType.endsWith('s') ? blockType.slice(0, -1) : blockType;
+  const fieldName = `${singular}Ids`;
+
+  return {
+    type: blockType,
+    [fieldName]: ids,
+  };
+}
+
+const syntheticBlock = buildSyntheticBlock(block || '', slugs);
+const Component = block ? blockComponents[block] : null;
+
+// Generate expected component path for error message
+const expectedPath = block
+  ? `src/components/blocks/${block.charAt(0).toUpperCase() + block.slice(1)}Block.astro`
+  : 'unknown';
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Preview: {block}</title>
+  <style>
+    .component-preview-error {
+      padding: 2rem;
+      text-align: center;
+      color: #666;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    .component-preview-error code {
+      display: block;
+      margin-top: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: #f3f4f6;
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+    }
+    .component-preview-error p {
+      margin: 0.5rem 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    {Component ? (
+      <Component block={syntheticBlock} />
+    ) : (
+      <div class="component-preview-error">
+        <p>No component found for block type: <strong>{block}</strong></p>
+        <p>Expected:</p>
+        <code>{expectedPath}</code>
+        <p style="margin-top: 1rem; font-size: 0.875rem;">
+          Available blocks: {Object.keys(blockComponents).join(', ') || 'none found'}
+        </p>
+      </div>
+    )}
+  </main>
+  <script>
+    // Immediately mark all animated elements as visible (no need to wait for scroll)
+    document.querySelectorAll('.animate-stagger, .animate-fade-up, .animate-scale-in')
+      .forEach(el => el.classList.add('is-visible'));
+  </script>
+</body>
+</html>
