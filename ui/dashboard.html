@@ -58,6 +58,13 @@
       <div class="preview-panel">
         <div class="preview-panel-header">
           <span>Preview</span>
+          <!-- Block selector for component preview (hidden by default) -->
+          <div id="previewBlockSelector" class="preview-block-selector" style="display: none;">
+            <label for="blockSelectorDropdown">Block:</label>
+            <select id="blockSelectorDropdown" class="block-selector-dropdown">
+              <!-- Populated dynamically by JS -->
+            </select>
+          </div>
           <div class="preview-controls" style="display: none;" id="previewControls">
             <div class="viewport-selector" id="viewportSelector">
               <button type="button" class="viewport-btn active" data-width="100%" title="Desktop (Full width)">

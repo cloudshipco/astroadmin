@@ -35,9 +35,9 @@ const defaultPaths = {
 
 // Default configuration
 const defaultConfig = {
-  // Server settings
-  port: process.env.PORT || 0,
-  host: process.env.HOST || 'localhost',
+  // Server settings (ASTROADMIN_PORT takes priority over PORT to avoid conflicts)
+  port: parseInt(process.env.ASTROADMIN_PORT || process.env.PORT, 10) || 4000,
+  host: process.env.ASTROADMIN_HOST || process.env.HOST || 'localhost',
 
   // Paths
   paths: defaultPaths,
@@ -173,19 +173,9 @@ export async function getConfig() {
 // Note: This won't include user overrides until getConfig() is called
 export const config = defaultConfig;
 
-// Log configuration on startup
+// Log configuration on startup (minimal version)
 export function logConfig() {
-  console.log('\n🚀 AstroAdmin Server Configuration');
-  console.log('=' .repeat(50));
-  console.log(`Environment:      ${ENV}`);
-  console.log(`Project Root:     ${PROJECT_ROOT}`);
-  console.log(`Server Port:      ${config.port === 0 ? 'auto' : config.port}`);
-  console.log(`Preview URL:      ${config.preview.url}`);
-  console.log(`Preview Method:   ${config.preview.method}`);
-  console.log(`Content Dir:      ${config.paths.content}`);
-  console.log(`Git Enabled:      ${config.git.enabled}`);
-  console.log(`Auto-commit:      ${config.git.autoCommit}`);
-  console.log('=' .repeat(50) + '\n');
+  // Logging moved to after server starts for cleaner output
 }
 
 /**

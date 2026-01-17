@@ -13,6 +13,7 @@ import {
   getCollectionSchema,
 } from '../utils/collections.js';
 import { getConfig } from '../config.js';
+import { detectPreviewRoutes, getPreviewRoute } from '../utils/routes.js';
 
 const router = express.Router();
 
@@ -59,6 +60,7 @@ function enrichSchemaWithBlockTypes(schema, discriminatedUnions) {
  * GET /api/collections
  * Get all collections with their metadata
  * Includes i18n configuration for frontend locale handling
+ * Includes auto-detected preview routes for each collection
  */
 router.get('/', async (req, res) => {
   try {
@@ -71,9 +73,20 @@ router.get('/', async (req, res) => {
       locales: i18nConfig.locales,
     });
 
+    // Detect preview routes for collections
+    const detectedRoutes = await detectPreviewRoutes();
+    const userRoutes = fullConfig.preview?.routes || {};
+
+    // Add preview route to each collection
+    const collectionsWithRoutes = collections.map(collection => ({
+      ...collection,
+      // User config takes precedence over auto-detected
+      previewRoute: userRoutes[collection.name] || detectedRoutes[collection.name] || null,
+    }));
+
     res.json({
       success: true,
-      collections,
+      collections: collectionsWithRoutes,
       i18n: {
         enabled: i18nConfig.enabled,
         defaultLocale: i18nConfig.defaultLocale,
@@ -104,6 +117,12 @@ router.get('/:collectionName', async (req, res) => {
     // Convert discriminatedUnions to blockTypes format for form-generator
     const enrichedSchema = enrichSchemaWithBlockTypes(schema, discriminatedUnions);
 
+    // Get usedByBlocks from the full collections list
+    // This tells us which block types reference this collection
+    const allCollections = await getAllCollections();
+    const thisCollection = allCollections.find(c => c.name === collectionName);
+    const usedByBlocks = thisCollection?.usedByBlocks || [];
+
     res.json({
       success: true,
       collection: {
@@ -113,6 +132,7 @@ router.get('/:collectionName', async (req, res) => {
         entryCount: entries.length,
         schema: enrichedSchema,
         discriminatedUnions,
+        usedByBlocks,
       },
     });
   } catch (error) {

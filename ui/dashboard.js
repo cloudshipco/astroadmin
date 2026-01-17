@@ -15,6 +15,7 @@ let previewUrl = '';
 let allPages = []; // Store all pages for dropdown
 let allCollections = []; // Store collection info for new entries
 let isNewEntry = false; // Track if current entry is new (unsaved)
+let selectedPreviewBlock = null; // For component preview: which block to render with
 
 // i18n state
 let i18nConfig = {
@@ -234,6 +235,64 @@ async function createTranslation(collection, slug) {
     `;
   }
 }
+
+// ============================================
+// Preview Block Selector (for component preview)
+// ============================================
+
+/**
+ * Render the block selector dropdown for component preview.
+ * Only shown when a non-page collection has multiple blocks that use it.
+ */
+function renderBlockSelector() {
+  const container = document.getElementById('previewBlockSelector');
+  if (!container) return;
+
+  // Only show for non-page collections
+  if (currentCollection === 'pages') {
+    container.style.display = 'none';
+    return;
+  }
+
+  const collection = allCollections.find(c => c.name === currentCollection);
+  const usedByBlocks = collection?.usedByBlocks || [];
+
+  // Hide if no blocks use this collection or only one block
+  if (usedByBlocks.length <= 1) {
+    container.style.display = 'none';
+    return;
+  }
+
+  // Show selector with block options
+  container.style.display = 'flex';
+
+  const select = document.getElementById('blockSelectorDropdown');
+  if (!select) return;
+
+  select.innerHTML = usedByBlocks.map(block => {
+    const label = formatBlockLabel(block.type);
+    return `<option value="${block.type}">${label}</option>`;
+  }).join('');
+
+  // Set current selection
+  if (selectedPreviewBlock) {
+    select.value = selectedPreviewBlock;
+  }
+}
+
+/**
+ * Format block type as a readable label.
+ * e.g., 'testimonials' -> 'Testimonials Block'
+ */
+function formatBlockLabel(type) {
+  return type.charAt(0).toUpperCase() + type.slice(1) + ' Block';
+}
+
+// Block selector change handler
+document.getElementById('blockSelectorDropdown')?.addEventListener('change', (e) => {
+  selectedPreviewBlock = e.target.value;
+  updatePreview();
+});
 
 // Locale tab click handler
 document.getElementById('localeTabs').addEventListener('click', async (e) => {
@@ -482,6 +541,11 @@ function renderEditorForNewEntry(schema, contentType) {
 
 // Load an entry for editing
 async function loadEntry(collection, slug, updateUrl = true) {
+  // Reset preview block selection when switching collections
+  if (collection !== currentCollection) {
+    selectedPreviewBlock = null;
+  }
+
   currentCollection = collection;
   currentSlug = slug;
   isNewEntry = false; // Loading existing entry
@@ -520,6 +584,7 @@ async function loadEntry(collection, slug, updateUrl = true) {
     if (data.success) {
       currentData = data;
       renderEditor(data);
+      renderBlockSelector(); // Show block selector for component preview
       updatePreview();
     } else if (response.status === 404 && i18nConfig.enabled) {
       // Entry doesn't exist for this locale - show empty form for new translation
@@ -781,6 +846,14 @@ function setupReferencePickers(form, onChangeCallback) {
   // Load preview data for all reference items on the page
   loadReferenceItemPreviews(form);
 
+  // Reload previews after drag-drop reordering
+  form.addEventListener('reference-reorder', (e) => {
+    const referenceField = e.target.closest('.reference-field');
+    if (referenceField) {
+      loadReferenceFieldPreviews(referenceField);
+    }
+  });
+
   form.addEventListener('click', (e) => {
     // Add reference item button
     if (e.target.matches('.add-reference-item')) {
@@ -789,7 +862,7 @@ function setupReferencePickers(form, onChangeCallback) {
       const fieldPath = e.target.dataset.field;
 
       // Get currently selected IDs to exclude from picker
-      const existingItems = referenceField.querySelectorAll('.reference-item');
+      const existingItems = referenceField.querySelectorAll('.reference-card');
       const excludeIds = Array.from(existingItems).map(item => item.dataset.id);
 
       openReferencePicker(collectionName, (selectedId, selectedData) => {
@@ -801,14 +874,14 @@ function setupReferencePickers(form, onChangeCallback) {
 
     // Click on existing reference item to change it
     if (e.target.closest('.edit-reference-item')) {
-      const item = e.target.closest('.reference-item');
+      const item = e.target.closest('.reference-card');
       const referenceField = e.target.closest('.reference-field');
       const collectionName = referenceField.dataset.collection;
       const fieldPath = referenceField.dataset.field;
       const currentId = item.dataset.id;
 
       // Get all OTHER selected IDs to exclude (not the current one being edited)
-      const existingItems = referenceField.querySelectorAll('.reference-item');
+      const existingItems = referenceField.querySelectorAll('.reference-card');
       const excludeIds = Array.from(existingItems)
         .map(i => i.dataset.id)
         .filter(id => id !== currentId);
@@ -821,17 +894,29 @@ function setupReferencePickers(form, onChangeCallback) {
       return;
     }
 
+    // Edit the referenced item (navigate to it)
+    if (e.target.closest('.open-reference-editor')) {
+      const item = e.target.closest('.reference-card');
+      const referenceField = e.target.closest('.reference-field');
+      const collectionName = referenceField.dataset.collection;
+      const itemId = item.dataset.id;
+
+      // Navigate to edit the referenced item
+      loadEntry(collectionName, itemId);
+      return;
+    }
+
     // Remove reference item button
-    if (e.target.matches('.remove-reference-item')) {
-      const item = e.target.closest('.reference-item');
+    if (e.target.closest('.remove-reference-item')) {
+      const item = e.target.closest('.reference-card');
       const referenceField = e.target.closest('.reference-field');
       item.remove();
       reindexReferenceItems(referenceField);
 
       // Show empty message if no items left
-      const items = referenceField.querySelectorAll('.reference-item');
+      const items = referenceField.querySelectorAll('.reference-card');
       if (items.length === 0) {
-        const itemsContainer = referenceField.querySelector('.reference-items');
+        const itemsContainer = referenceField.querySelector('.reference-cards');
         itemsContainer.innerHTML = '<div class="reference-empty">No items selected. Click "Add" to select.</div>';
       }
 
@@ -848,40 +933,47 @@ async function loadReferenceItemPreviews(form) {
   const referenceFields = form.querySelectorAll('.reference-field');
 
   for (const field of referenceFields) {
-    const collectionName = field.dataset.collection;
-    if (!collectionName) continue;
+    await loadReferenceFieldPreviews(field);
+  }
+}
 
-    try {
-      const response = await fetch(`/api/collections/${collectionName}/entries?preview=true`);
-      const data = await response.json();
+/**
+ * Load preview data for a single reference field
+ */
+async function loadReferenceFieldPreviews(field) {
+  const collectionName = field.dataset.collection;
+  if (!collectionName) return;
 
-      if (data.success && data.entries) {
-        // Create a lookup map
-        const entriesMap = {};
-        for (const entry of data.entries) {
-          entriesMap[entry.slug] = entry;
-        }
+  try {
+    const response = await fetch(`/api/collections/${collectionName}/entries?preview=true`);
+    const data = await response.json();
 
-        // Update all preview elements in this field
-        const items = field.querySelectorAll('.reference-item');
-        for (const item of items) {
-          const itemId = item.dataset.id;
-          const entry = entriesMap[itemId];
+    if (data.success && data.entries) {
+      // Create a lookup map
+      const entriesMap = {};
+      for (const entry of data.entries) {
+        entriesMap[entry.slug] = entry;
+      }
 
-          const titleEl = item.querySelector('.reference-item-title');
-          const previewEl = item.querySelector('.reference-item-preview');
+      // Update all preview elements in this field
+      const items = field.querySelectorAll('.reference-card');
+      for (const item of items) {
+        const itemId = item.dataset.id;
+        const entry = entriesMap[itemId];
 
-          if (entry) {
-            if (titleEl) titleEl.textContent = entry.title || itemId;
-            if (previewEl) previewEl.textContent = entry.preview || '';
-          } else {
-            if (previewEl) previewEl.textContent = '';
-          }
+        const titleEl = item.querySelector('.reference-card-title');
+        const previewEl = item.querySelector('.reference-card-preview');
+
+        if (entry) {
+          if (titleEl) titleEl.textContent = entry.title || itemId;
+          if (previewEl) previewEl.textContent = entry.preview || '';
+        } else {
+          if (previewEl) previewEl.textContent = '';
         }
       }
-    } catch (error) {
-      console.error(`Failed to load previews for ${collectionName}:`, error);
     }
+  } catch (error) {
+    console.error(`Failed to load previews for ${collectionName}:`, error);
   }
 }
 
@@ -889,27 +981,48 @@ async function loadReferenceItemPreviews(form) {
  * Add a reference item to the field
  */
 function addReferenceItem(referenceField, fieldPath, itemId, itemData = null) {
-  const itemsContainer = referenceField.querySelector('.reference-items');
+  const itemsContainer = referenceField.querySelector('.reference-cards');
 
   // Remove empty message if present
   const emptyMsg = itemsContainer.querySelector('.reference-empty');
   if (emptyMsg) emptyMsg.remove();
 
-  const index = itemsContainer.querySelectorAll('.reference-item').length;
+  const index = itemsContainer.querySelectorAll('.reference-card').length;
   const title = itemData?.title || itemId;
   const preview = itemData?.preview || '';
 
   const newItem = document.createElement('div');
-  newItem.className = 'reference-item';
+  newItem.className = 'reference-card';
   newItem.dataset.index = index;
   newItem.dataset.id = itemId;
+  newItem.draggable = true;
   newItem.innerHTML = `
-    <input type="hidden" name="${fieldPath}[${index}]" value="${escapeHtml(itemId)}">
-    <div class="reference-item-content edit-reference-item" title="Click to change">
-      <span class="reference-item-title">${escapeHtml(title)}</span>
-      <span class="reference-item-preview">${escapeHtml(preview)}</span>
+    <div class="reference-card-handle" title="Drag to reorder">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+        <circle cx="9" cy="5" r="2"/><circle cx="15" cy="5" r="2"/>
+        <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
+        <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
+      </svg>
     </div>
-    <button type="button" class="btn btn-sm btn-danger remove-reference-item" title="Remove">×</button>
+    <input type="hidden" name="${fieldPath}[${index}]" value="${escapeHtml(itemId)}">
+    <div class="reference-card-content edit-reference-item" title="Click to change">
+      <div class="reference-card-title">${escapeHtml(title)}</div>
+      <div class="reference-card-preview">${escapeHtml(preview)}</div>
+    </div>
+    <div class="reference-card-actions">
+      <button type="button" class="reference-card-btn reference-card-edit open-reference-editor" title="Edit">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        </svg>
+      </button>
+      <button type="button" class="reference-card-btn reference-card-delete remove-reference-item" title="Remove">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+        </svg>
+      </button>
+    </div>
   `;
 
   itemsContainer.appendChild(newItem);
@@ -929,10 +1042,10 @@ function replaceReferenceItem(item, fieldPath, newId, itemData = null) {
   const input = item.querySelector('input[type="hidden"]');
   if (input) input.value = newId;
 
-  const titleEl = item.querySelector('.reference-item-title');
+  const titleEl = item.querySelector('.reference-card-title');
   if (titleEl) titleEl.textContent = title;
 
-  const previewEl = item.querySelector('.reference-item-preview');
+  const previewEl = item.querySelector('.reference-card-preview');
   if (previewEl) previewEl.textContent = preview;
 }
 
@@ -941,7 +1054,7 @@ function replaceReferenceItem(item, fieldPath, newId, itemData = null) {
  */
 function reindexReferenceItems(referenceField) {
   const fieldPath = referenceField.dataset.field;
-  const items = referenceField.querySelectorAll('.reference-item');
+  const items = referenceField.querySelectorAll('.reference-card');
 
   items.forEach((item, newIndex) => {
     item.dataset.index = newIndex;
@@ -978,12 +1091,19 @@ function collapseAllBlocks() {
   });
 }
 
-// Setup block focus - clicking a block scrolls to it in the preview
+// Setup block focus - clicking a block header scrolls to it in the preview
 function setupBlockFocus() {
   const blocksList = document.querySelector('.blocks-list');
-  if (!blocksList) return;
+  if (!blocksList) {
+    console.log('[AstroAdmin] No .blocks-list found for focus handler');
+    return;
+  }
 
   blocksList.addEventListener('click', (e) => {
+    // Only trigger on header clicks (not on form fields inside the block)
+    const header = e.target.closest('.block-header');
+    if (!header) return;
+
     const blockItem = e.target.closest('.block-item');
     if (!blockItem) return;
 
@@ -993,28 +1113,14 @@ function setupBlockFocus() {
     // Don't focus SEO blocks (they're not rendered)
     if (blockType === 'seo') return;
 
-    // Try to detect which field was clicked
-    let fieldName = null;
-    const formGroup = e.target.closest('.form-group');
-    if (formGroup) {
-      const input = formGroup.querySelector('input, textarea, select');
-      if (input?.name) {
-        // Extract field name from path like "blocks[0].heading" -> "heading"
-        const match = input.name.match(/\.([^.\[\]]+)$/);
-        if (match) {
-          fieldName = match[1];
-        }
-      }
-    }
-
     // Send message to iframe to focus this block/element
     const iframe = document.getElementById('previewFrame');
     if (iframe?.contentWindow) {
+      console.log('[AstroAdmin] Focusing block:', { index, blockType });
       iframe.contentWindow.postMessage({
         type: 'focusBlock',
         index: parseInt(index),
-        blockType: blockType,
-        fieldName: fieldName
+        blockType: blockType
       }, '*');
     }
   });
@@ -1046,6 +1152,12 @@ function setupAutoSave(form, debouncedSave) {
   form.addEventListener('input', () => {
     showLoadingEarly();
     debouncedSave();
+  });
+
+  // Immediate save for structural changes (reordering cards)
+  form.addEventListener('cards-reordered', async () => {
+    updateSaveStatus('Saving...');
+    await saveContent(true);
   });
 }
 
@@ -1173,10 +1285,34 @@ function getPreviewPageUrl() {
   const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
   const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
 
-  if (currentCollection === 'pages' && currentSlug === 'home') {
-    return isDefaultLocale ? `${previewUrl}/` : `${previewUrl}${localePrefix}`;
+  // Pages collection uses direct URL preview
+  if (currentCollection === 'pages') {
+    if (currentSlug === 'home') {
+      return isDefaultLocale ? `${previewUrl}/` : `${previewUrl}${localePrefix}`;
+    }
+    return `${previewUrl}${localePrefix}/${currentSlug}`;
   }
-  return `${previewUrl}${localePrefix}/${currentSlug}`;
+
+  // Check if collection has a preview route (auto-detected or user-configured)
+  const collection = allCollections.find(c => c.name === currentCollection);
+
+  if (collection?.previewRoute) {
+    // Replace {slug} placeholder with actual slug
+    const routePath = collection.previewRoute.replace('{slug}', currentSlug);
+    return `${previewUrl}${localePrefix}${routePath}`;
+  }
+
+  // Fall back to component preview if available (usedByBlocks)
+  const usedByBlocks = collection?.usedByBlocks || [];
+
+  if (usedByBlocks.length > 0) {
+    // Use selected block or default to first one
+    const blockType = selectedPreviewBlock || usedByBlocks[0].type;
+    return `${previewUrl}/component-preview/${blockType}/${currentSlug}`;
+  }
+
+  // No preview available for this collection
+  return null;
 }
 
 // Wait for content to actually change before refreshing preview

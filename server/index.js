@@ -228,6 +228,40 @@ export async function createServer() {
   return { app, requireAuth };
 }
 
+/**
+ * Try to start server on a port, with fallback to next ports if taken
+ */
+function tryListen(app, port, host, maxAttempts = 20) {
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+    let currentPort = port;
+
+    const tryPort = () => {
+      attempts++;
+      const server = app.listen(currentPort, host);
+
+      server.on('listening', () => {
+        resolve({ server, port: currentPort });
+      });
+
+      server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          if (attempts < maxAttempts) {
+            currentPort++;
+            tryPort();
+          } else {
+            reject(new Error(`Could not find available port after ${maxAttempts} attempts (tried ${port}-${currentPort})`));
+          }
+        } else {
+          reject(err);
+        }
+      });
+    };
+
+    tryPort();
+  });
+}
+
 export async function startServer(options = {}) {
   const port = options.port !== undefined ? options.port : config.port;
   const host = options.host !== undefined ? options.host : config.host;
@@ -241,20 +275,20 @@ export async function startServer(options = {}) {
   // Start watching schema config for changes
   watchSchemaConfig();
 
-  // Start server
-  const server = app.listen(port, host, () => {
-    const actualPort = server.address().port;
-    console.log(`✅ AstroAdmin server running at http://${host}:${actualPort}`);
-    console.log(`📝 Admin UI: http://${host}:${actualPort}`);
-    console.log(`🔍 Preview: ${config.preview.url}\n`);
+  // Start server with port fallback
+  const { server, port: actualPort } = await tryListen(app, port, host);
 
-    if (IS_DEV) {
-      console.log('💡 Development mode - hot reload enabled');
-      console.log('   Make sure Astro dev server is running on port 4321\n');
-    } else {
-      console.log('🚀 Production mode - builds required for preview\n');
-    }
-  });
+  // Clean startup message
+  console.log('');
+  if (actualPort !== port) {
+    console.log(`⚠️  Port ${port} in use`);
+  }
+  console.log(`✅ AstroAdmin running at http://${host}:${actualPort}`);
+  console.log(`   Preview: ${config.preview.url}`);
+  if (config.git.enabled) {
+    console.log(`   Git: ${config.git.autoCommit ? 'auto-commit enabled' : 'manual commits'}`);
+  }
+  console.log('');
 
   // Graceful shutdown
   process.on('SIGTERM', () => {
