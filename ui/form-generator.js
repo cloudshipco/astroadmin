@@ -495,12 +495,33 @@ function isImageField(name, schema) {
 }
 
 /**
+ * Get friendly label and help text for known image fields
+ */
+function getImageFieldInfo(name) {
+  const lowerName = name.toLowerCase();
+
+  if (lowerName === 'ogimage' || lowerName === 'og_image') {
+    return {
+      label: 'Social Share Image',
+      help: 'Shown when sharing on Facebook, Twitter, LinkedIn, etc. <a href="https://ogp.me/" target="_blank" rel="noopener">Learn more</a>'
+    };
+  }
+
+  return {};
+}
+
+/**
  * Generate an image picker field
  */
 function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false) {
   const hasValue = value && value.trim();
   const previewClass = hasValue ? '' : 'hidden';
   const placeholderClass = hasValue ? 'hidden' : '';
+
+  // Special labels and help text for known fields
+  const fieldInfo = getImageFieldInfo(name);
+  const label = fieldInfo.label || getFieldLabel(name, schema);
+  const helpHtml = fieldInfo.help ? `<span class="form-help">${fieldInfo.help}</span>` : '';
 
   // Only show built-in alt field if not hidden (e.g., parent object doesn't have its own alt field)
   const altFieldHtml = hideBuiltinAlt ? '' : `
@@ -516,7 +537,8 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
 
   return `
     <div class="form-group">
-      <label for="${id}" class="form-label">${getFieldLabel(name, schema)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
+      <label for="${id}" class="form-label">${label} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
+      ${helpHtml}
       <div class="image-picker" data-field="${fullPath}">
         <div class="image-picker-preview ${previewClass}" data-preview>
           <img src="${escapeHtml(value || '')}" alt="Preview" class="image-picker-img" data-preview-img>

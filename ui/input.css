@@ -40,6 +40,14 @@
     @apply mb-4;
   }
 
+  .form-help {
+    @apply block text-xs text-gray-500 mb-2;
+  }
+
+  .form-help a {
+    @apply text-primary-600 hover:text-primary-700 underline;
+  }
+
   /* Shopify-style Dashboard Layout */
   .dashboard-shopify {
     @apply flex flex-col h-screen overflow-hidden bg-gray-100;
