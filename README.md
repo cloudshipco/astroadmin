@@ -2,6 +2,8 @@
 
 Admin interface for [Astro Content Collections](https://docs.astro.build/en/guides/content-collections/). Auto-generates forms from your Zod schemas.
 
+![AstroAdmin Screenshot](design/astroadmin-example.png)
+
 ## Features
 
 - **Schema-driven forms** - Auto-generates fields from `src/content/config.ts`
