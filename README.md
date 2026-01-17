@@ -17,9 +17,9 @@ Admin interface for [Astro Content Collections](https://docs.astro.build/en/guid
 
 Before using AstroAdmin, ensure your project has:
 
-- [ ] **Node.js 18+**
-- [ ] **Astro 4.0+** with `astro.config.mjs` or `astro.config.ts`
-- [ ] **Content Collections** set up in `src/content/config.ts`
+- **Node.js 18+**
+- **Astro 4.0+** with `astro.config.mjs` or `astro.config.ts`
+- **Content Collections** set up in `src/content/config.ts`
 
 ```
 your-astro-site/
