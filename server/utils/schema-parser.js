@@ -22,14 +22,39 @@ export const reference = (collection) => ({ _type: 'reference', collection });
 `;
 
 /**
+ * Shim for astro/loaders module (Astro 5+).
+ * Provides file() and glob() loader functions that record loader metadata.
+ */
+const ASTRO_LOADERS_SHIM = `
+export const file = (filePath) => ({
+  _type: 'file',
+  _filePath: filePath,
+});
+
+export const glob = (options) => ({
+  _type: 'glob',
+  _base: options.base,
+  _pattern: options.pattern,
+});
+`;
+
+/**
  * Parse Astro content collection schemas from config.ts
  *
  * @param {string} projectRoot - Astro project root directory
  * @returns {Promise<Object>} - Collection schemas in JSON Schema format
  */
 export async function parseAstroSchemas(projectRoot) {
-  // Look for config file (config.ts is most common, but .mts and .js also possible)
+  // Look for config file
+  // Astro 5+: src/content.config.ts (new convention)
+  // Astro 4.x: src/content/config.ts (legacy convention)
   const possiblePaths = [
+    // Astro 5+ locations (check first)
+    path.join(projectRoot, 'src/content.config.ts'),
+    path.join(projectRoot, 'src/content.config.mts'),
+    path.join(projectRoot, 'src/content.config.js'),
+    path.join(projectRoot, 'src/content.config.mjs'),
+    // Astro 4.x legacy locations
     path.join(projectRoot, 'src/content/config.ts'),
     path.join(projectRoot, 'src/content/config.mts'),
     path.join(projectRoot, 'src/content/config.js'),
@@ -69,17 +94,29 @@ export async function parseAstroSchemas(projectRoot) {
       external: ['zod'],
       plugins: [
         {
-          name: 'astro-content-shim',
+          name: 'astro-shims',
           setup(build) {
             // Intercept astro:content import
             build.onResolve({ filter: /^astro:content$/ }, () => ({
               path: 'astro:content',
-              namespace: 'astro-shim',
+              namespace: 'astro-content-shim',
             }));
 
-            // Provide shim content
-            build.onLoad({ filter: /.*/, namespace: 'astro-shim' }, () => ({
+            // Intercept astro/loaders import (Astro 5+)
+            build.onResolve({ filter: /^astro\/loaders$/ }, () => ({
+              path: 'astro/loaders',
+              namespace: 'astro-loaders-shim',
+            }));
+
+            // Provide astro:content shim
+            build.onLoad({ filter: /.*/, namespace: 'astro-content-shim' }, () => ({
               contents: ASTRO_CONTENT_SHIM,
+              loader: 'js',
+            }));
+
+            // Provide astro/loaders shim
+            build.onLoad({ filter: /.*/, namespace: 'astro-loaders-shim' }, () => ({
+              contents: ASTRO_LOADERS_SHIM,
               loader: 'js',
             }));
           },
@@ -113,33 +150,81 @@ export async function parseAstroSchemas(projectRoot) {
       );
     }
 
+    // Import zod from the project to create the image helper
+    const { z } = await import('zod');
+
+    // Create a mock image() helper that returns a string schema
+    // (Astro's image() helper validates image paths and returns image metadata)
+    const imageHelper = () => z.string().describe('Image path');
+
     // Convert each collection's Zod schema to JSON Schema
     const schemas = {};
 
+    console.log(`📋 Found ${Object.keys(module.collections).length} collections: ${Object.keys(module.collections).join(', ')}`);
+
     for (const [name, collection] of Object.entries(module.collections)) {
-      if (!collection.schema) {
-        console.warn(`⚠️  Collection "${name}" has no schema, skipping`);
+      // Get loader type if available (from our shim)
+      const loaderType = collection.loader?._type || 'glob'; // default to glob
+      const loaderFilePath = collection.loader?._filePath;
+
+      console.log(`   Processing "${name}" (loader: ${loaderType}, has schema: ${!!collection.schema})`);
+
+      // Resolve the schema - it might be a function that needs to be called
+      let zodSchema = collection.schema;
+
+      if (typeof zodSchema === 'function') {
+        // Call the schema function with helpers (image, etc.)
+        try {
+          zodSchema = zodSchema({ image: imageHelper });
+        } catch (err) {
+          console.warn(`⚠️  Failed to evaluate schema function for "${name}": ${err.message}`);
+          zodSchema = null;
+        }
+      }
+
+      // Collections without explicit schemas get an empty schema
+      // (they still have entries, just no frontmatter validation)
+      if (!zodSchema) {
+        console.log(`📝 Collection "${name}" has no explicit schema (using empty schema)`);
+        schemas[name] = {
+          name,
+          type: collection.type || (loaderType === 'file' ? 'data' : 'content'),
+          loaderType,
+          loaderFilePath,
+          schema: { type: 'object', properties: {} },
+          discriminatedUnions: [],
+          blockCollectionRefs: {},
+        };
         continue;
       }
 
       try {
         // Convert Zod schema to JSON Schema
         // Don't pass 'name' option - it causes wrapping in definitions
-        const jsonSchema = zodToJsonSchema(collection.schema, {
+        const jsonSchema = zodToJsonSchema(zodSchema, {
           $refStrategy: 'none', // Inline all refs for simplicity
           errorMessages: true,
         });
 
         // Find discriminated unions for block UI
-        const discriminatedUnions = findDiscriminatedUnions(collection.schema);
+        const discriminatedUnions = findDiscriminatedUnions(zodSchema);
+
+        // Detect which collections this schema's blocks reference
+        const blockCollectionRefs = detectBlockCollectionReferences(
+          discriminatedUnions,
+          jsonSchema
+        );
 
         schemas[name] = {
           name,
-          type: collection.type || 'content',
+          type: collection.type || (loaderType === 'file' ? 'data' : 'content'),
+          loaderType,
+          loaderFilePath, // For file() loader: the JSON file path
           schema: jsonSchema,
           discriminatedUnions,
+          blockCollectionRefs,
           // Store raw Zod schema for advanced introspection
-          _zodSchema: collection.schema,
+          _zodSchema: zodSchema,
         };
 
         console.log(`✅ Parsed schema for "${name}" (${discriminatedUnions.length} discriminated unions)`);
@@ -237,6 +322,79 @@ function findDiscriminatedUnions(schema, currentPath = []) {
   }
 
   return unions;
+}
+
+/**
+ * Detect which blocks reference which collections.
+ * Analyzes discriminated union options to find fields like `testimonialIds`
+ * that reference other collections.
+ *
+ * @param {Array} discriminatedUnions - Discriminated unions found in schema
+ * @param {Object} jsonSchema - The full JSON Schema
+ * @returns {Object} - Map of collection -> array of { blockType, field }
+ */
+function detectBlockCollectionReferences(discriminatedUnions, jsonSchema) {
+  /** @type {Record<string, Array<{blockType: string, field: string}>>} */
+  const collectionRefs = {};
+
+  // Check each discriminated union (usually one for "blocks" field)
+  for (const union of discriminatedUnions) {
+    // Each option is a block type
+    for (const option of union.options) {
+      const blockType = option.value;
+      const blockSchema = option.schema;
+
+      if (!blockSchema?.properties) continue;
+
+      // Look for fields that look like collection references
+      // Pattern: fieldName ends with "Ids" and is an array of strings
+      for (const [fieldName, fieldSchema] of Object.entries(blockSchema.properties)) {
+        const collectionName = inferCollectionFromFieldName(fieldName, fieldSchema);
+        if (collectionName) {
+          if (!collectionRefs[collectionName]) {
+            collectionRefs[collectionName] = [];
+          }
+          collectionRefs[collectionName].push({
+            blockType,
+            field: fieldName,
+          });
+        }
+      }
+    }
+  }
+
+  return collectionRefs;
+}
+
+/**
+ * Infer collection name from field name and schema.
+ * - testimonialIds → testimonials (array of strings ending in "Ids")
+ * - pageId → pages (single string ending in "Id")
+ *
+ * @param {string} fieldName - The field name
+ * @param {Object} fieldSchema - The JSON Schema for the field
+ * @returns {string|null} - Collection name or null if not a reference
+ */
+function inferCollectionFromFieldName(fieldName, fieldSchema) {
+  // Check for array of strings (e.g., testimonialIds: z.array(z.string()))
+  if (
+    fieldSchema.type === 'array' &&
+    fieldSchema.items?.type === 'string' &&
+    fieldName.endsWith('Ids')
+  ) {
+    const base = fieldName.slice(0, -3); // Remove 'Ids'
+    // Pluralize: testimonial → testimonials
+    return base.endsWith('s') ? base : base + 's';
+  }
+
+  // Check for single string reference (e.g., authorId: z.string())
+  if (fieldSchema.type === 'string' && fieldName.endsWith('Id')) {
+    const base = fieldName.slice(0, -2); // Remove 'Id'
+    // Pluralize: author → authors
+    return base.endsWith('s') ? base : base + 's';
+  }
+
+  return null;
 }
 
 /**
