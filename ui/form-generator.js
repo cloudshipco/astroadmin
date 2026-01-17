@@ -83,7 +83,36 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
       return generateGalleryField(name, schema, value, fullPath, id);
     }
 
-    // Regular array of items
+    // Check if this is a complex array (objects with 3+ properties) - use modal editor
+    const itemProps = schema.items?.properties || {};
+    const isComplexArray = schema.items?.type === 'object' && Object.keys(itemProps).length >= 3;
+
+    if (isComplexArray) {
+      const items = Array.isArray(value) ? value : [];
+      const itemCount = items.length;
+      const previewText = itemCount === 0 ? 'No items' :
+                         itemCount === 1 ? '1 item' : `${itemCount} items`;
+
+      return `
+        <div class="form-group">
+          <label class="form-label">${formatLabel(name)}</label>
+          <div class="array-field-compact"
+               data-array-editor
+               data-field="${fullPath}"
+               data-field-name="${formatLabel(name)}"
+               data-schema='${JSON.stringify(schema.items || {})}'
+               data-items='${JSON.stringify(items)}'>
+            <div class="array-field-compact-header">
+              <span class="array-field-compact-info">${previewText}</span>
+              <button type="button" class="array-field-compact-btn" data-open-array-editor>Edit ${formatLabel(name)}</button>
+            </div>
+          </div>
+          <input type="hidden" name="${fullPath}" data-array-data value='${JSON.stringify(items)}'>
+        </div>
+      `;
+    }
+
+    // Simple array of items (inline editing)
     const items = Array.isArray(value) ? value : [];
     return `
       <div class="form-group">
@@ -322,11 +351,32 @@ function getBlockPreview(block) {
   if (!block) return '';
 
   // Try common fields for preview
-  const previewFields = ['heading', 'title', 'content', 'description', 'name'];
+  const previewFields = ['heading', 'title', 'content', 'description', 'name', 'text'];
   for (const field of previewFields) {
-    if (block[field]) {
+    if (block[field] && typeof block[field] === 'string') {
       const text = String(block[field]);
       return text.length > 50 ? text.substring(0, 50) + '...' : text;
+    }
+  }
+
+  // Check for array fields with items that have titles
+  const arrayFields = ['features', 'items', 'cards', 'slides', 'steps', 'list'];
+  for (const field of arrayFields) {
+    if (Array.isArray(block[field]) && block[field].length > 0) {
+      const firstItem = block[field][0];
+      // Try to get a title from first item
+      for (const titleField of ['title', 'heading', 'name', 'label']) {
+        if (firstItem[titleField]) {
+          const count = block[field].length;
+          const suffix = count > 1 ? ` (+${count - 1} more)` : '';
+          const text = String(firstItem[titleField]);
+          const preview = text.length > 35 ? text.substring(0, 35) + '...' : text;
+          return preview + suffix;
+        }
+      }
+      // Fallback to count
+      const count = block[field].length;
+      return `${count} ${field}`;
     }
   }
 
@@ -1100,6 +1150,42 @@ export function setupFormHandlers(formElement, onBlockChange) {
       if (textarea) {
         openTextareaModal(textarea, onBlockChange);
       }
+    }
+  });
+
+  // Open array editor for complex arrays
+  formElement.addEventListener('click', async (e) => {
+    const openBtn = e.target.closest('[data-open-array-editor]');
+    if (openBtn) {
+      const container = openBtn.closest('[data-array-editor]');
+      if (!container) return;
+
+      const fieldName = container.dataset.fieldName;
+      const schema = JSON.parse(container.dataset.schema || '{}');
+      const items = JSON.parse(container.dataset.items || '[]');
+      const hiddenInput = container.parentElement.querySelector('[data-array-data]');
+
+      // Dynamic import to avoid circular dependencies
+      const { openArrayEditor } = await import('./array-editor.js');
+
+      openArrayEditor(fieldName, items, schema, (updatedItems) => {
+        // Update hidden input and container data
+        if (hiddenInput) {
+          hiddenInput.value = JSON.stringify(updatedItems);
+        }
+        container.dataset.items = JSON.stringify(updatedItems);
+
+        // Update preview text
+        const info = container.querySelector('.array-field-compact-info');
+        if (info) {
+          const count = updatedItems.length;
+          info.textContent = count === 0 ? 'No items' :
+                            count === 1 ? '1 item' : `${count} items`;
+        }
+
+        // Trigger change callback
+        if (onBlockChange) onBlockChange();
+      });
     }
   });
 }
