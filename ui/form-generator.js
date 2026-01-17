@@ -341,9 +341,14 @@ function generateArrayItem(arrayPath, itemSchema, value, index) {
   const itemData = value || {};
 
   if (itemSchema?.type === 'object') {
+    const properties = Object.entries(itemSchema.properties || {});
+    // Use stacked layout for complex items (more than 2 fields)
+    const isComplex = properties.length > 2;
+    const layoutClass = isComplex ? 'array-item-fields array-item-stacked' : 'array-item-fields';
+
     return `
-      <div class="array-item-fields">
-        ${Object.entries(itemSchema.properties || {}).map(([key, schema]) =>
+      <div class="${layoutClass}">
+        ${properties.map(([key, schema]) =>
           generateField(key, schema, itemData[key], path, itemData)
         ).join('\n')}
       </div>

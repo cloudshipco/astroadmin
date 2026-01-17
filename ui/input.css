@@ -262,6 +262,23 @@
     @apply py-1.5 text-sm;
   }
 
+  /* Stacked layout for complex array items (3+ fields) */
+  .array-item-stacked {
+    @apply flex-col gap-3;
+  }
+
+  .array-item-stacked .form-group {
+    @apply w-full;
+  }
+
+  .array-item-stacked .form-group:last-child {
+    @apply flex-none;
+  }
+
+  .array-item-stacked .form-label {
+    @apply not-sr-only text-xs font-medium text-gray-600 mb-1;
+  }
+
   /* Checkbox */
   .checkbox-label {
     @apply flex items-center gap-2 cursor-pointer;
@@ -421,8 +438,8 @@
     @apply absolute top-1 right-1 py-0.5 px-1.5 text-xs opacity-50 hover:opacity-100;
   }
 
-  /* Hide labels inside array items - context is clear */
-  .array-item .form-label {
+  /* Hide labels inside simple array items - context is clear */
+  .array-item .array-item-fields:not(.array-item-stacked) .form-label {
     @apply sr-only;
   }
 
@@ -433,6 +450,23 @@
 
   .array-item-fields .form-group {
     @apply flex-1 mb-0;
+  }
+
+  /* Stacked layout shows labels and uses full width */
+  .array-item:has(.array-item-stacked) {
+    @apply p-4 pr-16;
+  }
+
+  .array-item .array-item-stacked {
+    @apply flex-col items-stretch gap-3;
+  }
+
+  .array-item .array-item-stacked .form-group {
+    @apply w-full flex-none;
+  }
+
+  .array-item .array-item-stacked .form-label {
+    @apply not-sr-only text-xs font-medium text-gray-600 mb-1;
   }
 
   /* Compact image picker in array items */
