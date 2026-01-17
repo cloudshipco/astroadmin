@@ -5,7 +5,7 @@
 /* Custom components using Tailwind */
 @layer components {
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed;
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed;
   }
 
   .btn-primary {
