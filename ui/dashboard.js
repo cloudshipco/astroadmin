@@ -1355,11 +1355,17 @@ window.addEventListener('message', (event) => {
   // Handle page navigation in preview - sync admin to show that page
   if (event.data?.type === 'pageNavigation') {
     const pathname = event.data.pathname;
+
+    // Ignore component-preview URLs - these are for non-page collections
+    if (pathname.startsWith('/component-preview/')) {
+      return;
+    }
+
     // Map pathname to collection/slug (only for pages collection)
     // e.g., "/" -> pages/home, "/teaching" -> pages/teaching
     let slug = pathname === '/' ? 'home' : pathname.replace(/^\/|\/$/g, '');
     // Only switch if it's a different page and we're in pages collection
-    if (slug && slug !== currentSlug) {
+    if (slug && slug !== currentSlug && currentCollection === 'pages') {
       loadEntry('pages', slug, true);
     }
   }
