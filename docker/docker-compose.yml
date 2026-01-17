@@ -49,6 +49,7 @@ services:
       - HOST=0.0.0.0
     volumes:
       - ./site:/site
+      - ..:/site/node_modules/astroadmin:ro
     working_dir: /site
     networks:
       - internal
