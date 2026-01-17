@@ -90,8 +90,8 @@ export async function parseAstroSchemas(projectRoot) {
       format: 'esm',
       platform: 'node',
       target: 'node18',
-      // Use project's zod installation, don't bundle it
-      external: ['zod'],
+      // Bundle zod into the output so the temp file is self-contained
+      // (newer zod versions have complex exports that may not resolve from cache paths)
       plugins: [
         {
           name: 'astro-shims',
