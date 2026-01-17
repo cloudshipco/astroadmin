@@ -4,11 +4,87 @@
  */
 
 import express from 'express';
+import path from 'path';
 import simpleGit from 'simple-git';
 import { config } from '../config.js';
 
 const router = express.Router();
 const git = simpleGit(config.paths.projectRoot);
+
+/**
+ * Allowed directories for git file operations (relative to project root).
+ * These match the directories staged by /publish endpoint.
+ */
+const ALLOWED_GIT_PATHS = ['src/content', 'src/styles', 'public/images'];
+
+/**
+ * Validate that a file path is within allowed directories.
+ * Uses path.resolve() + startsWith() for robust traversal prevention.
+ * @param {string} filePath - User-provided file path
+ * @returns {string} - Normalized path (relative to project root)
+ * @throws {Error} - If path is outside allowed directories
+ */
+function validateFilePath(filePath) {
+  // Normalize to handle ., .., // etc.
+  const normalized = path.normalize(filePath);
+
+  // Reject obvious traversal attempts early
+  if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
+    throw new Error('Invalid file path: must be relative to project root');
+  }
+
+  // Resolve to absolute path for comparison
+  const absolutePath = path.resolve(config.paths.projectRoot, normalized);
+  const projectRoot = path.resolve(config.paths.projectRoot);
+
+  // Ensure path is within project root (defense in depth)
+  if (!absolutePath.startsWith(projectRoot + path.sep)) {
+    throw new Error('Invalid file path: path escapes project root');
+  }
+
+  // Check against allowed directories
+  const isAllowed = ALLOWED_GIT_PATHS.some(allowedDir => {
+    const allowedAbsolute = path.resolve(projectRoot, allowedDir);
+    return absolutePath.startsWith(allowedAbsolute + path.sep) ||
+           absolutePath === allowedAbsolute;
+  });
+
+  if (!isAllowed) {
+    throw new Error(
+      `Access denied: file operations restricted to ${ALLOWED_GIT_PATHS.join(', ')}`
+    );
+  }
+
+  return normalized;
+}
+
+/**
+ * Validate commit hash format (hex string, 7-40 chars).
+ * @param {string} commit - User-provided commit reference
+ * @returns {string} - Validated commit hash
+ * @throws {Error} - If format is invalid
+ */
+function validateCommitHash(commit) {
+  // Allow HEAD as special reference
+  if (commit === 'HEAD') return commit;
+
+  // Standard git short/full hash: 7-40 hex characters
+  if (!/^[a-f0-9]{7,40}$/i.test(commit)) {
+    throw new Error('Invalid commit hash format');
+  }
+
+  return commit;
+}
+
+/**
+ * Validate an array of file paths for git.add() operations.
+ * @param {string[]} files - Array of file paths
+ * @returns {string[]} - Validated paths
+ * @throws {Error} - If any path is invalid
+ */
+function validateFilePaths(files) {
+  return files.map(validateFilePath);
+}
 
 /**
  * GET /api/git/status
@@ -58,7 +134,8 @@ router.post('/commit', async (req, res) => {
     }
 
     // Add files (default to content directory if not specified)
-    const filesToAdd = files || ['src/content/'];
+    // Validate custom file paths if provided; defaults are pre-approved
+    const filesToAdd = files ? validateFilePaths(files) : ['src/content/'];
     await git.add(filesToAdd);
 
     // Commit
@@ -249,17 +326,24 @@ router.get('/diff', async (req, res) => {
   try {
     const { file, from, to } = req.query;
 
+    // Validate file path if provided (restrict to content directories)
+    const validatedFile = file ? validateFilePath(file) : null;
+
+    // Validate commit references if provided
+    const validatedFrom = from ? validateCommitHash(from) : null;
+    const validatedTo = to ? validateCommitHash(to) : null;
+
     let diffResult;
 
-    if (from && to) {
+    if (validatedFrom && validatedTo) {
       // Diff between two commits
-      diffResult = await git.diff([from, to, '--', file || '.']);
-    } else if (from) {
+      diffResult = await git.diff([validatedFrom, validatedTo, '--', validatedFile || '.']);
+    } else if (validatedFrom) {
       // Diff from a specific commit to working tree
-      diffResult = await git.diff([from, '--', file || '.']);
+      diffResult = await git.diff([validatedFrom, '--', validatedFile || '.']);
     } else {
       // Diff of uncommitted changes (staged + unstaged)
-      diffResult = await git.diff(['HEAD', '--', file || '.']);
+      diffResult = await git.diff(['HEAD', '--', validatedFile || '.']);
     }
 
     res.json({
@@ -291,8 +375,12 @@ router.get('/show', async (req, res) => {
       });
     }
 
-    const ref = commit || 'HEAD';
-    const content = await git.show([`${ref}:${file}`]);
+    // Validate file path (restrict to content directories)
+    const validatedFile = validateFilePath(file);
+
+    // Validate commit reference
+    const ref = commit ? validateCommitHash(commit) : 'HEAD';
+    const content = await git.show([`${ref}:${validatedFile}`]);
 
     res.json({
       success: true,
@@ -325,8 +413,11 @@ router.post('/revert-file', async (req, res) => {
       });
     }
 
+    // Validate file path (restrict to content directories)
+    const validatedFile = validateFilePath(file);
+
     // Restore file from HEAD (discard uncommitted changes)
-    await git.checkout(['HEAD', '--', file]);
+    await git.checkout(['HEAD', '--', validatedFile]);
 
     res.json({
       success: true,
@@ -358,8 +449,14 @@ router.post('/restore-from-commit', async (req, res) => {
       });
     }
 
+    // Validate file path (restrict to content directories)
+    const validatedFile = validateFilePath(file);
+
+    // Validate commit hash format
+    const validatedCommit = validateCommitHash(commit);
+
     // Restore file from specific commit
-    await git.checkout([commit, '--', file]);
+    await git.checkout([validatedCommit, '--', validatedFile]);
 
     res.json({
       success: true,
@@ -393,7 +490,10 @@ router.get('/file-history', async (req, res) => {
       });
     }
 
-    const log = await git.log({ maxCount: limit, file });
+    // Validate file path (restrict to content directories)
+    const validatedFile = validateFilePath(file);
+
+    const log = await git.log({ maxCount: limit, file: validatedFile });
 
     const commits = log.all.map(commit => ({
       hash: commit.hash,
