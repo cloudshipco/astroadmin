@@ -183,17 +183,33 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
   const isLongByName = lowerName.includes('description') || lowerName.includes('content') || lowerName.includes('subheading');
 
   if (!isShortByLength && !isShortByName || isLongByName) {
+    // Calculate initial rows based on content length
+    const content = value ?? '';
+    const lineCount = (content.match(/\n/g) || []).length + 1;
+    const charBasedRows = Math.ceil(content.length / 60); // ~60 chars per line
+    const initialRows = Math.max(4, Math.min(16, Math.max(lineCount, charBasedRows)));
+
     return `
       <div class="form-group">
         <label for="${id}" class="form-label">${getFieldLabel(name, schema)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
-        <textarea
-          name="${fullPath}"
-          id="${id}"
-          rows="4"
-          class="form-input"
-          ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
-          ${schema.required ? 'required' : ''}
-        >${escapeHtml(value ?? '')}</textarea>
+        <div class="textarea-wrapper">
+          <textarea
+            name="${fullPath}"
+            id="${id}"
+            rows="${initialRows}"
+            class="form-input textarea-autogrow"
+            ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
+            ${schema.required ? 'required' : ''}
+          >${escapeHtml(content)}</textarea>
+          <button type="button" class="textarea-expand-btn" data-expand-textarea="${id}" title="Expand editor">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <polyline points="9 21 3 21 3 15"></polyline>
+              <line x1="21" y1="3" x2="14" y2="10"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
+            </svg>
+          </button>
+        </div>
       </div>
     `;
   }
@@ -1062,6 +1078,125 @@ export function setupFormHandlers(formElement, onBlockChange) {
       previewEl.textContent = previewText.length > 50 ? previewText.substring(0, 50) + '...' : previewText;
     }
   });
+
+  // Auto-grow textareas as user types
+  formElement.addEventListener('input', (e) => {
+    if (e.target.classList.contains('textarea-autogrow')) {
+      autoGrowTextarea(e.target);
+    }
+  });
+
+  // Expand textarea to fullscreen modal
+  formElement.addEventListener('click', (e) => {
+    const expandBtn = e.target.closest('[data-expand-textarea]');
+    if (expandBtn) {
+      const textareaId = expandBtn.dataset.expandTextarea;
+      const textarea = document.getElementById(textareaId);
+      if (textarea) {
+        openTextareaModal(textarea, onBlockChange);
+      }
+    }
+  });
+}
+
+/**
+ * Auto-grow textarea based on content
+ */
+function autoGrowTextarea(textarea) {
+  // Reset height to auto to get the correct scrollHeight
+  textarea.style.height = 'auto';
+  // Set to scrollHeight but with min/max constraints
+  const minHeight = 100; // ~4 rows
+  const maxHeight = 400; // ~16 rows
+  const newHeight = Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight));
+  textarea.style.height = newHeight + 'px';
+}
+
+/**
+ * Open fullscreen modal for textarea editing
+ */
+function openTextareaModal(textarea, onBlockChange) {
+  // Get the label text
+  const formGroup = textarea.closest('.form-group');
+  const label = formGroup?.querySelector('.form-label')?.textContent?.replace('*', '').trim() || 'Edit Text';
+
+  // Create modal
+  let modal = document.getElementById('textareaModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'textareaModal';
+    document.body.appendChild(modal);
+  }
+
+  modal.className = 'textarea-modal-overlay';
+  modal.innerHTML = `
+    <div class="textarea-modal">
+      <div class="textarea-modal-header">
+        <h3>${label}</h3>
+        <button type="button" class="textarea-modal-close" data-close-textarea-modal>&times;</button>
+      </div>
+      <div class="textarea-modal-body">
+        <textarea id="textareaModalInput" class="textarea-modal-input" placeholder="Enter your text...">${textarea.value}</textarea>
+      </div>
+      <div class="textarea-modal-footer">
+        <span class="textarea-char-count">${textarea.value.length} characters</span>
+        <div class="textarea-modal-actions">
+          <button type="button" class="btn btn-sm btn-secondary" data-close-textarea-modal>Cancel</button>
+          <button type="button" class="btn btn-sm btn-primary" data-save-textarea-modal>Done</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const modalInput = modal.querySelector('#textareaModalInput');
+  const charCount = modal.querySelector('.textarea-char-count');
+
+  // Update character count on input
+  modalInput.addEventListener('input', () => {
+    charCount.textContent = `${modalInput.value.length} characters`;
+  });
+
+  // Close modal
+  const closeModal = () => {
+    modal.remove();
+  };
+
+  // Save and close
+  const saveAndClose = () => {
+    textarea.value = modalInput.value;
+    // Trigger input event for auto-save
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    autoGrowTextarea(textarea);
+    closeModal();
+    if (onBlockChange) onBlockChange();
+  };
+
+  // Event listeners
+  modal.querySelectorAll('[data-close-textarea-modal]').forEach(btn => {
+    btn.addEventListener('click', closeModal);
+  });
+  modal.querySelector('[data-save-textarea-modal]').addEventListener('click', saveAndClose);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  // Keyboard shortcuts
+  modalInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeModal();
+    }
+    // Cmd/Ctrl + Enter to save
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      saveAndClose();
+    }
+  });
+
+  // Focus the modal input and move cursor to end
+  setTimeout(() => {
+    modalInput.focus();
+    modalInput.setSelectionRange(modalInput.value.length, modalInput.value.length);
+  }, 100);
 }
 
 /**
