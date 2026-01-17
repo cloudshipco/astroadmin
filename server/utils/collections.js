@@ -66,6 +66,11 @@ export function watchSchemaConfig() {
 
   const projectRoot = config.paths.projectRoot;
   const configPatterns = [
+    // Astro 5+ locations
+    path.join(projectRoot, 'src/content.config.ts'),
+    path.join(projectRoot, 'src/content.config.mts'),
+    path.join(projectRoot, 'src/content.config.js'),
+    // Astro 4.x legacy locations
     path.join(projectRoot, 'src/content/config.ts'),
     path.join(projectRoot, 'src/content/config.mts'),
     path.join(projectRoot, 'src/content/config.js'),
@@ -87,25 +92,34 @@ export function watchSchemaConfig() {
     });
   });
 
-  console.log('👁️ Watching schema config for changes');
 }
 
 /**
- * Get list of all collections by reading the content directory
+ * Get list of all collections from parsed schemas.
+ * This includes both directory-based (glob) and file-based (file) collections.
  */
 export async function getCollectionNames() {
   try {
-    const contentDir = config.paths.content;
-    const entries = await fs.readdir(contentDir, { withFileTypes: true });
-
-    const collections = entries
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name);
-
-    return collections;
+    // Get collection names from parsed schemas (the source of truth)
+    const schemas = await loadSchemas();
+    return Object.keys(schemas);
   } catch (error) {
-    console.error('Error reading collections:', error);
-    return [];
+    console.error('Error loading schemas for collection names:', error);
+
+    // Fallback to reading directories if schema parsing fails
+    try {
+      const contentDir = config.paths.content;
+      const entries = await fs.readdir(contentDir, { withFileTypes: true });
+
+      const collections = entries
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name);
+
+      return collections;
+    } catch (fallbackError) {
+      console.error('Error reading collections directory:', fallbackError);
+      return [];
+    }
   }
 }
 
@@ -116,6 +130,16 @@ export async function getCollectionNames() {
  */
 export async function getCollectionEntries(collectionName, options = {}) {
   try {
+    // First, check if this is a file-based collection
+    const schemas = await loadSchemas();
+    const collectionSchema = schemas[collectionName];
+
+    if (collectionSchema?.loaderType === 'file' && collectionSchema.loaderFilePath) {
+      // File-based collection: read entries from the JSON file
+      return await getFileCollectionEntries(collectionSchema.loaderFilePath);
+    }
+
+    // Directory-based collection (glob loader)
     const collectionDir = path.join(config.paths.content, collectionName);
 
     // Check if directory exists
@@ -160,6 +184,28 @@ export async function getCollectionEntries(collectionName, options = {}) {
     return slugs;
   } catch (error) {
     console.error(`Error reading collection ${collectionName}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Get entries from a file-based collection (JSON file with array of objects)
+ * @param {string} filePath - Path to the JSON file (relative to project root)
+ */
+async function getFileCollectionEntries(filePath) {
+  try {
+    const fullPath = path.join(config.paths.projectRoot, filePath);
+    const content = await fs.readFile(fullPath, 'utf-8');
+    const data = JSON.parse(content);
+
+    // File collections are arrays of objects with an 'id' field
+    if (Array.isArray(data)) {
+      return data.map(item => item.id || item.slug || String(data.indexOf(item)));
+    }
+
+    return [];
+  } catch (error) {
+    console.error(`Error reading file collection ${filePath}:`, error);
     return [];
   }
 }
@@ -250,6 +296,37 @@ export async function getCollectionSchema(collectionName) {
 }
 
 /**
+ * Build a map of which blocks reference which collections.
+ * Aggregates blockCollectionRefs from all schemas that have blocks (typically 'pages').
+ *
+ * @param {Object} schemas - Loaded schemas from parseAstroSchemas
+ * @returns {Object} - Map of collectionName -> [{ type, field }]
+ */
+function buildCollectionBlockMap(schemas) {
+  /** @type {Record<string, Array<{type: string, field: string}>>} */
+  const collectionBlockMap = {};
+
+  for (const [schemaName, schemaInfo] of Object.entries(schemas)) {
+    const refs = schemaInfo.blockCollectionRefs || {};
+
+    for (const [collectionName, blockRefs] of Object.entries(refs)) {
+      if (!collectionBlockMap[collectionName]) {
+        collectionBlockMap[collectionName] = [];
+      }
+      // Add each block reference
+      for (const ref of blockRefs) {
+        collectionBlockMap[collectionName].push({
+          type: ref.blockType,
+          field: ref.field,
+        });
+      }
+    }
+  }
+
+  return collectionBlockMap;
+}
+
+/**
  * Get all collections with their metadata
  * @param {object} options - { i18nEnabled: boolean, locales: string[] }
  */
@@ -264,6 +341,9 @@ export async function getAllCollections(options = {}) {
     console.warn('Could not load schemas, using basic collection info');
   }
 
+  // Build map of which blocks reference which collections
+  const collectionBlockMap = buildCollectionBlockMap(schemas);
+
   const collections = await Promise.all(
     collectionNames.map(async (name) => {
       // Pass i18n options to getCollectionEntries for proper deduplication
@@ -277,6 +357,8 @@ export async function getAllCollections(options = {}) {
         entryCount: entries.length,
         schema: schemaInfo.schema || { type: 'object', properties: {} },
         discriminatedUnions: schemaInfo.discriminatedUnions || [],
+        // Which blocks reference this collection (for component preview)
+        usedByBlocks: collectionBlockMap[name] || [],
       };
     })
   );
