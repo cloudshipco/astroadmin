@@ -83,9 +83,9 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
       return generateGalleryField(name, schema, value, fullPath, id);
     }
 
-    // Check if this is a complex array (objects with 3+ properties) - use card view with modal editing
+    // Check if this is an object array (2+ properties) - use card view with modal editing
     const itemProps = schema.items?.properties || {};
-    const isComplexArray = schema.items?.type === 'object' && Object.keys(itemProps).length >= 3;
+    const isComplexArray = schema.items?.type === 'object' && Object.keys(itemProps).length >= 2;
 
     if (isComplexArray) {
       const items = Array.isArray(value) ? value : [];
@@ -417,20 +417,24 @@ function generateArrayItem(arrayPath, itemSchema, value, index) {
  * Generate an inline card for array items
  */
 function generateArrayCard(item, index) {
-  const titleFields = ['title', 'name', 'heading', 'label'];
-  const subtitleFields = ['description', 'content', 'subtitle', 'text'];
+  const titleFields = ['title', 'name', 'heading', 'value', 'label'];
+  const subtitleFields = ['description', 'content', 'subtitle', 'text', 'label'];
 
   let title = '';
   let subtitle = '';
+  let titleField = '';
 
   for (const field of titleFields) {
     if (item[field]) {
       title = String(item[field]);
+      titleField = field;
       break;
     }
   }
 
   for (const field of subtitleFields) {
+    // Don't use the same field for both title and subtitle
+    if (field === titleField) continue;
     if (item[field]) {
       const text = String(item[field]);
       subtitle = text.length > 60 ? text.substring(0, 60) + '...' : text;
