@@ -5,9 +5,12 @@ AstroAdmin is a visual admin interface for [Astro Content Collections](https://d
 ## Quick Links
 
 - [Getting Started](./getting-started.md) - Install and run AstroAdmin
+- [Best Practices](./best-practices.md) - Structure your site for optimal editing
+- [Content Collections](./content-collections.md) - Schema field reference
+- [Block-Based Editing](./blocks.md) - Flexible page layouts with blocks
+- [Inline Editing](./inline-editing.md) - Convert template pages to editable content
+- [Configuration](./configuration.md) - Customize AstroAdmin behavior
 - [Requirements](./requirements.md) - What your Astro project needs
-- [Content Collections](./content-collections.md) - Setting up collections for AstroAdmin
-- [Configuration](./configuration.md) - Customizing AstroAdmin behavior
 
 ## Features
 
