@@ -16,8 +16,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import net from 'net';
+import { createRequire } from 'module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json');
 
 // Track spawned Astro process for cleanup
 let astroProcess = null;
@@ -154,7 +157,7 @@ const program = new Command();
 program
   .name('astroadmin')
   .description('Admin interface for Astro Content Collections')
-  .version('0.1.0');
+  .version(pkg.version);
 
 program
   .command('dev')
