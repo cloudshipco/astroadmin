@@ -707,7 +707,7 @@ function renderVirtualPagePanel(page) {
   editorForm.innerHTML = `
     <div class="virtual-page-info">
       <p class="virtual-page-notice">
-        This is a template page. For inline editing, see the <a href="https://github.com/cloudship-dev/astroadmin/blob/main/docs/inline-editing.md" target="_blank" rel="noopener">conversion guide</a>.
+        This is a template page. For inline editing, see the <a href="https://github.com/cloudshipco/astroadmin/blob/main/docs/inline-editing.md" target="_blank" rel="noopener">conversion guide</a>.
       </p>
       <div class="virtual-page-details">
         <div class="virtual-page-detail">
