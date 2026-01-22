@@ -195,25 +195,62 @@ function renderItems() {
 }
 
 /**
+ * Parse labelField hint from schema description
+ * Format: "labelField:fieldName" anywhere in the description
+ */
+function parseLabelFieldHint(schema) {
+  if (!schema?.description) return null;
+  const match = schema.description.match(/labelField:(\w+)/);
+  return match ? match[1] : null;
+}
+
+/**
  * Get preview text for an item
+ * Uses currentSchema module variable for intelligent field detection
  */
 function getItemPreview(item) {
-  const titleFields = ['title', 'name', 'heading', 'label'];
-  const subtitleFields = ['description', 'content', 'subtitle', 'text'];
+  const titleFields = ['title', 'name', 'heading', 'label', 'quote', 'author', 'summary', 'message', 'caption'];
+  const subtitleFields = ['description', 'content', 'subtitle', 'text', 'author', 'source', 'quote'];
 
   let title = '';
   let subtitle = '';
+  let titleField = '';
 
-  for (const field of titleFields) {
-    if (item[field]) {
-      title = item[field];
-      break;
+  // Check for explicit labelField hint in schema description
+  const labelFieldHint = parseLabelFieldHint(currentSchema);
+  if (labelFieldHint && item[labelFieldHint]) {
+    title = String(item[labelFieldHint]);
+    titleField = labelFieldHint;
+  }
+
+  // Try standard title fields if no hint or hint field was empty
+  if (!title) {
+    for (const field of titleFields) {
+      if (item[field]) {
+        title = String(item[field]);
+        titleField = field;
+        break;
+      }
+    }
+  }
+
+  // Fallback: use first string field from schema
+  if (!title && currentSchema?.properties) {
+    for (const [field, fieldSchema] of Object.entries(currentSchema.properties)) {
+      if (fieldSchema.type === 'string' && item[field]) {
+        title = String(item[field]);
+        titleField = field;
+        break;
+      }
     }
   }
 
   for (const field of subtitleFields) {
+    // Don't use the same field for both title and subtitle
+    if (field === titleField) continue;
     if (item[field]) {
-      subtitle = item[field].length > 80 ? item[field].substring(0, 80) + '...' : item[field];
+      const text = String(item[field]);
+      subtitle = text.length > 80 ? text.substring(0, 80) + '...' : text;
       break;
     }
   }

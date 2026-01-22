@@ -14,7 +14,9 @@ let currentData = null;
 let previewUrl = '';
 let allPages = []; // Store all pages for dropdown
 let allCollections = []; // Store collection info for new entries
+let allStaticPages = []; // Store discovered static pages (virtual pages)
 let isNewEntry = false; // Track if current entry is new (unsaved)
+let isVirtualPage = false; // Track if current view is a virtual page
 let selectedPreviewBlock = null; // For component preview: which block to render with
 
 // i18n state
@@ -68,6 +70,7 @@ async function loadPages() {
 
     if (data.success) {
       allCollections = data.collections; // Store for new entry creation
+      allStaticPages = data.pages || []; // Store discovered static pages
 
       // Update i18n config from collections response (authoritative source)
       if (data.i18n) {
@@ -77,7 +80,7 @@ async function loadPages() {
         }
       }
 
-      populatePageSelector(data.collections, data.i18n);
+      populatePageSelector(data.collections, data.i18n, allStaticPages);
     }
   } catch (error) {
     console.error('Failed to load collections:', error);
@@ -85,11 +88,26 @@ async function loadPages() {
 }
 
 // Populate page selector dropdown
-function populatePageSelector(collections, i18nInfo = null) {
+function populatePageSelector(collections, i18nInfo = null, staticPages = []) {
   const selector = document.getElementById('pageSelector');
   const previousValue = selector.value; // Preserve selection if reloading
   selector.innerHTML = '<option value="">Select page...</option>';
   allPages = []; // Reset
+
+  // Add "Pages" optgroup for virtual/static pages if any exist
+  if (staticPages.length > 0) {
+    const pagesOptgroup = document.createElement('optgroup');
+    pagesOptgroup.label = 'Pages';
+
+    staticPages.forEach(page => {
+      const option = document.createElement('option');
+      option.value = `__page__:${page.slug}`;
+      option.textContent = page.name;
+      pagesOptgroup.appendChild(option);
+    });
+
+    selector.appendChild(pagesOptgroup);
+  }
 
   // Sort collections: pages first, then testimonials, then metadata last
   const collectionOrder = ['pages', 'testimonials', 'metadata'];
@@ -129,7 +147,7 @@ function populatePageSelector(collections, i18nInfo = null) {
   });
 
   // Restore previous selection if it still exists
-  if (previousValue && !previousValue.startsWith('new:')) {
+  if (previousValue && !previousValue.startsWith('new:') && !previousValue.startsWith('__page__:')) {
     selector.value = previousValue;
   }
 }
@@ -316,7 +334,11 @@ document.getElementById('pageSelector').addEventListener('change', (e) => {
   const value = e.target.value;
   if (!value) return;
 
-  if (value.startsWith('new:')) {
+  if (value.startsWith('__page__:')) {
+    // Virtual page selected
+    const pageSlug = value.split(':')[1];
+    loadVirtualPage(pageSlug);
+  } else if (value.startsWith('new:')) {
     // Reset dropdown to previous value (don't keep "New..." selected)
     e.target.value = currentCollection && currentSlug ? `${currentCollection}/${currentSlug}` : '';
     // Open new item modal
@@ -549,6 +571,7 @@ async function loadEntry(collection, slug, updateUrl = true) {
   currentCollection = collection;
   currentSlug = slug;
   isNewEntry = false; // Loading existing entry
+  isVirtualPage = false; // Not a virtual page
 
   // Update URL without page reload
   if (updateUrl) {
@@ -599,9 +622,183 @@ async function loadEntry(collection, slug, updateUrl = true) {
   }
 }
 
+// ============================================
+// Virtual Page Functions
+// ============================================
+
+/**
+ * Load a virtual page (static .astro/.md/.mdx page from src/pages)
+ * Shows a navigation hub instead of an editor form
+ */
+function loadVirtualPage(pageSlug) {
+  const page = allStaticPages.find(p => p.slug === pageSlug);
+  if (!page) {
+    console.error('Virtual page not found:', pageSlug);
+    return;
+  }
+
+  // Reset state
+  currentCollection = null;
+  currentSlug = null;
+  currentData = null;
+  isNewEntry = false;
+  isVirtualPage = true;
+
+  // Update URL
+  const newUrl = `/dashboard/__page__/${pageSlug}`;
+  history.pushState({ virtualPage: pageSlug }, '', newUrl);
+
+  // Update UI
+  document.getElementById('editorTitle').textContent = page.name;
+  document.getElementById('deleteEntryBtn').style.display = 'none';
+  document.getElementById('localeTabs').style.display = 'none';
+
+  // Hide block selector
+  const blockSelector = document.getElementById('previewBlockSelector');
+  if (blockSelector) {
+    blockSelector.style.display = 'none';
+  }
+
+  // Render virtual page panel
+  renderVirtualPagePanel(page);
+
+  // Update preview to show the page
+  updateVirtualPagePreview(page);
+}
+
+/**
+ * Render the virtual page info panel
+ */
+function renderVirtualPagePanel(page) {
+  const editorForm = document.getElementById('editorForm');
+
+  // Build collection links if any
+  let collectionsHtml = '';
+  if (page.collections && page.collections.length > 0) {
+    const collectionLinks = page.collections.map(collectionName => {
+      const collection = allCollections.find(c => c.name === collectionName);
+      const label = collectionName.charAt(0).toUpperCase() + collectionName.slice(1);
+      const entryCount = collection?.entries?.length || 0;
+
+      return `
+        <button type="button" class="collection-link" data-collection="${collectionName}">
+          ${label}
+          <span class="collection-link-count">${entryCount}</span>
+        </button>
+      `;
+    }).join('');
+
+    collectionsHtml = `
+      <div class="virtual-page-collections">
+        <h4>Uses Collections</h4>
+        <div class="collection-links">
+          ${collectionLinks}
+        </div>
+      </div>
+    `;
+  } else {
+    collectionsHtml = `
+      <div class="virtual-page-collections">
+        <p class="virtual-page-no-collections">This page doesn't reference any content collections.</p>
+      </div>
+    `;
+  }
+
+  editorForm.innerHTML = `
+    <div class="virtual-page-info">
+      <p class="virtual-page-notice">
+        This is a template page. For inline editing, see the <a href="https://github.com/cloudship-dev/astroadmin/blob/main/docs/inline-editing.md" target="_blank" rel="noopener">conversion guide</a>.
+      </p>
+      <div class="virtual-page-details">
+        <div class="virtual-page-detail">
+          <span class="virtual-page-detail-label">File</span>
+          <code>${page.path}</code>
+        </div>
+        <div class="virtual-page-detail">
+          <span class="virtual-page-detail-label">URL</span>
+          <code>${page.url}</code>
+        </div>
+      </div>
+      ${collectionsHtml}
+    </div>
+  `;
+
+  // Setup collection link click handlers
+  editorForm.querySelectorAll('.collection-link').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const collectionName = btn.dataset.collection;
+      navigateToCollection(collectionName);
+    });
+  });
+}
+
+/**
+ * Navigate to a collection (load first entry or show new entry form)
+ */
+function navigateToCollection(collectionName) {
+  const collection = allCollections.find(c => c.name === collectionName);
+  if (!collection) return;
+
+  isVirtualPage = false;
+
+  if (collection.entries && collection.entries.length > 0) {
+    // Load first entry
+    const firstEntry = collection.entries[0];
+    document.getElementById('pageSelector').value = `${collectionName}/${firstEntry}`;
+    loadEntry(collectionName, firstEntry);
+  } else {
+    // No entries - open new entry modal
+    openNewItemModal(collectionName);
+  }
+}
+
+/**
+ * Update preview iframe for virtual page
+ */
+function updateVirtualPagePreview(page) {
+  const iframe = document.getElementById('previewFrame');
+  const placeholder = document.getElementById('previewPlaceholder');
+  const previewControls = document.getElementById('previewControls');
+
+  if (!previewUrl) {
+    return;
+  }
+
+  // Build the preview URL
+  const pageUrl = `${previewUrl}${page.url}`;
+
+  // Show preview and controls
+  iframe.style.display = 'block';
+  placeholder.style.display = 'none';
+  previewControls.style.display = 'flex';
+
+  // Load the page in iframe
+  iframe.classList.add('loading');
+
+  const onLoad = () => {
+    iframe.removeEventListener('load', onLoad);
+    iframe.classList.remove('loading');
+  };
+  iframe.addEventListener('load', onLoad);
+
+  const newUrl = pageUrl + '?t=' + Date.now();
+  if (iframe.contentWindow) {
+    iframe.contentWindow.location.replace(newUrl);
+  } else {
+    iframe.src = newUrl;
+  }
+}
+
 // Parse URL to get collection/slug
 function getEntryFromUrl() {
   const path = window.location.pathname;
+
+  // Check for virtual page URL pattern
+  const virtualMatch = path.match(/^\/dashboard\/__page__\/(.+)$/);
+  if (virtualMatch) {
+    return { virtualPage: virtualMatch[1] };
+  }
+
   const match = path.match(/^\/dashboard\/([^/]+)\/(.+)$/);
   if (match) {
     return { collection: match[1], slug: match[2] };
@@ -611,7 +808,9 @@ function getEntryFromUrl() {
 
 // Handle browser back/forward
 window.addEventListener('popstate', (e) => {
-  if (e.state?.collection && e.state?.slug) {
+  if (e.state?.virtualPage) {
+    loadVirtualPage(e.state.virtualPage);
+  } else if (e.state?.collection && e.state?.slug) {
     loadEntry(e.state.collection, e.state.slug, false);
   }
 });
@@ -1705,17 +1904,26 @@ async function init() {
   // Update changes badge
   updateChangesBadge();
 
-  // Load entry from URL if present, otherwise auto-select first page
+  // Load entry from URL if present, otherwise auto-select first page/virtual page
   const entry = getEntryFromUrl();
-  if (entry) {
+  if (entry?.virtualPage) {
+    // Virtual page from URL
+    loadVirtualPage(entry.virtualPage);
+  } else if (entry?.collection && entry?.slug) {
     loadEntry(entry.collection, entry.slug, false);
   } else {
-    // Auto-select first page - prefer "home" from pages collection
-    const homePage = allPages.find(p => p.collection === 'pages' && p.slug === 'home');
-    const firstPage = homePage || allPages.find(p => p.collection === 'pages') || allPages[0];
+    // Auto-select first virtual page (if any), or first content entry
+    const firstVirtualPage = allStaticPages[0];
+    if (firstVirtualPage) {
+      loadVirtualPage(firstVirtualPage.slug);
+    } else {
+      // Fall back to content entries
+      const homePage = allPages.find(p => p.collection === 'pages' && p.slug === 'home');
+      const firstPage = homePage || allPages.find(p => p.collection === 'pages') || allPages[0];
 
-    if (firstPage) {
-      loadEntry(firstPage.collection, firstPage.slug, true);
+      if (firstPage) {
+        loadEntry(firstPage.collection, firstPage.slug, true);
+      }
     }
   }
 }

@@ -6,8 +6,15 @@
 
 /**
  * Generate a form from schema
+ * Handles both object schemas (most common) and top-level array schemas
  */
 export function generateForm(schema, data = {}) {
+  // Handle top-level array schemas (e.g., z.array(z.object({...})))
+  // These are collections where the entire file is an array of items
+  if (schema.type === 'array' && schema.items) {
+    return generateTopLevelArrayForm(schema, data);
+  }
+
   const formHtml = [];
   const hiddenHtml = [];
 
@@ -35,6 +42,33 @@ export function generateForm(schema, data = {}) {
 
   // Add hidden fields at the start
   return hiddenHtml.join('\n') + '\n' + formHtml.join('\n');
+}
+
+/**
+ * Generate a form for top-level array schemas
+ * The entire content is an array of items, rendered as editable cards
+ */
+function generateTopLevelArrayForm(schema, data) {
+  const items = Array.isArray(data) ? data : [];
+  const itemSchema = schema.items || {};
+
+  // Use the array card UI for complex items
+  return `
+    <div class="form-group">
+      <div class="array-cards"
+           data-array-cards
+           data-field="_root"
+           data-field-name="Items"
+           data-schema='${JSON.stringify(itemSchema)}'
+           data-top-level-array="true">
+        ${items.map((item, index) => generateArrayCard(item, index, itemSchema)).join('')}
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm array-cards-add" data-add-array-card>
+        + Add Item
+      </button>
+      <input type="hidden" name="_root" data-array-data data-top-level-array="true" value='${JSON.stringify(items)}'>
+    </div>
+  `;
 }
 
 /**
@@ -98,7 +132,7 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
                data-field="${fullPath}"
                data-field-name="${formatLabel(name)}"
                data-schema='${JSON.stringify(schema.items || {})}'>
-            ${items.map((item, index) => generateArrayCard(item, index)).join('')}
+            ${items.map((item, index) => generateArrayCard(item, index, schema.items)).join('')}
           </div>
           <button type="button" class="btn btn-secondary btn-sm array-cards-add" data-add-array-card>
             + Add ${formatLabel(name).replace(/s$/, '')}
@@ -465,21 +499,55 @@ function generateArrayItem(arrayPath, itemSchema, value, index) {
 }
 
 /**
- * Generate an inline card for array items
+ * Parse labelField hint from schema description
+ * Format: "labelField:fieldName" anywhere in the description
  */
-function generateArrayCard(item, index) {
-  const titleFields = ['title', 'name', 'heading', 'value', 'label'];
-  const subtitleFields = ['description', 'content', 'subtitle', 'text', 'label'];
+function parseLabelFieldHint(schema) {
+  if (!schema?.description) return null;
+  const match = schema.description.match(/labelField:(\w+)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Generate an inline card for array items
+ * @param {object} item - The array item data
+ * @param {number} index - The item index
+ * @param {object} [itemSchema] - Optional schema for the array items
+ */
+function generateArrayCard(item, index, itemSchema = null) {
+  const titleFields = ['title', 'name', 'heading', 'value', 'label', 'quote', 'author', 'summary', 'message', 'caption'];
+  const subtitleFields = ['description', 'content', 'subtitle', 'text', 'label', 'author', 'source', 'quote'];
 
   let title = '';
   let subtitle = '';
   let titleField = '';
 
-  for (const field of titleFields) {
-    if (item[field]) {
-      title = String(item[field]);
-      titleField = field;
-      break;
+  // Check for explicit labelField hint in schema description
+  const labelFieldHint = parseLabelFieldHint(itemSchema);
+  if (labelFieldHint && item[labelFieldHint]) {
+    title = String(item[labelFieldHint]);
+    titleField = labelFieldHint;
+  }
+
+  // Try standard title fields if no hint or hint field was empty
+  if (!title) {
+    for (const field of titleFields) {
+      if (item[field]) {
+        title = String(item[field]);
+        titleField = field;
+        break;
+      }
+    }
+  }
+
+  // Fallback: use first string field from schema
+  if (!title && itemSchema?.properties) {
+    for (const [field, fieldSchema] of Object.entries(itemSchema.properties)) {
+      if (fieldSchema.type === 'string' && item[field]) {
+        title = String(item[field]);
+        titleField = field;
+        break;
+      }
     }
   }
 
@@ -943,10 +1011,22 @@ function escapeHtml(str) {
 
 /**
  * Extract form data into object matching schema structure
+ * Returns an array directly for top-level array schemas
  */
 export function extractFormData(formElement) {
   const formData = new FormData(formElement);
   const data = {};
+
+  // Check for top-level array schema
+  const topLevelArrayInput = formElement.querySelector('input[data-top-level-array="true"]');
+  if (topLevelArrayInput) {
+    try {
+      return JSON.parse(topLevelArrayInput.value || '[]');
+    } catch (e) {
+      console.error('Failed to parse top-level array:', e);
+      return [];
+    }
+  }
 
   // First, handle JSON hidden fields separately
   formElement.querySelectorAll('input[type="hidden"][data-json="true"]').forEach(input => {

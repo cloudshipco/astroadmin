@@ -14,6 +14,7 @@ import {
 } from '../utils/collections.js';
 import { getConfig } from '../config.js';
 import { detectPreviewRoutes, getPreviewRoute } from '../utils/routes.js';
+import { discoverStaticPages } from '../utils/page-discovery.js';
 
 const router = express.Router();
 
@@ -84,9 +85,13 @@ router.get('/', async (req, res) => {
       previewRoute: userRoutes[collection.name] || detectedRoutes[collection.name] || null,
     }));
 
+    // Discover static pages from src/pages/
+    const staticPages = await discoverStaticPages(fullConfig.paths?.projectRoot || process.cwd());
+
     res.json({
       success: true,
       collections: collectionsWithRoutes,
+      pages: staticPages,
       i18n: {
         enabled: i18nConfig.enabled,
         defaultLocale: i18nConfig.defaultLocale,

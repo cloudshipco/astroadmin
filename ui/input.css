@@ -1666,6 +1666,71 @@
   .reference-modal-actions {
     @apply flex gap-2;
   }
+
+  /* Virtual Page Info Panel */
+  .virtual-page-info {
+    @apply bg-gray-50 rounded-lg p-6;
+  }
+
+  .virtual-page-notice {
+    @apply text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-6;
+  }
+
+  .virtual-page-notice svg {
+    @apply inline-block align-text-bottom mr-1.5 text-blue-500;
+  }
+
+  .virtual-page-notice a {
+    @apply text-blue-600 underline hover:text-blue-800;
+  }
+
+  .virtual-page-details {
+    @apply space-y-3 mb-6;
+  }
+
+  .virtual-page-detail {
+    @apply flex flex-col gap-1;
+  }
+
+  .virtual-page-detail-label {
+    @apply text-xs font-medium text-gray-500 uppercase tracking-wide;
+  }
+
+  .virtual-page-detail code {
+    @apply text-sm bg-white border border-gray-200 rounded px-2 py-1.5 text-gray-700 font-mono;
+  }
+
+  .virtual-page-collections {
+    @apply pt-4 border-t border-gray-200;
+  }
+
+  .virtual-page-collections h4 {
+    @apply text-sm font-semibold text-gray-700 mb-3;
+  }
+
+  .virtual-page-no-collections {
+    @apply text-sm text-gray-500 italic;
+  }
+
+  .collection-links {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .collection-link {
+    @apply inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-primary-50 hover:border-primary-300 hover:text-primary-700 transition-all cursor-pointer;
+  }
+
+  .collection-link:hover {
+    @apply shadow-sm;
+  }
+
+  .collection-link-count {
+    @apply text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full;
+  }
+
+  .collection-link:hover .collection-link-count {
+    @apply bg-primary-100 text-primary-600;
+  }
 }
 
 @keyframes shake {

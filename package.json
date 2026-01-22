@@ -51,7 +51,8 @@
     "multer": "^2.0.2",
     "simple-git": "^3.27.0",
     "ws": "^8.18.0",
-    "zod-to-json-schema": "^3.24.0"
+    "zod-to-json-schema": "^3.24.0",
+    "@babel/parser": "^7.26.0"
   },
   "peerDependencies": {
     "astro": ">=4.0.0",
