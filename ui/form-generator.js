@@ -540,11 +540,11 @@ function generateArrayCard(item, index, itemSchema = null) {
     }
   }
 
-  // Fallback: use first string field from schema
-  if (!title && itemSchema?.properties) {
-    for (const [field, fieldSchema] of Object.entries(itemSchema.properties)) {
-      if (fieldSchema.type === 'string' && item[field]) {
-        title = String(item[field]);
+  // Fallback: use first string value from the item data
+  if (!title) {
+    for (const [field, value] of Object.entries(item)) {
+      if (typeof value === 'string' && value.trim()) {
+        title = value;
         titleField = field;
         break;
       }
@@ -1524,8 +1524,9 @@ export function setupFormHandlers(formElement, onBlockChange) {
         hiddenInput.value = JSON.stringify(items);
       }
 
-      // Re-render cards
-      cardsContainer.innerHTML = items.map((it, i) => generateArrayCard(it, i)).join('');
+      // Re-render cards with schema for proper title detection
+      const cardSchema = JSON.parse(cardsContainer.dataset.schema || '{}');
+      cardsContainer.innerHTML = items.map((it, i) => generateArrayCard(it, i, cardSchema)).join('');
 
       // Trigger change callback
       if (onBlockChange) onBlockChange();
@@ -1552,8 +1553,9 @@ export function setupFormHandlers(formElement, onBlockChange) {
       hiddenInput.value = JSON.stringify(items);
     }
 
-    // Re-render cards
-    cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i)).join('');
+    // Re-render cards with schema for proper title detection
+    const cardSchema = JSON.parse(cardsContainer.dataset.schema || '{}');
+    cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i, cardSchema)).join('');
 
     // Trigger change callback
     if (onBlockChange) onBlockChange();
@@ -1586,8 +1588,8 @@ export function setupFormHandlers(formElement, onBlockChange) {
         hiddenInput.value = JSON.stringify(items);
       }
 
-      // Re-render cards
-      cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i)).join('');
+      // Re-render cards with schema for proper title detection
+      cardsContainer.innerHTML = items.map((item, i) => generateArrayCard(item, i, schema)).join('');
 
       // Trigger change callback
       if (onBlockChange) onBlockChange();

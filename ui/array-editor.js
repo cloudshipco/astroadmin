@@ -234,11 +234,11 @@ function getItemPreview(item) {
     }
   }
 
-  // Fallback: use first string field from schema
-  if (!title && currentSchema?.properties) {
-    for (const [field, fieldSchema] of Object.entries(currentSchema.properties)) {
-      if (fieldSchema.type === 'string' && item[field]) {
-        title = String(item[field]);
+  // Fallback: use first string value from the item data
+  if (!title) {
+    for (const [field, value] of Object.entries(item)) {
+      if (typeof value === 'string' && value.trim()) {
+        title = value;
         titleField = field;
         break;
       }
