@@ -1912,18 +1912,16 @@ async function init() {
   } else if (entry?.collection && entry?.slug) {
     loadEntry(entry.collection, entry.slug, false);
   } else {
-    // Auto-select first virtual page (if any), or first content entry
-    const firstVirtualPage = allStaticPages[0];
-    if (firstVirtualPage) {
-      loadVirtualPage(firstVirtualPage.slug);
-    } else {
-      // Fall back to content entries
-      const homePage = allPages.find(p => p.collection === 'pages' && p.slug === 'home');
-      const firstPage = homePage || allPages.find(p => p.collection === 'pages') || allPages[0];
+    // Auto-select: prefer content entries over virtual pages
+    // (Virtual pages are for sites that haven't converted to content collections yet)
+    const homePage = allPages.find(p => p.collection === 'pages' && p.slug === 'home');
+    const firstPage = homePage || allPages.find(p => p.collection === 'pages') || allPages[0];
 
-      if (firstPage) {
-        loadEntry(firstPage.collection, firstPage.slug, true);
-      }
+    if (firstPage) {
+      loadEntry(firstPage.collection, firstPage.slug, true);
+    } else if (allStaticPages.length > 0) {
+      // No content entries - show virtual pages for unconverted sites
+      loadVirtualPage(allStaticPages[0].slug);
     }
   }
 }
