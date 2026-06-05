@@ -66,14 +66,10 @@ export function watchSchemaConfig() {
 
   const projectRoot = config.paths.projectRoot;
   const configPatterns = [
-    // Astro 5+ locations
     path.join(projectRoot, 'src/content.config.ts'),
     path.join(projectRoot, 'src/content.config.mts'),
     path.join(projectRoot, 'src/content.config.js'),
-    // Astro 4.x legacy locations
-    path.join(projectRoot, 'src/content/config.ts'),
-    path.join(projectRoot, 'src/content/config.mts'),
-    path.join(projectRoot, 'src/content/config.js'),
+    path.join(projectRoot, 'src/content.config.mjs'),
   ];
 
   schemaWatcher = chokidar.watch(configPatterns, {

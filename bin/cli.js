@@ -100,8 +100,10 @@ async function maybeStartAstro(projectRoot, previewUrl) {
 
   console.log('🚀 Starting Astro dev server...');
 
-  // Spawn Astro dev server
-  astroProcess = spawn('npm', ['run', 'dev'], {
+  // Spawn the Astro dev server under Bun so the content-layer loader's
+  // `bun:sqlite` import works. Sites needing a custom dev command can pass
+  // --no-astro and start their own dev server.
+  astroProcess = spawn('bunx', ['--bun', 'astro', 'dev', '--port', String(previewPort)], {
     cwd: projectRoot,
     stdio: ['inherit', 'pipe', 'pipe'],
     shell: true,

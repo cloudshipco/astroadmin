@@ -39,26 +39,30 @@ export const glob = (options) => ({
 `;
 
 /**
+ * Shim for astroadmin/loader. The real loader imports bun:sqlite (a Bun
+ * builtin esbuild can't bundle) and opens the database, so during schema
+ * parsing we replace it with a stub that only records loader metadata.
+ */
+const ASTROADMIN_LOADER_SHIM = `
+export const astroadminLoader = (options = {}) => ({
+  _type: 'db',
+  _dataType: options.type,
+});
+`;
+
+/**
  * Parse Astro content collection schemas from config.ts
  *
  * @param {string} projectRoot - Astro project root directory
  * @returns {Promise<Object>} - Collection schemas in JSON Schema format
  */
 export async function parseAstroSchemas(projectRoot) {
-  // Look for config file
-  // Astro 5+: src/content.config.ts (new convention)
-  // Astro 4.x: src/content/config.ts (legacy convention)
+  // Look for the content config file (Astro 6 convention).
   const possiblePaths = [
-    // Astro 5+ locations (check first)
     path.join(projectRoot, 'src/content.config.ts'),
     path.join(projectRoot, 'src/content.config.mts'),
     path.join(projectRoot, 'src/content.config.js'),
     path.join(projectRoot, 'src/content.config.mjs'),
-    // Astro 4.x legacy locations
-    path.join(projectRoot, 'src/content/config.ts'),
-    path.join(projectRoot, 'src/content/config.mts'),
-    path.join(projectRoot, 'src/content/config.js'),
-    path.join(projectRoot, 'src/content/config.mjs'),
   ];
 
   let configPath = null;
@@ -113,6 +117,12 @@ export async function parseAstroSchemas(projectRoot) {
               namespace: 'astro-loaders-shim',
             }));
 
+            // Intercept astroadmin/loader import (DB-backed collections)
+            build.onResolve({ filter: /^astroadmin\/loader$/ }, () => ({
+              path: 'astroadmin/loader',
+              namespace: 'astroadmin-loader-shim',
+            }));
+
             // Provide astro:content shim
             build.onLoad({ filter: /.*/, namespace: 'astro-content-shim' }, () => ({
               contents: ASTRO_CONTENT_SHIM,
@@ -123,6 +133,13 @@ export async function parseAstroSchemas(projectRoot) {
             // Provide astro/loaders shim
             build.onLoad({ filter: /.*/, namespace: 'astro-loaders-shim' }, () => ({
               contents: ASTRO_LOADERS_SHIM,
+              loader: 'js',
+              resolveDir: projectRoot,
+            }));
+
+            // Provide astroadmin/loader shim
+            build.onLoad({ filter: /.*/, namespace: 'astroadmin-loader-shim' }, () => ({
+              contents: ASTROADMIN_LOADER_SHIM,
               loader: 'js',
               resolveDir: projectRoot,
             }));
@@ -195,7 +212,7 @@ export async function parseAstroSchemas(projectRoot) {
         console.log(`📝 Collection "${name}" has no explicit schema (using empty schema)`);
         schemas[name] = {
           name,
-          type: collection.type || (loaderType === 'file' ? 'data' : 'content'),
+          type: collection.type || collection.loader?._dataType || (loaderType === 'file' ? 'data' : 'content'),
           loaderType,
           loaderFilePath,
           schema: { type: 'object', properties: {} },
@@ -224,7 +241,7 @@ export async function parseAstroSchemas(projectRoot) {
 
         schemas[name] = {
           name,
-          type: collection.type || (loaderType === 'file' ? 'data' : 'content'),
+          type: collection.type || collection.loader?._dataType || (loaderType === 'file' ? 'data' : 'content'),
           loaderType,
           loaderFilePath, // For file() loader: the JSON file path
           schema: jsonSchema,

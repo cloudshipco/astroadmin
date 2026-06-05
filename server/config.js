@@ -54,9 +54,10 @@ const defaultConfig = {
   },
 
   // Build commands
+  // Run Astro under Bun so the content-layer loader's `bun:sqlite` import works.
   build: {
-    staging: 'astro build --outDir staging-dist',
-    production: 'astro build --outDir dist',
+    staging: 'bunx --bun astro build --outDir staging-dist',
+    production: 'bunx --bun astro build --outDir dist',
   },
 
   // Authentication
@@ -194,6 +195,13 @@ export async function getConfig() {
   return deepMerge(defaultConfig, user);
 }
 
+// Resolve ASTROADMIN_DB to a concrete absolute path so every child process we
+// spawn (the Astro dev server, production builds) inherits the same content
+// store path the server uses — the co-located loader then needs zero config.
+if (!process.env.ASTROADMIN_DB) {
+  process.env.ASTROADMIN_DB = defaultConfig.database.path;
+}
+
 // Export default config for synchronous access
 // Note: This won't include user overrides until getConfig() is called
 export const config = defaultConfig;
@@ -234,14 +242,29 @@ export async function validateProject() {
     });
   }
 
-  // Check for content directory
-  const contentPath = path.join(PROJECT_ROOT, 'src/content');
-  try {
-    await fs.access(contentPath);
-  } catch {
+  // Check for a content config (Astro 6 Content Collections).
+  const contentConfigPaths = [
+    path.join(PROJECT_ROOT, 'src/content.config.ts'),
+    path.join(PROJECT_ROOT, 'src/content.config.mts'),
+    path.join(PROJECT_ROOT, 'src/content.config.js'),
+    path.join(PROJECT_ROOT, 'src/content.config.mjs'),
+  ];
+
+  let hasContentConfig = false;
+  for (const configPath of contentConfigPaths) {
+    try {
+      await fs.access(configPath);
+      hasContentConfig = true;
+      break;
+    } catch {
+      // Continue checking
+    }
+  }
+
+  if (!hasContentConfig) {
     errors.push({
-      message: 'Missing src/content directory (Content Collections not set up)',
-      hint: 'mkdir -p src/content && touch src/content/config.ts',
+      message: 'Missing src/content.config.ts (Content Collections not set up)',
+      hint: 'Create src/content.config.ts exporting your collections',
     });
   }
 
