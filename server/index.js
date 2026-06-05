@@ -20,6 +20,7 @@ import gitRouter from './api/git.js';
 import publishRouter from './api/publish.js';
 import imagesRouter from './api/images.js';
 import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collections.js';
+import { maybeAutoImport } from './utils/import-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -288,6 +289,9 @@ export async function startServer(options = {}) {
 
   // Start watching schema config for changes
   watchSchemaConfig();
+
+  // Import existing src/content into the DB on first run (when empty)
+  await maybeAutoImport();
 
   // Start server with port fallback
   const { server, port: actualPort } = await tryListen(app, port, host);

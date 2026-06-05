@@ -255,6 +255,42 @@ program
     }
   });
 
+program
+  .command('migrate')
+  .description('Import existing src/content files into the content database')
+  .option('--project <path>', 'Astro project root directory', process.cwd())
+  .action(async (options) => {
+    const projectRoot = path.resolve(options.project);
+    process.env.ASTROADMIN_PROJECT_ROOT = projectRoot;
+    console.log(`\n📁 Project root: ${projectRoot}`);
+
+    try {
+      const { validateProject } = await import('../server/config.js');
+      const validation = await validateProject();
+      if (!validation.valid) {
+        console.error('\n❌ Invalid Astro project:\n');
+        validation.errors.forEach((err) => {
+          console.error(`   • ${err.message}`);
+          if (err.hint) console.error(`     → ${err.hint}`);
+        });
+        process.exit(1);
+      }
+
+      const { importFiles } = await import('../server/utils/import-files.js');
+      console.log('📥 Importing src/content into the content store...\n');
+      const summary = await importFiles();
+      for (const [name, count] of Object.entries(summary.collections)) {
+        console.log(`   ${name}: ${count}`);
+      }
+      console.log(`\n✅ Imported ${summary.total} entries into the content database.`);
+      process.exit(0);
+    } catch (error) {
+      console.error('❌ Migration failed:', error.message);
+      if (process.env.DEBUG) console.error(error.stack);
+      process.exit(1);
+    }
+  });
+
 // If no command specified, show help
 if (!process.argv.slice(2).length) {
   program.outputHelp();
