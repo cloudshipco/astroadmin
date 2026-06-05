@@ -112,6 +112,23 @@ const defaultConfig = {
     max: IS_DEV ? 1000 : 100, // Loose in dev, strict in prod
   },
 
+  // Deployment configuration
+  // When configured, the publish flow will: git commit + push → build → deploy
+  // Supported adapters: 'rsync' (more coming: 's3', 'ftp', 'vercel', 'netlify')
+  deploy: {
+    adapter: null, // Set to 'rsync' to enable deployment
+    // rsync adapter configuration
+    rsync: {
+      path: null,           // Required: destination path (e.g., '/var/www/mysite/public')
+      host: null,           // Optional: hostname for remote deploy (omit for local)
+      user: null,           // Required if host is set: SSH username (e.g., 'deploy')
+      port: 22,             // SSH port (remote only)
+      keyPath: null,        // Optional: path to SSH key (e.g., '~/.ssh/deploy_key')
+      exclude: [],          // Optional: patterns to exclude (e.g., ['.git', 'node_modules'])
+      dryRun: false,        // Optional: test without making changes
+    },
+  },
+
   // Internationalization (i18n)
   // When enabled, content files use locale suffixes: page.en.md, page.fr.md
   i18n: {

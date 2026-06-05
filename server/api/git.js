@@ -5,11 +5,54 @@
 
 import express from 'express';
 import path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import simpleGit from 'simple-git';
-import { config } from '../config.js';
+import { config, getConfig } from '../config.js';
+import { deploy, validateDeployConfig } from '../utils/deploy.js';
+
+const execAsync = promisify(exec);
 
 const router = express.Router();
 const git = simpleGit(config.paths.projectRoot);
+
+/**
+ * Run production build for deployment
+ * @returns {Promise<{success: boolean, duration: number, output?: string, error?: string}>}
+ */
+async function runProductionBuild() {
+  console.log('🔨 Starting production build for deployment...');
+  const startTime = Date.now();
+
+  try {
+    const fullConfig = await getConfig();
+    const buildCommand = fullConfig.build?.production || 'astro build --outDir dist';
+
+    const { stdout, stderr } = await execAsync(buildCommand, {
+      cwd: config.paths.projectRoot,
+      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+    });
+
+    const duration = Date.now() - startTime;
+    console.log(`✅ Production build completed in ${duration}ms`);
+
+    return {
+      success: true,
+      duration,
+      output: (stdout + stderr).slice(-1000),
+    };
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error('❌ Production build failed:', error.message);
+
+    return {
+      success: false,
+      duration,
+      error: error.message,
+      output: (error.stdout || '') + (error.stderr || ''),
+    };
+  }
+}
 
 /**
  * Allowed directories for git file operations (relative to project root).
@@ -256,12 +299,30 @@ router.post('/push', async (req, res) => {
 
 /**
  * POST /api/git/publish
- * Commit any uncommitted changes and push to remote
+ * Commit any uncommitted changes, push to remote, build, and optionally deploy
+ *
+ * Pipeline: git commit + push → build → deploy (if configured)
  */
 router.post('/publish', async (req, res) => {
   try {
     const { message } = req.body;
     const commitMessage = message?.trim() || 'Content update';
+
+    // Load full config to check deploy settings
+    const fullConfig = await getConfig();
+    const deployConfig = fullConfig.deploy;
+
+    // Validate deploy config if present
+    if (deployConfig?.adapter) {
+      const validation = validateDeployConfig(deployConfig);
+      if (!validation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid deploy configuration',
+          details: validation.errors,
+        });
+      }
+    }
 
     // Check for uncommitted changes
     const status = await git.status();
@@ -296,6 +357,64 @@ router.post('/publish', async (req, res) => {
     await git.push();
     console.log('✅ Pushed to remote');
 
+    // Build and deploy result containers
+    let buildResult = null;
+    let deployResult = null;
+
+    // If deploy adapter is configured, run build + deploy pipeline
+    if (deployConfig?.adapter) {
+      console.log('📦 Deploy adapter configured, starting build + deploy pipeline...');
+
+      // Step 1: Run production build
+      buildResult = await runProductionBuild();
+
+      if (!buildResult.success) {
+        // Build failed - return partial success (git worked, build failed)
+        return res.json({
+          success: false,
+          committed,
+          pushed: true,
+          commit: commitResult ? {
+            hash: commitResult.commit,
+            summary: commitResult.summary,
+          } : null,
+          build: buildResult,
+          deploy: null,
+          message: 'Published to git, but build failed',
+          error: 'Build failed - deployment skipped',
+        });
+      }
+
+      // Step 2: Deploy
+      try {
+        deployResult = await deploy(deployConfig, config.paths.projectRoot);
+        console.log('✅ Deployment completed');
+      } catch (deployError) {
+        // Deploy failed - return partial success
+        return res.json({
+          success: false,
+          committed,
+          pushed: true,
+          commit: commitResult ? {
+            hash: commitResult.commit,
+            summary: commitResult.summary,
+          } : null,
+          build: buildResult,
+          deploy: {
+            success: false,
+            error: deployError.message,
+          },
+          message: 'Published to git and built, but deployment failed',
+          error: deployError.message,
+        });
+      }
+    }
+
+    // Full success response
+    const responseMessage = deployResult
+      ? (committed ? 'Changes committed, pushed, built, and deployed' : 'Pushed, built, and deployed')
+      : (committed ? 'Changes committed and published' : 'Published (no new changes to commit)');
+
     res.json({
       success: true,
       committed,
@@ -304,9 +423,9 @@ router.post('/publish', async (req, res) => {
         hash: commitResult.commit,
         summary: commitResult.summary,
       } : null,
-      message: committed
-        ? 'Changes committed and published'
-        : 'Published (no new changes to commit)',
+      build: buildResult,
+      deploy: deployResult,
+      message: responseMessage,
     });
   } catch (error) {
     console.error('Error publishing:', error);

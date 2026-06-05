@@ -152,3 +152,4 @@ Ensure the file is named exactly `astroadmin.config.js` (not `.ts` or `.mjs`) an
 
 - [Getting Started](./getting-started.md) - Run AstroAdmin
 - [Content Collections](./content-collections.md) - Set up schemas
+- [Deploy Adapters](./deploy-adapters.md) - Auto-deploy on publish
