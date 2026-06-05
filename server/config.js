@@ -129,6 +129,14 @@ const defaultConfig = {
     },
   },
 
+  // Content database (SQLite via bun:sqlite)
+  // Single source of truth for content entries. The site's content-layer
+  // loader reads this same file at build time (co-located per site).
+  database: {
+    path: process.env.ASTROADMIN_DB || path.join(PROJECT_ROOT, '.astroadmin/content.db'),
+    autoImportOnEmpty: true, // import existing src/content on first run (Phase 7)
+  },
+
   // Internationalization (i18n)
   // When enabled, content files use locale suffixes: page.en.md, page.fr.md
   i18n: {

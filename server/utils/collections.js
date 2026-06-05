@@ -5,11 +5,11 @@
  * Now uses dynamic schema parsing from config.ts
  */
 
-import fs from 'fs/promises';
 import path from 'path';
 import chokidar from 'chokidar';
 import { config } from '../config.js';
 import { parseAstroSchemas } from './schema-parser.js';
+import { listSlugs, distinctCollections, getCollectionTypeFromDb } from './db.js';
 
 // Cache for parsed schemas
 let cachedSchemas = null;
@@ -106,106 +106,31 @@ export async function getCollectionNames() {
   } catch (error) {
     console.error('Error loading schemas for collection names:', error);
 
-    // Fallback to reading directories if schema parsing fails
+    // Fallback to collections present in the content database
     try {
-      const contentDir = config.paths.content;
-      const entries = await fs.readdir(contentDir, { withFileTypes: true });
-
-      const collections = entries
-        .filter(entry => entry.isDirectory())
-        .map(entry => entry.name);
-
-      return collections;
+      return distinctCollections();
     } catch (fallbackError) {
-      console.error('Error reading collections directory:', fallbackError);
+      console.error('Error reading collections from database:', fallbackError);
       return [];
     }
   }
 }
 
 /**
- * Get all entry slugs for a collection
+ * Get all entry slugs for a collection.
+ *
+ * Slugs are stored in the content database without a locale suffix, so i18n
+ * deduplication is inherent (one row per slug+locale, SELECT DISTINCT slug).
+ * The file()-vs-glob distinction no longer affects listing — both are rows;
+ * file collections keep their original array order via the `position` column.
+ *
  * @param {string} collectionName - Collection name
- * @param {object} options - { i18nEnabled: boolean, locales: string[] }
  */
-export async function getCollectionEntries(collectionName, options = {}) {
+export async function getCollectionEntries(collectionName) {
   try {
-    // First, check if this is a file-based collection
-    const schemas = await loadSchemas();
-    const collectionSchema = schemas[collectionName];
-
-    if (collectionSchema?.loaderType === 'file' && collectionSchema.loaderFilePath) {
-      // File-based collection: read entries from the JSON file
-      return await getFileCollectionEntries(collectionSchema.loaderFilePath);
-    }
-
-    // Directory-based collection (glob loader)
-    const collectionDir = path.join(config.paths.content, collectionName);
-
-    // Check if directory exists
-    try {
-      await fs.access(collectionDir);
-    } catch {
-      return [];
-    }
-
-    const entries = await fs.readdir(collectionDir);
-
-    // Filter for .md, .mdx, and .json files
-    const contentFiles = entries.filter(file =>
-      file.endsWith('.md') ||
-      file.endsWith('.mdx') ||
-      file.endsWith('.json')
-    );
-
-    // When i18n is enabled, deduplicate entries by base slug
-    // e.g., home.en.md and home.fr.md both become "home"
-    if (options.i18nEnabled && options.locales?.length > 1) {
-      // Build regex to match locale suffixes: .en, .fr, etc.
-      const localePattern = new RegExp(`\\.(${options.locales.join('|')})$`, 'i');
-
-      const baseSlugs = contentFiles.map(file => {
-        const ext = path.extname(file);
-        const nameWithoutExt = path.basename(file, ext);
-        // Remove locale suffix if present
-        return nameWithoutExt.replace(localePattern, '');
-      });
-
-      // Deduplicate
-      return [...new Set(baseSlugs)];
-    }
-
-    // Non-i18n: return slugs as-is (including locale suffix if any)
-    const slugs = contentFiles.map(file => {
-      const ext = path.extname(file);
-      return path.basename(file, ext);
-    });
-
-    return slugs;
+    return listSlugs(collectionName);
   } catch (error) {
     console.error(`Error reading collection ${collectionName}:`, error);
-    return [];
-  }
-}
-
-/**
- * Get entries from a file-based collection (JSON file with array of objects)
- * @param {string} filePath - Path to the JSON file (relative to project root)
- */
-async function getFileCollectionEntries(filePath) {
-  try {
-    const fullPath = path.join(config.paths.projectRoot, filePath);
-    const content = await fs.readFile(fullPath, 'utf-8');
-    const data = JSON.parse(content);
-
-    // File collections are arrays of objects with an 'id' field
-    if (Array.isArray(data)) {
-      return data.map(item => item.id || item.slug || String(data.indexOf(item)));
-    }
-
-    return [];
-  } catch (error) {
-    console.error(`Error reading file collection ${filePath}:`, error);
     return [];
   }
 }
@@ -247,17 +172,12 @@ export async function getCollectionType(collectionName) {
       return schemas[collectionName].type || 'content';
     }
   } catch {
-    // Fall back to file-based detection
+    // Fall back to database inspection
   }
 
-  // File-based heuristic
-  const collectionDir = path.join(config.paths.content, collectionName);
-
+  // Infer from any stored entry's type
   try {
-    const entries = await fs.readdir(collectionDir);
-    const hasMarkdown = entries.some(file => file.endsWith('.md') || file.endsWith('.mdx'));
-
-    return hasMarkdown ? 'content' : 'data';
+    return getCollectionTypeFromDb(collectionName) || 'content';
   } catch {
     return 'content'; // Default
   }

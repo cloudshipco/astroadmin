@@ -1,40 +1,58 @@
 /**
  * Content utility
- * Read and write content files (markdown, JSON)
- * Supports both glob (directory) and file (JSON array) loaders
+ * Read and write content entries.
+ *
+ * Content is stored in the SQLite content store (server/utils/db.js), not on
+ * disk. The Astro site reads the same database at build time via the
+ * content-layer loader (loader/index.js).
+ *
+ * Public signatures and return shapes are preserved from the previous
+ * file-backed implementation so server/api/content.js and collections.js keep
+ * working unchanged:
+ *   - readContent  -> { type, data, body, filePath, locale }
+ *   - writeContent -> { filePath, locale }
+ *   - deleteContent -> { deleted, locale }
+ *   - contentExists -> boolean
+ *   - getAvailableLocales -> string[]
+ *
+ * `filePath` no longer points at a file; it is a synthetic logical id kept for
+ * API/UI compatibility.
  */
 
-import fs from 'fs/promises';
 import path from 'path';
-import matter from 'gray-matter';
-import { config } from '../config.js';
 import { loadSchemas } from './collections.js';
+import {
+  getEntry,
+  upsertEntry,
+  deleteEntry,
+  entryExists,
+  listLocales,
+  maxPosition,
+  computeDigest,
+  touchSentinel,
+} from './db.js';
 
 /**
- * Check if a collection uses a file loader (JSON array)
+ * Look up storage-relevant metadata for a collection from the parsed schema.
+ * File collections (Astro's file() loader) are always locale-less and store an
+ * `id` field inside their data, matching the previous JSON-array behaviour.
  * @param {string} collection - Collection name
- * @returns {Promise<{isFile: boolean, filePath?: string}>}
+ * @returns {Promise<{isFile: boolean, type?: string}>}
  */
 async function getCollectionLoaderInfo(collection) {
   try {
     const schemas = await loadSchemas();
     const schema = schemas[collection];
-
-    if (schema?.loaderType === 'file' && schema.loaderFilePath) {
-      return {
-        isFile: true,
-        filePath: path.join(config.paths.projectRoot, schema.loaderFilePath),
-      };
-    }
+    return { isFile: schema?.loaderType === 'file', type: schema?.type };
   } catch (error) {
     console.warn(`Could not get loader info for ${collection}:`, error.message);
+    return { isFile: false };
   }
-
-  return { isFile: false };
 }
 
 /**
- * Sanitize file path to prevent directory traversal attacks
+ * Sanitize a collection/slug value to prevent traversal-style ids.
+ * Defense-in-depth: the values are db keys now, not paths, but keep the guard.
  */
 function sanitizePath(userPath) {
   const normalized = path.normalize(userPath);
@@ -47,49 +65,10 @@ function sanitizePath(userPath) {
 }
 
 /**
- * Get the full path to a content file
- * @param {string} collection - Collection name
- * @param {string} slug - Entry slug (without locale suffix)
- * @param {string|null} locale - Locale code (null for non-i18n sites)
+ * Build the synthetic logical id returned as `filePath`.
  */
-function getContentPath(collection, slug, locale = null) {
-  const sanitizedCollection = sanitizePath(collection);
-  const sanitizedSlug = sanitizePath(slug);
-
-  const contentDir = config.paths.content;
-  const collectionPath = path.join(contentDir, sanitizedCollection);
-
-  // Build filename based on whether locale is provided
-  // With locale: slug.locale (e.g., "home.en")
-  // Without locale: slug (e.g., "home")
-  const baseSlug = locale ? `${sanitizedSlug}.${locale}` : sanitizedSlug;
-
-  // Try different extensions
-  const extensions = ['.md', '.mdx', '.json'];
-
-  return {
-    directory: collectionPath,
-    possiblePaths: extensions.map(ext =>
-      path.join(collectionPath, baseSlug + ext)
-    ),
-    baseSlug: sanitizedSlug,
-    locale,
-  };
-}
-
-/**
- * Find which file extension exists for a slug
- */
-async function findExistingFile(possiblePaths) {
-  for (const filePath of possiblePaths) {
-    try {
-      await fs.access(filePath);
-      return filePath;
-    } catch {
-      // File doesn't exist, try next
-    }
-  }
-  return null;
+function logicalId(collection, slug, locale) {
+  return `db:${collection}/${slug}${locale ? `.${locale}` : ''}`;
 }
 
 /**
@@ -99,74 +78,25 @@ async function findExistingFile(possiblePaths) {
  * @param {string|null} locale - Locale code (null for non-i18n sites)
  */
 export async function readContent(collection, slug, locale = null) {
-  // Check if this is a file-based collection
-  const loaderInfo = await getCollectionLoaderInfo(collection);
+  sanitizePath(collection);
+  sanitizePath(slug);
 
-  if (loaderInfo.isFile) {
-    // File-based collection: read from JSON array
-    return await readFileCollectionEntry(loaderInfo.filePath, slug);
-  }
+  const { isFile } = await getCollectionLoaderInfo(collection);
+  const effectiveLocale = isFile ? null : locale;
 
-  // Glob-based collection: read from directory
-  const { possiblePaths } = getContentPath(collection, slug, locale);
-  const filePath = await findExistingFile(possiblePaths);
+  const row = getEntry(collection, slug, effectiveLocale);
 
-  if (!filePath) {
-    const localeHint = locale ? ` (${locale})` : '';
+  if (!row) {
+    const localeHint = effectiveLocale ? ` (${effectiveLocale})` : '';
     throw new Error(`Content not found: ${collection}/${slug}${localeHint}`);
   }
 
-  const content = await fs.readFile(filePath, 'utf-8');
-  const ext = path.extname(filePath);
-
-  if (ext === '.json') {
-    // JSON data collection
-    return {
-      type: 'data',
-      data: JSON.parse(content),
-      body: null,
-      filePath,
-      locale,
-    };
-  } else {
-    // Markdown content collection
-    const parsed = matter(content);
-
-    return {
-      type: 'content',
-      data: parsed.data,
-      body: parsed.content,
-      filePath,
-      locale,
-    };
-  }
-}
-
-/**
- * Read an entry from a file-based (JSON array) collection
- * @param {string} filePath - Path to the JSON file
- * @param {string} entryId - Entry ID to find
- */
-async function readFileCollectionEntry(filePath, entryId) {
-  const content = await fs.readFile(filePath, 'utf-8');
-  const data = JSON.parse(content);
-
-  if (!Array.isArray(data)) {
-    throw new Error(`File collection is not an array: ${filePath}`);
-  }
-
-  const entry = data.find(item => item.id === entryId || item.slug === entryId);
-
-  if (!entry) {
-    throw new Error(`Entry not found in file collection: ${entryId}`);
-  }
-
   return {
-    type: 'data',
-    data: entry,
-    body: null,
-    filePath,
-    locale: null,
+    type: row.type,
+    data: JSON.parse(row.data),
+    body: row.body ?? null,
+    filePath: logicalId(collection, slug, effectiveLocale),
+    locale: effectiveLocale,
   };
 }
 
@@ -178,72 +108,47 @@ async function readFileCollectionEntry(filePath, entryId) {
  * @param {string|null} locale - Locale code (null for non-i18n sites)
  */
 export async function writeContent(collection, slug, { data, body, type }, locale = null) {
-  // Check if this is a file-based collection
-  const loaderInfo = await getCollectionLoaderInfo(collection);
+  sanitizePath(collection);
+  sanitizePath(slug);
 
-  if (loaderInfo.isFile) {
-    // File-based collection: update entry in JSON array
-    return await writeFileCollectionEntry(loaderInfo.filePath, slug, data);
+  const { isFile } = await getCollectionLoaderInfo(collection);
+  const effectiveLocale = isFile ? null : locale;
+
+  let storedData = data;
+  let storedType = type || (isFile ? 'data' : 'content');
+  let storedBody = storedType === 'data' ? null : body || '';
+  let position = null;
+
+  if (isFile) {
+    // File collections store the id inside data and preserve array order.
+    storedData = { ...data, id: slug };
+    storedType = 'data';
+    storedBody = null;
+
+    const existing = getEntry(collection, slug, null);
+    position =
+      existing && existing.position !== null && existing.position !== undefined
+        ? existing.position
+        : (maxPosition(collection) ?? -1) + 1;
   }
 
-  // Glob-based collection: write to directory
-  const { directory } = getContentPath(collection, slug, locale);
+  const dataJson = JSON.stringify(storedData);
+  const digest = computeDigest(dataJson, storedBody);
 
-  // Ensure collection directory exists
-  await fs.mkdir(directory, { recursive: true });
+  upsertEntry({
+    collection,
+    slug,
+    locale: effectiveLocale,
+    type: storedType,
+    data: dataJson,
+    body: storedBody,
+    position,
+    digest,
+  });
 
-  // Build filename with locale if provided
-  const sanitizedSlug = sanitizePath(slug);
-  const baseSlug = locale ? `${sanitizedSlug}.${locale}` : sanitizedSlug;
+  touchSentinel();
 
-  // Determine file path
-  let filePath;
-  let content;
-
-  if (type === 'data') {
-    // JSON file
-    filePath = path.join(directory, `${baseSlug}.json`);
-    content = JSON.stringify(data, null, 2);
-  } else {
-    // Markdown file
-    filePath = path.join(directory, `${baseSlug}.md`);
-    content = matter.stringify(body || '', data);
-  }
-
-  await fs.writeFile(filePath, content, 'utf-8');
-
-  return { filePath, locale };
-}
-
-/**
- * Write an entry to a file-based (JSON array) collection
- * @param {string} filePath - Path to the JSON file
- * @param {string} entryId - Entry ID to update (or create)
- * @param {object} entryData - Entry data to write
- */
-async function writeFileCollectionEntry(filePath, entryId, entryData) {
-  const content = await fs.readFile(filePath, 'utf-8');
-  const data = JSON.parse(content);
-
-  if (!Array.isArray(data)) {
-    throw new Error(`File collection is not an array: ${filePath}`);
-  }
-
-  // Find existing entry index
-  const existingIndex = data.findIndex(item => item.id === entryId || item.slug === entryId);
-
-  if (existingIndex >= 0) {
-    // Update existing entry (preserve position)
-    data[existingIndex] = { ...entryData, id: entryId };
-  } else {
-    // Add new entry
-    data.push({ ...entryData, id: entryId });
-  }
-
-  // Write back the entire JSON file
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
-
-  return { filePath, locale: null };
+  return { filePath: logicalId(collection, slug, effectiveLocale), locale: effectiveLocale };
 }
 
 /**
@@ -253,55 +158,22 @@ async function writeFileCollectionEntry(filePath, entryId, entryData) {
  * @param {string|null} locale - Locale code (null for non-i18n sites)
  */
 export async function deleteContent(collection, slug, locale = null) {
-  // Check if this is a file-based collection
-  const loaderInfo = await getCollectionLoaderInfo(collection);
+  sanitizePath(collection);
+  sanitizePath(slug);
 
-  if (loaderInfo.isFile) {
-    // File-based collection: remove entry from JSON array
-    return await deleteFileCollectionEntry(loaderInfo.filePath, slug);
-  }
+  const { isFile } = await getCollectionLoaderInfo(collection);
+  const effectiveLocale = isFile ? null : locale;
 
-  // Glob-based collection: delete file
-  const { possiblePaths } = getContentPath(collection, slug, locale);
-  const filePath = await findExistingFile(possiblePaths);
+  const changes = deleteEntry(collection, slug, effectiveLocale);
 
-  if (!filePath) {
-    const localeHint = locale ? ` (${locale})` : '';
+  if (changes === 0) {
+    const localeHint = effectiveLocale ? ` (${effectiveLocale})` : '';
     throw new Error(`Content not found: ${collection}/${slug}${localeHint}`);
   }
 
-  await fs.unlink(filePath);
+  touchSentinel();
 
-  return { deleted: filePath, locale };
-}
-
-/**
- * Delete an entry from a file-based (JSON array) collection
- * @param {string} filePath - Path to the JSON file
- * @param {string} entryId - Entry ID to delete
- */
-async function deleteFileCollectionEntry(filePath, entryId) {
-  const content = await fs.readFile(filePath, 'utf-8');
-  const data = JSON.parse(content);
-
-  if (!Array.isArray(data)) {
-    throw new Error(`File collection is not an array: ${filePath}`);
-  }
-
-  // Find existing entry index
-  const existingIndex = data.findIndex(item => item.id === entryId || item.slug === entryId);
-
-  if (existingIndex < 0) {
-    throw new Error(`Entry not found in file collection: ${entryId}`);
-  }
-
-  // Remove entry
-  data.splice(existingIndex, 1);
-
-  // Write back the entire JSON file
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
-
-  return { deleted: filePath, locale: null };
+  return { deleted: logicalId(collection, slug, effectiveLocale), locale: effectiveLocale };
 }
 
 /**
@@ -311,38 +183,9 @@ async function deleteFileCollectionEntry(filePath, entryId) {
  * @param {string|null} locale - Locale code (null for non-i18n sites)
  */
 export async function contentExists(collection, slug, locale = null) {
-  // Check if this is a file-based collection
-  const loaderInfo = await getCollectionLoaderInfo(collection);
-
-  if (loaderInfo.isFile) {
-    // File-based collection: check if entry exists in JSON array
-    return await fileCollectionEntryExists(loaderInfo.filePath, slug);
-  }
-
-  // Glob-based collection: check if file exists
-  const { possiblePaths } = getContentPath(collection, slug, locale);
-  const filePath = await findExistingFile(possiblePaths);
-  return filePath !== null;
-}
-
-/**
- * Check if an entry exists in a file-based (JSON array) collection
- * @param {string} filePath - Path to the JSON file
- * @param {string} entryId - Entry ID to check
- */
-async function fileCollectionEntryExists(filePath, entryId) {
-  try {
-    const content = await fs.readFile(filePath, 'utf-8');
-    const data = JSON.parse(content);
-
-    if (!Array.isArray(data)) {
-      return false;
-    }
-
-    return data.some(item => item.id === entryId || item.slug === entryId);
-  } catch {
-    return false;
-  }
+  const { isFile } = await getCollectionLoaderInfo(collection);
+  const effectiveLocale = isFile ? null : locale;
+  return entryExists(collection, slug, effectiveLocale);
 }
 
 /**
@@ -353,14 +196,6 @@ async function fileCollectionEntryExists(filePath, entryId) {
  * @returns {Promise<string[]>} - Array of available locale codes
  */
 export async function getAvailableLocales(collection, baseSlug, configuredLocales) {
-  const available = [];
-
-  for (const locale of configuredLocales) {
-    const exists = await contentExists(collection, baseSlug, locale);
-    if (exists) {
-      available.push(locale);
-    }
-  }
-
-  return available;
+  const present = listLocales(collection, baseSlug);
+  return configuredLocales.filter((locale) => present.includes(locale));
 }
