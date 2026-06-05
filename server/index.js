@@ -17,6 +17,7 @@ import collectionsRouter from './api/collections.js';
 import contentRouter from './api/content.js';
 import buildRouter from './api/build.js';
 import gitRouter from './api/git.js';
+import publishRouter from './api/publish.js';
 import imagesRouter from './api/images.js';
 import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collections.js';
 
@@ -175,7 +176,12 @@ export async function createServer() {
   app.use('/api/collections', requireAuth, collectionsRouter);
   app.use('/api/content', requireAuth, contentRouter);
   app.use('/api/build', requireAuth, buildRouter);
-  app.use('/api/git', requireAuth, gitRouter);
+  app.use('/api/publish', requireAuth, publishRouter);
+  // Git endpoints are only mounted when git is enabled. Publishing does not
+  // require git — use /api/publish (the git router's /publish is an alias).
+  if (config.git.enabled) {
+    app.use('/api/git', requireAuth, gitRouter);
+  }
   app.use('/api/images', requireAuth, imagesRouter);
 
   // Page routes (BEFORE static middleware to take precedence)

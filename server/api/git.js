@@ -5,60 +5,19 @@
 
 import express from 'express';
 import path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import simpleGit from 'simple-git';
-import { config, getConfig } from '../config.js';
-import { deploy, validateDeployConfig } from '../utils/deploy.js';
-
-const execAsync = promisify(exec);
+import { config } from '../config.js';
+import { publishHandler } from './publish.js';
 
 const router = express.Router();
 const git = simpleGit(config.paths.projectRoot);
 
 /**
- * Run production build for deployment
- * @returns {Promise<{success: boolean, duration: number, output?: string, error?: string}>}
- */
-async function runProductionBuild() {
-  console.log('🔨 Starting production build for deployment...');
-  const startTime = Date.now();
-
-  try {
-    const fullConfig = await getConfig();
-    const buildCommand = fullConfig.build?.production || 'astro build --outDir dist';
-
-    const { stdout, stderr } = await execAsync(buildCommand, {
-      cwd: config.paths.projectRoot,
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-    });
-
-    const duration = Date.now() - startTime;
-    console.log(`✅ Production build completed in ${duration}ms`);
-
-    return {
-      success: true,
-      duration,
-      output: (stdout + stderr).slice(-1000),
-    };
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error('❌ Production build failed:', error.message);
-
-    return {
-      success: false,
-      duration,
-      error: error.message,
-      output: (error.stdout || '') + (error.stderr || ''),
-    };
-  }
-}
-
-/**
  * Allowed directories for git file operations (relative to project root).
- * These match the directories staged by /publish endpoint.
+ * Content now lives in the SQLite store, so src/content is intentionally
+ * excluded — git operations are limited to the editable asset paths.
  */
-const ALLOWED_GIT_PATHS = ['src/content', 'src/styles', 'public/images'];
+const ALLOWED_GIT_PATHS = ['src/styles', 'public/images'];
 
 /**
  * Validate that a file path is within allowed directories.
@@ -176,9 +135,9 @@ router.post('/commit', async (req, res) => {
       });
     }
 
-    // Add files (default to content directory if not specified)
-    // Validate custom file paths if provided; defaults are pre-approved
-    const filesToAdd = files ? validateFilePaths(files) : ['src/content/'];
+    // Add files (default to configured asset paths if not specified).
+    // Validate custom file paths if provided; defaults are pre-approved.
+    const filesToAdd = files ? validateFilePaths(files) : (config.git.paths || ['src/styles/', 'public/images/']);
     await git.add(filesToAdd);
 
     // Commit
@@ -299,143 +258,11 @@ router.post('/push', async (req, res) => {
 
 /**
  * POST /api/git/publish
- * Commit any uncommitted changes, push to remote, build, and optionally deploy
- *
- * Pipeline: git commit + push → build → deploy (if configured)
+ * Backwards-compatible alias for POST /api/publish. The publish pipeline
+ * (git pre-step -> build -> deploy) lives in api/publish.js; this alias is only
+ * mounted when git is enabled.
  */
-router.post('/publish', async (req, res) => {
-  try {
-    const { message } = req.body;
-    const commitMessage = message?.trim() || 'Content update';
-
-    // Load full config to check deploy settings
-    const fullConfig = await getConfig();
-    const deployConfig = fullConfig.deploy;
-
-    // Validate deploy config if present
-    if (deployConfig?.adapter) {
-      const validation = validateDeployConfig(deployConfig);
-      if (!validation.valid) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid deploy configuration',
-          details: validation.errors,
-        });
-      }
-    }
-
-    // Check for uncommitted changes
-    const status = await git.status();
-    const hasChanges = status.modified.length > 0 ||
-                       status.created.length > 0 ||
-                       status.deleted.length > 0 ||
-                       status.staged.length > 0;
-
-    let committed = false;
-    let commitResult = null;
-
-    // Pull any remote changes first (rebase to keep history clean)
-    try {
-      await git.pull(['--rebase']);
-      console.log('✅ Pulled latest changes');
-    } catch (pullError) {
-      // Ignore if nothing to pull or not tracking
-      console.log('Pull skipped:', pullError.message);
-    }
-
-    if (hasChanges) {
-      // Stage all content changes
-      await git.add(['src/content/', 'src/styles/', 'public/images/']);
-
-      // Commit
-      commitResult = await git.commit(commitMessage);
-      committed = true;
-      console.log(`✅ Committed: ${commitMessage}`);
-    }
-
-    // Push to remote
-    await git.push();
-    console.log('✅ Pushed to remote');
-
-    // Build and deploy result containers
-    let buildResult = null;
-    let deployResult = null;
-
-    // If deploy adapter is configured, run build + deploy pipeline
-    if (deployConfig?.adapter) {
-      console.log('📦 Deploy adapter configured, starting build + deploy pipeline...');
-
-      // Step 1: Run production build
-      buildResult = await runProductionBuild();
-
-      if (!buildResult.success) {
-        // Build failed - return partial success (git worked, build failed)
-        return res.json({
-          success: false,
-          committed,
-          pushed: true,
-          commit: commitResult ? {
-            hash: commitResult.commit,
-            summary: commitResult.summary,
-          } : null,
-          build: buildResult,
-          deploy: null,
-          message: 'Published to git, but build failed',
-          error: 'Build failed - deployment skipped',
-        });
-      }
-
-      // Step 2: Deploy
-      try {
-        deployResult = await deploy(deployConfig, config.paths.projectRoot);
-        console.log('✅ Deployment completed');
-      } catch (deployError) {
-        // Deploy failed - return partial success
-        return res.json({
-          success: false,
-          committed,
-          pushed: true,
-          commit: commitResult ? {
-            hash: commitResult.commit,
-            summary: commitResult.summary,
-          } : null,
-          build: buildResult,
-          deploy: {
-            success: false,
-            error: deployError.message,
-          },
-          message: 'Published to git and built, but deployment failed',
-          error: deployError.message,
-        });
-      }
-    }
-
-    // Full success response
-    const responseMessage = deployResult
-      ? (committed ? 'Changes committed, pushed, built, and deployed' : 'Pushed, built, and deployed')
-      : (committed ? 'Changes committed and published' : 'Published (no new changes to commit)');
-
-    res.json({
-      success: true,
-      committed,
-      pushed: true,
-      commit: commitResult ? {
-        hash: commitResult.commit,
-        summary: commitResult.summary,
-      } : null,
-      build: buildResult,
-      deploy: deployResult,
-      message: responseMessage,
-    });
-  } catch (error) {
-    console.error('Error publishing:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to publish',
-      message: error.message,
-    });
-  }
-});
+router.post('/publish', publishHandler);
 
 /**
  * GET /api/git/diff

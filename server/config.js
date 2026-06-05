@@ -80,10 +80,15 @@ const defaultConfig = {
   } : null,
 
   // Git integration
+  // Content lives in the SQLite store, so publishing no longer requires git.
+  // When enabled, publish stages only these asset paths (never src/content);
+  // the binary content DB is committed only when includeDb is true.
   git: {
     enabled: process.env.GIT_ENABLED !== 'false',
     autoCommit: IS_PROD,  // Auto-commit in production, manual in dev
     autoPush: process.env.GIT_AUTO_PUSH === 'true',
+    paths: ['src/styles/', 'public/images/'],
+    includeDb: false,
   },
 
   // Webhook (production only)
