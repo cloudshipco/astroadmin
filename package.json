@@ -20,6 +20,7 @@
     "watch:css": "tailwindcss -i ./ui/input.css -o ./ui/styles.css --watch",
     "test": "bun tests/api.test.js",
     "test:watch": "bun --watch tests/api.test.js",
+    "test:unit": "rm -rf /tmp/aa-unit-cs /tmp/aa-unit-loader /tmp/aa-unit-pub; mkdir -p /tmp/aa-unit-cs /tmp/aa-unit-loader /tmp/aa-unit-pub; ASTROADMIN_PROJECT_ROOT=/tmp/aa-unit-cs ASTROADMIN_DB=/tmp/aa-unit-cs/content.db bun tests/content-store.test.js && ASTROADMIN_PROJECT_ROOT=/tmp/aa-unit-loader ASTROADMIN_DB=/tmp/aa-unit-loader/content.db bun tests/loader.test.js && bun tests/schema-parser-db.test.js && bun tests/deploy.test.js && GIT_ENABLED=false ASTROADMIN_PROJECT_ROOT=/tmp/aa-unit-pub ASTROADMIN_DB=/tmp/aa-unit-pub/content.db bun tests/publish-api.test.js",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed"

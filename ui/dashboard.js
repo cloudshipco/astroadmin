@@ -18,6 +18,7 @@ let allStaticPages = []; // Store discovered static pages (virtual pages)
 let isNewEntry = false; // Track if current entry is new (unsaved)
 let isVirtualPage = false; // Track if current view is a virtual page
 let selectedPreviewBlock = null; // For component preview: which block to render with
+let gitEnabled = true; // Whether git integration is enabled (from /api/config)
 
 // i18n state
 let i18nConfig = {
@@ -49,6 +50,15 @@ async function loadConfig() {
     const response = await fetch('/api/config');
     const data = await response.json();
     previewUrl = data.previewUrl;
+    gitEnabled = data.gitEnabled !== false;
+
+    // Content lives in the database, so the git-history "Changes" panel only
+    // makes sense when git is enabled. Hide it otherwise (publish still works
+    // via /api/publish).
+    if (!gitEnabled) {
+      const changesBtn = document.getElementById('changesBtn');
+      if (changesBtn) changesBtn.style.display = 'none';
+    }
 
     // Load i18n config
     if (data.i18n) {
@@ -1794,7 +1804,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   publishBtn.disabled = true;
 
   try {
-    const response = await fetch('/api/git/publish', {
+    const response = await fetch('/api/publish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: message || undefined }),
@@ -1822,8 +1832,15 @@ document.getElementById('changesBtn').addEventListener('click', toggleChangesPan
 
 // Update changes badge count
 async function updateChangesBadge() {
-  const count = await getChangesCount();
   const badge = document.getElementById('changesBadge');
+
+  // The changes badge is git-only; skip the /api/git/status call when disabled.
+  if (!gitEnabled) {
+    if (badge) badge.style.display = 'none';
+    return;
+  }
+
+  const count = await getChangesCount();
 
   if (count > 0) {
     badge.textContent = count > 9 ? '9+' : count;

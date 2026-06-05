@@ -90,6 +90,8 @@ npx astroadmin dev --project ./my-astro-site
 | `ADMIN_USER` | Login username | `admin` |
 | `ADMIN_PASSWORD` | Login password | `admin` |
 | `ASTROADMIN_PROJECT_ROOT` | Project path | Current directory |
+| `ASTROADMIN_DB` | Content store (SQLite) path | `<project>/.astroadmin/content.db` |
+| `GIT_ENABLED` | Enable git integration | `true` (`false` to disable) |
 | `DEBUG` | Show stack traces | `false` |
 
 ## Image Upload Directory
@@ -100,11 +102,45 @@ Images are uploaded to `public/images/` by default. Ensure this directory exists
 mkdir -p public/images
 ```
 
+## Database (content store)
+
+Content is stored in a SQLite database, not in `src/content` files. By default
+it lives at `<project>/.astroadmin/content.db` (created automatically). Override
+the location with the `ASTROADMIN_DB` environment variable or config:
+
+```javascript
+export default {
+  database: {
+    path: process.env.ASTROADMIN_DB, // defaults to .astroadmin/content.db
+  },
+};
+```
+
+Add `.astroadmin/` and `content.db*` to `.gitignore` (the default project
+template already does). Your site reads this store at build time via the
+`astroadmin/loader` content-layer loader — see the README.
+
 ## Git Integration
 
-Git integration is enabled automatically if your project is a Git repository. Commits are made with the current Git user configuration.
+Git is **optional** — content lives in the database, so publishing does not
+require it. Publishing is build + deploy (via a [deploy adapter](./deploy-adapters.md)),
+with git as an optional pre-step.
 
-To disable Git features, don't initialize Git in your project (or use a project outside a Git repo).
+```javascript
+export default {
+  git: {
+    enabled: true,                          // or GIT_ENABLED=false to disable
+    autoPush: false,
+    paths: ['src/styles/', 'public/images/'], // staged on publish (never src/content)
+    includeDb: false,                       // commit the binary content.db too
+  },
+};
+```
+
+When git is disabled, the admin hides the git "Changes" panel and the
+`/api/git/*` routes are not mounted; publishing still works via `/api/publish`.
+When enabled, publishing commits the configured `paths` (never `src/content`,
+and never the binary DB unless `includeDb` is true).
 
 ## CORS and Preview
 

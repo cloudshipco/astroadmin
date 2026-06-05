@@ -6,29 +6,33 @@ Admin interface for [Astro Content Collections](https://docs.astro.build/en/guid
 
 ## Features
 
-- **Schema-driven forms** - Auto-generates fields from `src/content/config.ts`
+- **Schema-driven forms** - Auto-generates fields from `src/content.config.ts`
+- **Database content store** - Content lives in SQLite; the site reads it at build time via a content-layer loader
 - **Block editor** - Visual editing for discriminated unions (page builders)
 - **Live preview** - See changes in real-time via iframe
 - **Image uploads** - Upload and manage images with alt text
-- **Git integration** - Commit changes directly from the admin
+- **Optional git + deploy adapters** - Publish straight to a host (rsync), with git as an optional pre-step
 - **Collection management** - Create and delete entries
 
 ## Requirements
 
 Before using AstroAdmin, ensure your project has:
 
-- **Node.js 18+**
-- **Astro 4.0+** with `astro.config.mjs` or `astro.config.ts`
-- **Content Collections** set up in `src/content/config.ts`
+- **Bun** - AstroAdmin runs on Bun, and the content-layer loader uses `bun:sqlite`
+- **Astro 6.0+** with `astro.config.mjs` or `astro.config.ts`
+- **Content Collections** schemas in `src/content.config.ts`
+
+Content is stored in a SQLite database (`.astroadmin/content.db`), not in
+`src/content` files. Your site reads it at build time via the AstroAdmin
+content-layer loader (see [below](#database-content-store--loader-astro-6)).
 
 ```
 your-astro-site/
-├── astro.config.mjs       ← Required
+├── astro.config.mjs        ← Required
 ├── src/
-│   └── content/
-│       ├── config.ts      ← Required (collection schemas)
-│       └── pages/         ← Your collections
-│           └── home.md
+│   └── content.config.ts   ← Required (collection schemas)
+└── .astroadmin/
+    └── content.db          ← Content store (created automatically)
 ```
 
 **Don't have Content Collections?** See the [setup guide](./docs/content-collections.md).
@@ -75,6 +79,46 @@ This injects a `/component-preview/` route during development that renders your 
 - Block components in `src/components/blocks/` following the naming convention `{BlockType}Block.astro` (e.g., `TestimonialsBlock.astro`)
 - Fields referencing collections should use the naming convention `{collection}Ids` (e.g., `testimonialIds`)
 
+## Database content store & loader (Astro 6)
+
+AstroAdmin stores content in SQLite and your site reads it at build time through
+a content-layer loader. In `src/content.config.ts`:
+
+```ts
+import { defineCollection, z } from 'astro:content';
+import { astroadminLoader } from 'astroadmin/loader';
+
+const pages = defineCollection({
+  loader: astroadminLoader({ collection: 'pages' }),
+  schema: z.object({ title: z.string() }),
+});
+
+// Data collections (no markdown body) pass type: 'data':
+const team = defineCollection({
+  loader: astroadminLoader({ collection: 'team', type: 'data' }),
+  schema: z.object({ name: z.string() }),
+});
+
+export const collections = { pages, team };
+```
+
+You keep defining the Zod schema; the loader ships none and relies on Astro's
+`parseData`, so the same schema drives both AstroAdmin's forms and your site's
+read-time validation.
+
+Because the loader imports `bun:sqlite`, your **dev server and production build
+must run under Bun**. AstroAdmin runs the dev server under Bun automatically; for
+production builds use `bunx --bun astro build`.
+
+### Publishing without git
+
+Content lives in the database, so git is optional. Set `GIT_ENABLED=false` (or
+`git: { enabled: false }` in `astroadmin.config.js`) and publishing becomes
+build + deploy via the configured [deploy adapter](./docs/deploy-adapters.md),
+with no commits. With git enabled, publishing also commits your asset paths
+(`config.git.paths`) — never `src/content`, and never the binary DB unless
+`git.includeDb` is true.
+
 ## Configuration (optional)
 
 Create `astroadmin.config.js` in your project root:
@@ -98,12 +142,11 @@ export default {
 This means AstroAdmin couldn't find the required files:
 
 1. **Run from project root** - Where `astro.config.mjs` is located
-2. **Set up Content Collections** - Create `src/content/config.ts`
+2. **Set up Content Collections** - Create `src/content.config.ts`
 
 ```bash
 # Quick fix
-mkdir -p src/content
-touch src/content/config.ts
+touch src/content.config.ts
 ```
 
 See [Requirements](./docs/requirements.md) for details.
@@ -116,11 +159,12 @@ See [Requirements](./docs/requirements.md) for details.
 
 ## How it works
 
-1. Parses your `src/content/config.ts` using esbuild
+1. Parses your `src/content.config.ts` using esbuild
 2. Converts Zod schemas to JSON Schema via `zod-to-json-schema`
 3. Auto-generates form fields from the schema
 4. Detects discriminated unions for block-based editing
-5. Saves changes to markdown/JSON files in `src/content/`
+5. Saves changes to a SQLite content store (`.astroadmin/content.db`)
+6. Your site reads that store at build time via `astroadmin/loader`
 
 ## License
 
