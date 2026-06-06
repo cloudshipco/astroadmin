@@ -16,9 +16,10 @@
  *     schema: z.object({ title: z.string() }),
  *   });
  *
- * IMPORTANT: this module imports `bun:sqlite`, so the site's dev server and
- * production build must run under Bun (e.g. `bunx --bun astro build`). If a site
- * must build under Node, swap the import for `better-sqlite3` (see the plan).
+ * Runtime portability: the loader reads SQLite via a driver abstraction
+ * (./open-db.js) that uses Bun's built-in `bun:sqlite` under Bun and falls back
+ * to the optional `better-sqlite3` addon under Node (Netlify/CI). Build under
+ * Bun for zero extra deps; for Node builds, install `better-sqlite3`.
  *
  * Database path resolution (first match wins):
  *   1. explicit `{ dbPath }` option
@@ -26,7 +27,7 @@
  *   3. `.astroadmin/content.db` relative to the Astro project root
  */
 
-import { Database } from 'bun:sqlite';
+import { openContentDb, isBusyError } from './open-db.js';
 
 /**
  * @param {object} options
@@ -122,23 +123,18 @@ export function astroadminLoader({ collection, type = 'content', dbPath } = {}) 
 }
 
 /**
- * Open the database read-only, retrying briefly on SQLITE_BUSY (a concurrent
- * AstroAdmin write under WAL). Readers rarely block under WAL, so this is a
- * thin safety net.
+ * Open the database read-only (via the Bun/Node driver abstraction), retrying
+ * briefly on SQLITE_BUSY (a concurrent AstroAdmin write under WAL). Readers
+ * rarely block under WAL, so this is a thin safety net.
  */
 async function openWithRetry(path, attempts = 5) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      return new Database(path, { readonly: true });
+      return await openContentDb(path);
     } catch (error) {
       lastError = error;
-      const message = String(error?.message || '');
-      const isBusy =
-        error?.code === 'SQLITE_BUSY' ||
-        message.includes('SQLITE_BUSY') ||
-        message.includes('database is locked');
-      if (!isBusy) throw error;
+      if (!isBusyError(error)) throw error;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }

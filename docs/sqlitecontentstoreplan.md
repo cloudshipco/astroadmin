@@ -255,5 +255,9 @@ publish keeps working via the `/api/git/publish` alias. Audit these for any code
 - `astro/loaders` still exports `glob`/`file` (schema-parser shim); `astro:config:setup`
   `injectScript`/`injectRoute` signatures unchanged.
 - Loader opens DB `readonly` under WAL; add a short `SQLITE_BUSY` retry.
-- If any site must build under **node** (not Bun), switch the loader to `better-sqlite3`
-  (declare it as the loader's dependency) — this is the main portability decision.
+- Node portability (resolved, issue #1): the loader reads SQLite through a driver
+  abstraction (`loader/open-db.js`) — `bun:sqlite` under Bun, lazy `better-sqlite3`
+  under Node. `better-sqlite3` is **not** a bundled dependency (it's a native addon
+  with ABI/prebuild fragility); building under Bun stays the primary path (Netlify,
+  GitHub Actions, etc. all support `bunx --bun astro build`). Sites that genuinely
+  must build under Node install `better-sqlite3` themselves as an opt-in escape hatch.

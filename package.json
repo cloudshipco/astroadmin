@@ -83,6 +83,7 @@
     "server/",
     "ui/",
     "loader/index.js",
+    "loader/open-db.js",
     "integration/index.js",
     "integration/preview-route.astro",
     "README.md",

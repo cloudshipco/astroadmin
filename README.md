@@ -18,7 +18,8 @@ Admin interface for [Astro Content Collections](https://docs.astro.build/en/guid
 
 Before using AstroAdmin, ensure your project has:
 
-- **Bun** - AstroAdmin runs on Bun, and the content-layer loader uses `bun:sqlite`
+- **Bun** - AstroAdmin runs on Bun; the loader uses `bun:sqlite` (with a
+  `better-sqlite3` fallback for sites that build under Node — see below)
 - **Astro 6.0+** with `astro.config.mjs` or `astro.config.ts`
 - **Content Collections** schemas in `src/content.config.ts`
 
@@ -106,9 +107,18 @@ You keep defining the Zod schema; the loader ships none and relies on Astro's
 `parseData`, so the same schema drives both AstroAdmin's forms and your site's
 read-time validation.
 
-Because the loader imports `bun:sqlite`, your **dev server and production build
-must run under Bun**. AstroAdmin runs the dev server under Bun automatically; for
-production builds use `bunx --bun astro build`.
+**Build under Bun.** The loader reads the content store with Bun's built-in
+`bun:sqlite`, so the simplest path is to build under Bun: AstroAdmin runs the dev
+server under Bun automatically, and production builds use `bunx --bun astro build`.
+This is true on hosted CI too — Netlify, GitHub Actions, etc. all support Bun as
+the build runtime, so point your build command at `bunx --bun astro build`.
+
+If a site must build under **Node** (no Bun available), the loader transparently
+falls back to [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) —
+install it in the site (`npm install better-sqlite3`) and a plain `astro build`
+will read the store. This is an opt-in escape hatch (a native addon, so its
+prebuilt binary must match the host's Node version); building under Bun needs no
+extra dependency.
 
 ### Publishing without git
 
