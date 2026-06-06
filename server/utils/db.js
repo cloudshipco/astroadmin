@@ -260,6 +260,15 @@ export function setMeta(key, value) {
 }
 
 /**
+ * Run synchronous database writes atomically. Bun's transaction helper rolls
+ * back automatically when the callback throws.
+ */
+export function withTransaction(callback) {
+  const transaction = getDb().transaction(callback);
+  return transaction();
+}
+
+/**
  * Touch the dev-reload sentinel file. WAL writes don't reliably fire a
  * filesystem `change` event on the .db file, so the loader watches this
  * sentinel instead. Resolves alongside the DB under the project's .astroadmin/.

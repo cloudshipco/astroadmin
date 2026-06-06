@@ -402,8 +402,7 @@ async function performCommit(message) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        message: commitMessage,
-        files: ['src/content/', 'src/styles/', 'public/images/']
+        message: commitMessage
       })
     });
 

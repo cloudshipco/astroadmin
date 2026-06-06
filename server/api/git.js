@@ -6,18 +6,67 @@
 import express from 'express';
 import path from 'path';
 import simpleGit from 'simple-git';
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 import { publishHandler } from './publish.js';
 
 const router = express.Router();
-const git = simpleGit(config.paths.projectRoot);
+const DEFAULT_GIT_PATHS = ['src/styles/', 'public/images/'];
+
+function getGitPaths(fullConfig) {
+  return Array.isArray(fullConfig.git?.paths) && fullConfig.git.paths.length > 0
+    ? fullConfig.git.paths
+    : DEFAULT_GIT_PATHS;
+}
+
+function createGitClient(fullConfig) {
+  return simpleGit(fullConfig.paths.projectRoot);
+}
+
+async function getStagedFilesForPaths(git, gitPaths) {
+  if (gitPaths.length === 0) return [];
+
+  const diffOutput = await git.diff(['--name-only', '--cached', '--', ...gitPaths]);
+  return diffOutput.split(/\r?\n/).filter(Boolean);
+}
+
+async function stageGitPaths(git, gitPaths) {
+  const stagedPaths = [];
+
+  for (const gitPath of gitPaths) {
+    try {
+      await git.add(['-A', '--', gitPath]);
+      stagedPaths.push(gitPath);
+    } catch (error) {
+      // A configured path may not exist in every project — non-fatal.
+      console.log('Staging note:', error.message);
+    }
+  }
+
+  return stagedPaths;
+}
+
+export async function commitConfiguredGitPaths(fullConfig, message) {
+  const git = createGitClient(fullConfig);
+  const gitPaths = getGitPaths(fullConfig);
+  const stagedPaths = await stageGitPaths(git, gitPaths);
+  const stagedFiles = await getStagedFilesForPaths(git, stagedPaths);
+
+  if (stagedFiles.length === 0) {
+    return { result: null, stagedFiles };
+  }
+
+  const result = await git.commit(message, stagedPaths);
+  return { result, stagedFiles };
+}
 
 /**
  * Allowed directories for git file operations (relative to project root).
  * Content now lives in the SQLite store, so src/content is intentionally
- * excluded — git operations are limited to the editable asset paths.
+ * excluded — git operations are limited to configured editable asset paths.
  */
-const ALLOWED_GIT_PATHS = ['src/styles', 'public/images'];
+function getAllowedGitPaths(fullConfig) {
+  return getGitPaths(fullConfig).map((gitPath) => path.normalize(gitPath).replace(/[\\/]+$/, ''));
+}
 
 /**
  * Validate that a file path is within allowed directories.
@@ -26,7 +75,7 @@ const ALLOWED_GIT_PATHS = ['src/styles', 'public/images'];
  * @returns {string} - Normalized path (relative to project root)
  * @throws {Error} - If path is outside allowed directories
  */
-function validateFilePath(filePath) {
+function validateFilePath(filePath, fullConfig) {
   // Normalize to handle ., .., // etc.
   const normalized = path.normalize(filePath);
 
@@ -36,8 +85,8 @@ function validateFilePath(filePath) {
   }
 
   // Resolve to absolute path for comparison
-  const absolutePath = path.resolve(config.paths.projectRoot, normalized);
-  const projectRoot = path.resolve(config.paths.projectRoot);
+  const absolutePath = path.resolve(fullConfig.paths.projectRoot, normalized);
+  const projectRoot = path.resolve(fullConfig.paths.projectRoot);
 
   // Ensure path is within project root (defense in depth)
   if (!absolutePath.startsWith(projectRoot + path.sep)) {
@@ -45,7 +94,8 @@ function validateFilePath(filePath) {
   }
 
   // Check against allowed directories
-  const isAllowed = ALLOWED_GIT_PATHS.some(allowedDir => {
+  const allowedGitPaths = getAllowedGitPaths(fullConfig);
+  const isAllowed = allowedGitPaths.some(allowedDir => {
     const allowedAbsolute = path.resolve(projectRoot, allowedDir);
     return absolutePath.startsWith(allowedAbsolute + path.sep) ||
            absolutePath === allowedAbsolute;
@@ -53,7 +103,7 @@ function validateFilePath(filePath) {
 
   if (!isAllowed) {
     throw new Error(
-      `Access denied: file operations restricted to ${ALLOWED_GIT_PATHS.join(', ')}`
+      `Access denied: file operations restricted to ${allowedGitPaths.join(', ')}`
     );
   }
 
@@ -79,21 +129,13 @@ function validateCommitHash(commit) {
 }
 
 /**
- * Validate an array of file paths for git.add() operations.
- * @param {string[]} files - Array of file paths
- * @returns {string[]} - Validated paths
- * @throws {Error} - If any path is invalid
- */
-function validateFilePaths(files) {
-  return files.map(validateFilePath);
-}
-
-/**
  * GET /api/git/status
  * Get Git status
  */
 router.get('/status', async (req, res) => {
   try {
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
     const status = await git.status();
 
     res.json({
@@ -126,7 +168,9 @@ router.get('/status', async (req, res) => {
  */
 router.post('/commit', async (req, res) => {
   try {
-    const { message, files } = req.body;
+    const { message } = req.body;
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
 
     if (!message) {
       return res.status(400).json({
@@ -135,16 +179,16 @@ router.post('/commit', async (req, res) => {
       });
     }
 
-    // Add files (default to configured asset paths if not specified).
-    // Validate custom file paths if provided; defaults are pre-approved.
-    const filesToAdd = files ? validateFilePaths(files) : (config.git.paths || ['src/styles/', 'public/images/']);
-    await git.add(filesToAdd);
-
-    // Commit
-    const result = await git.commit(message);
+    const { result } = await commitConfiguredGitPaths(fullConfig, message);
+    if (!result) {
+      return res.status(400).json({
+        success: false,
+        error: 'No configured git changes to commit',
+      });
+    }
 
     // Optionally push if configured
-    if (config.git.autoPush) {
+    if (fullConfig.git.autoPush) {
       try {
         await git.push();
         console.log('✅ Changes pushed to remote');
@@ -178,6 +222,8 @@ router.post('/commit', async (req, res) => {
 router.get('/log', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
 
     const log = await git.log({ maxCount: limit });
 
@@ -211,6 +257,8 @@ router.get('/log', async (req, res) => {
  */
 router.post('/pull', async (req, res) => {
   try {
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
     const result = await git.pull();
 
     res.json({
@@ -239,6 +287,8 @@ router.post('/pull', async (req, res) => {
  */
 router.post('/push', async (req, res) => {
   try {
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
     const result = await git.push();
 
     res.json({
@@ -271,9 +321,11 @@ router.post('/publish', publishHandler);
 router.get('/diff', async (req, res) => {
   try {
     const { file, from, to } = req.query;
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
 
-    // Validate file path if provided (restrict to content directories)
-    const validatedFile = file ? validateFilePath(file) : null;
+    // Validate file path if provided (restrict to configured git paths)
+    const validatedFile = file ? validateFilePath(file, fullConfig) : null;
 
     // Validate commit references if provided
     const validatedFrom = from ? validateCommitHash(from) : null;
@@ -313,6 +365,8 @@ router.get('/diff', async (req, res) => {
 router.get('/show', async (req, res) => {
   try {
     const { commit, file } = req.query;
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
 
     if (!file) {
       return res.status(400).json({
@@ -321,8 +375,8 @@ router.get('/show', async (req, res) => {
       });
     }
 
-    // Validate file path (restrict to content directories)
-    const validatedFile = validateFilePath(file);
+    // Validate file path (restrict to configured git paths)
+    const validatedFile = validateFilePath(file, fullConfig);
 
     // Validate commit reference
     const ref = commit ? validateCommitHash(commit) : 'HEAD';
@@ -351,6 +405,8 @@ router.get('/show', async (req, res) => {
 router.post('/revert-file', async (req, res) => {
   try {
     const { file } = req.body;
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
 
     if (!file) {
       return res.status(400).json({
@@ -359,8 +415,8 @@ router.post('/revert-file', async (req, res) => {
       });
     }
 
-    // Validate file path (restrict to content directories)
-    const validatedFile = validateFilePath(file);
+    // Validate file path (restrict to configured git paths)
+    const validatedFile = validateFilePath(file, fullConfig);
 
     // Restore file from HEAD (discard uncommitted changes)
     await git.checkout(['HEAD', '--', validatedFile]);
@@ -387,6 +443,8 @@ router.post('/revert-file', async (req, res) => {
 router.post('/restore-from-commit', async (req, res) => {
   try {
     const { file, commit } = req.body;
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
 
     if (!file || !commit) {
       return res.status(400).json({
@@ -395,8 +453,8 @@ router.post('/restore-from-commit', async (req, res) => {
       });
     }
 
-    // Validate file path (restrict to content directories)
-    const validatedFile = validateFilePath(file);
+    // Validate file path (restrict to configured git paths)
+    const validatedFile = validateFilePath(file, fullConfig);
 
     // Validate commit hash format
     const validatedCommit = validateCommitHash(commit);
@@ -428,6 +486,8 @@ router.get('/file-history', async (req, res) => {
   try {
     const { file } = req.query;
     const limit = parseInt(req.query.limit) || 10;
+    const fullConfig = await getConfig();
+    const git = createGitClient(fullConfig);
 
     if (!file) {
       return res.status(400).json({
@@ -436,8 +496,8 @@ router.get('/file-history', async (req, res) => {
       });
     }
 
-    // Validate file path (restrict to content directories)
-    const validatedFile = validateFilePath(file);
+    // Validate file path (restrict to configured git paths)
+    const validatedFile = validateFilePath(file, fullConfig);
 
     const log = await git.log({ maxCount: limit, file: validatedFile });
 

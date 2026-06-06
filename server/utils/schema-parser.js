@@ -190,6 +190,8 @@ export async function parseAstroSchemas(projectRoot) {
       // Get loader type if available (from our shim)
       const loaderType = collection.loader?._type || 'glob'; // default to glob
       const loaderFilePath = collection.loader?._filePath;
+      const loaderBase = collection.loader?._base;
+      const loaderPattern = collection.loader?._pattern;
 
       console.log(`   Processing "${name}" (loader: ${loaderType}, has schema: ${!!collection.schema})`);
 
@@ -215,6 +217,8 @@ export async function parseAstroSchemas(projectRoot) {
           type: collection.type || collection.loader?._dataType || (loaderType === 'file' ? 'data' : 'content'),
           loaderType,
           loaderFilePath,
+          loaderBase,
+          loaderPattern,
           schema: { type: 'object', properties: {} },
           discriminatedUnions: [],
           blockCollectionRefs: {},
@@ -240,6 +244,8 @@ export async function parseAstroSchemas(projectRoot) {
           type: collection.type || collection.loader?._dataType || (loaderType === 'file' ? 'data' : 'content'),
           loaderType,
           loaderFilePath, // For file() loader: the JSON file path
+          loaderBase, // For glob() loader: the base directory
+          loaderPattern, // For glob() loader: the match pattern(s)
           schema: jsonSchema,
           discriminatedUnions,
           blockCollectionRefs,

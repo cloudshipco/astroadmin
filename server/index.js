@@ -10,7 +10,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync } from 'fs';
-import { config, IS_DEV, IS_PROD, logConfig } from './config.js';
+import { getConfig, IS_DEV, IS_PROD, logConfig } from './config.js';
 
 // Import API routers
 import collectionsRouter from './api/collections.js';
@@ -25,6 +25,7 @@ import { maybeAutoImport } from './utils/import-files.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export async function createServer() {
+  const fullConfig = await getConfig();
   const app = express();
 
   // Trust proxy (for secure cookies behind nginx/reverse proxy)
@@ -37,13 +38,13 @@ export async function createServer() {
   app.use(express.urlencoded({ extended: true }));
 
   // CORS
-  app.use(cors(config.cors));
+  app.use(cors(fullConfig.cors));
 
   // Rate limiting (production only)
-  if (config.rateLimit.enabled) {
+  if (fullConfig.rateLimit.enabled) {
     const limiter = rateLimit({
-      windowMs: config.rateLimit.windowMs,
-      max: config.rateLimit.max,
+      windowMs: fullConfig.rateLimit.windowMs,
+      max: fullConfig.rateLimit.max,
       message: 'Too many requests, please try again later.',
     });
     app.use('/api/', limiter);
@@ -51,24 +52,24 @@ export async function createServer() {
 
   // Session management with SQLite store (when running under Bun)
   const sessionConfig = {
-    secret: config.auth.sessionSecret,
+    secret: fullConfig.auth.sessionSecret,
     resave: false,
     saveUninitialized: false,
-    cookie: config.auth.sessionCookie,
+    cookie: fullConfig.auth.sessionCookie,
   };
 
   // Use SQLite store in production for persistence across restarts
   // Only available when running under Bun (has built-in SQLite)
-  if (IS_PROD && config.sessionStore?.path && typeof Bun !== 'undefined') {
+  if (IS_PROD && fullConfig.sessionStore?.path && typeof Bun !== 'undefined') {
     // Ensure data directory exists
-    const dataDir = path.dirname(config.sessionStore.path);
+    const dataDir = path.dirname(fullConfig.sessionStore.path);
     mkdirSync(dataDir, { recursive: true });
 
     // Dynamic import since bun:sqlite only exists in Bun runtime
     const { createSessionStore } = await import('./session-store.js');
     sessionConfig.store = createSessionStore({
-      path: config.sessionStore.path,
-      ttl: config.sessionStore.ttl,
+      path: fullConfig.sessionStore.path,
+      ttl: fullConfig.sessionStore.ttl,
     });
   }
 
@@ -87,9 +88,9 @@ export async function createServer() {
   app.get('/api/config', (req, res) => {
     res.json({
       environment: IS_DEV ? 'development' : 'production',
-      previewUrl: config.preview.url,
-      previewMethod: config.preview.method,
-      gitEnabled: config.git.enabled,
+      previewUrl: fullConfig.preview.url,
+      previewMethod: fullConfig.preview.method,
+      gitEnabled: fullConfig.git.enabled,
     });
   });
 
@@ -100,8 +101,8 @@ export async function createServer() {
     console.log(`[Login] Attempt for user: ${username}`);
 
     if (
-      username === config.auth.username &&
-      password === config.auth.password
+      username === fullConfig.auth.username &&
+      password === fullConfig.auth.password
     ) {
       req.session.authenticated = true;
       req.session.user = username;
@@ -180,7 +181,7 @@ export async function createServer() {
   app.use('/api/publish', requireAuth, publishRouter);
   // Git endpoints are only mounted when git is enabled. Publishing does not
   // require git — use /api/publish (the git router's /publish is an alias).
-  if (config.git.enabled) {
+  if (fullConfig.git.enabled) {
     app.use('/api/git', requireAuth, gitRouter);
   }
   app.use('/api/images', requireAuth, imagesRouter);
@@ -210,14 +211,14 @@ export async function createServer() {
 
   // Serve images for previews in the admin
   // First check src/assets/images (source images), then public/images (uploads)
-  app.use('/images', express.static(config.paths.srcImages));
-  app.use('/images', express.static(config.paths.images));
+  app.use('/images', express.static(fullConfig.paths.srcImages));
+  app.use('/images', express.static(fullConfig.paths.images));
 
   // Serve assets for content-relative image paths
   // Content files use relative paths like ../assets/posts/... which resolve to src/content/assets/
   // Also check src/assets for project-level assets
-  const contentAssetsDir = path.join(config.paths.projectRoot, 'src/content/assets');
-  const srcAssetsDir = path.join(config.paths.projectRoot, 'src/assets');
+  const contentAssetsDir = path.join(fullConfig.paths.projectRoot, 'src/content/assets');
+  const srcAssetsDir = path.join(fullConfig.paths.projectRoot, 'src/assets');
   app.use('/assets', express.static(contentAssetsDir));
   app.use('/assets', express.static(srcAssetsDir));
 
@@ -278,8 +279,9 @@ function tryListen(app, port, host, maxAttempts = 20) {
 }
 
 export async function startServer(options = {}) {
-  const port = options.port !== undefined ? options.port : config.port;
-  const host = options.host !== undefined ? options.host : config.host;
+  const fullConfig = await getConfig();
+  const port = options.port !== undefined ? options.port : fullConfig.port;
+  const host = options.host !== undefined ? options.host : fullConfig.host;
 
   // Log configuration
   logConfig();
@@ -302,9 +304,9 @@ export async function startServer(options = {}) {
     console.log(`⚠️  Port ${port} in use`);
   }
   console.log(`✅ AstroAdmin running at http://${host}:${actualPort}`);
-  console.log(`   Preview: ${config.preview.url}`);
-  if (config.git.enabled) {
-    console.log(`   Git: ${config.git.autoCommit ? 'auto-commit enabled' : 'manual commits'}`);
+  console.log(`   Preview: ${fullConfig.preview.url}`);
+  if (fullConfig.git.enabled) {
+    console.log(`   Git: ${fullConfig.git.autoCommit ? 'auto-commit enabled' : 'manual commits'}`);
   }
   console.log('');
 

@@ -15,12 +15,45 @@
 import express from 'express';
 import path from 'path';
 import simpleGit from 'simple-git';
-import { config, getConfig } from '../config.js';
+import { getConfig } from '../config.js';
 import { deploy, validateDeployConfig } from '../utils/deploy.js';
 import { runProductionBuild } from '../utils/build.js';
 
 const router = express.Router();
-const git = simpleGit(config.paths.projectRoot);
+const DEFAULT_GIT_PATHS = ['src/styles/', 'public/images/'];
+
+function createGitClient(fullConfig) {
+  return simpleGit(fullConfig.paths.projectRoot);
+}
+
+function getGitPaths(fullConfig) {
+  return Array.isArray(fullConfig.git?.paths) && fullConfig.git.paths.length > 0
+    ? fullConfig.git.paths
+    : DEFAULT_GIT_PATHS;
+}
+
+async function getStagedFilesForPaths(git, gitPaths) {
+  if (gitPaths.length === 0) return [];
+
+  const diffOutput = await git.diff(['--name-only', '--cached', '--', ...gitPaths]);
+  return diffOutput.split(/\r?\n/).filter(Boolean);
+}
+
+async function stageGitPaths(git, gitPaths) {
+  const stagedPaths = [];
+
+  for (const gitPath of gitPaths) {
+    try {
+      await git.add(['-A', '--', gitPath]);
+      stagedPaths.push(gitPath);
+    } catch (error) {
+      // A configured path may not exist in every project — non-fatal.
+      console.log('Staging note:', error.message);
+    }
+  }
+
+  return stagedPaths;
+}
 
 function commitInfo(commitResult) {
   return commitResult
@@ -37,6 +70,8 @@ async function runGitStep(fullConfig, commitMessage) {
   let committed = false;
   let pushed = false;
   let commitResult = null;
+  const git = createGitClient(fullConfig);
+  const commitPaths = [];
 
   try {
     await git.pull(['--rebase']);
@@ -47,25 +82,21 @@ async function runGitStep(fullConfig, commitMessage) {
 
   // Optionally force-add the (gitignored) content DB.
   if (fullConfig.git?.includeDb) {
-    const relDb = path.relative(config.paths.projectRoot, config.database.path);
+    const relDb = path.relative(fullConfig.paths.projectRoot, fullConfig.database.path);
     try {
       await git.add(['-f', relDb]);
+      commitPaths.push(relDb);
     } catch (error) {
       console.log('Could not stage content DB:', error.message);
     }
   }
 
-  const stagePaths = fullConfig.git?.paths || ['src/styles/', 'public/images/'];
-  try {
-    await git.add(stagePaths);
-  } catch (error) {
-    // A configured path may not exist in every project — non-fatal.
-    console.log('Staging note:', error.message);
-  }
+  const stagePaths = getGitPaths(fullConfig);
+  commitPaths.push(...await stageGitPaths(git, stagePaths));
 
-  const status = await git.status();
-  if (status.staged.length > 0) {
-    commitResult = await git.commit(commitMessage);
+  const stagedFiles = await getStagedFilesForPaths(git, commitPaths);
+  if (stagedFiles.length > 0) {
+    commitResult = await git.commit(commitMessage, commitPaths);
     committed = true;
     console.log(`✅ Committed: ${commitMessage}`);
   }
@@ -135,7 +166,7 @@ export async function publishHandler(req, res) {
       }
 
       try {
-        deployResult = await deploy(deployConfig, config.paths.projectRoot);
+        deployResult = await deploy(deployConfig, fullConfig.paths.projectRoot);
         console.log('✅ Deployment completed');
       } catch (deployError) {
         return res.json({
@@ -158,7 +189,7 @@ export async function publishHandler(req, res) {
       commit: commitInfo(commitResult),
       build: buildResult,
       deploy: deployResult,
-      message: buildPublishMessage({ gitEnabled, committed, deployResult }),
+      message: buildPublishMessage({ gitEnabled, committed, pushed, deployResult }),
     });
   } catch (error) {
     console.error('Error publishing:', error);
@@ -170,11 +201,17 @@ export async function publishHandler(req, res) {
   }
 }
 
-function buildPublishMessage({ gitEnabled, committed, deployResult }) {
+export function buildPublishMessage({ gitEnabled, committed, pushed, deployResult }) {
   const parts = [];
-  if (gitEnabled) parts.push(committed ? 'committed and pushed' : 'pushed');
+  if (gitEnabled && committed && pushed) parts.push('committed and pushed');
+  else if (gitEnabled && committed) parts.push('committed');
+  else if (gitEnabled && pushed) parts.push('pushed');
   if (deployResult) parts.push('built and deployed');
-  if (parts.length === 0) return 'Nothing to publish (git disabled, no deploy adapter configured)';
+  if (parts.length === 0) {
+    return gitEnabled
+      ? 'Nothing to publish (no git changes, no deploy adapter configured)'
+      : 'Nothing to publish (git disabled, no deploy adapter configured)';
+  }
   return `Published: ${parts.join(', ')}`;
 }
 

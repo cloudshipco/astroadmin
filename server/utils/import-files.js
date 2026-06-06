@@ -18,9 +18,132 @@ import path from 'path';
 import matter from 'gray-matter';
 import { config } from '../config.js';
 import { loadSchemas } from './collections.js';
-import { upsertEntry, computeDigest, countAll, getMeta, setMeta } from './db.js';
+import { upsertEntry, computeDigest, countAll, getMeta, setMeta, withTransaction } from './db.js';
 
 const CONTENT_EXTENSIONS = ['.md', '.mdx', '.json'];
+const DEFAULT_GLOB_PATTERN = '*.{md,mdx,json}';
+
+function escapeRegExp(value) {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
+function toPosixPath(filePath) {
+  return filePath.split(path.sep).join('/');
+}
+
+function resolveProjectPath(filePath) {
+  return path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(config.paths.projectRoot, filePath);
+}
+
+function getGlobBaseDirectory(collectionName, schema) {
+  return schema.loaderBase
+    ? resolveProjectPath(schema.loaderBase)
+    : path.join(config.paths.content, collectionName);
+}
+
+function getGlobPatterns(schema) {
+  if (Array.isArray(schema.loaderPattern) && schema.loaderPattern.length > 0) {
+    return schema.loaderPattern.map(String);
+  }
+  if (typeof schema.loaderPattern === 'string' && schema.loaderPattern.trim()) {
+    return [schema.loaderPattern];
+  }
+  return [DEFAULT_GLOB_PATTERN];
+}
+
+function normalizeGlobPattern(pattern) {
+  return pattern.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function globPatternToRegExp(pattern) {
+  const normalizedPattern = normalizeGlobPattern(pattern);
+  let regexSource = '^';
+
+  for (let index = 0; index < normalizedPattern.length; index++) {
+    const char = normalizedPattern[index];
+
+    if (char === '*') {
+      const isGlobStar = normalizedPattern[index + 1] === '*';
+      if (isGlobStar) {
+        const hasFollowingSlash = normalizedPattern[index + 2] === '/';
+        if (hasFollowingSlash) {
+          regexSource += '(?:.*/)?';
+          index += 2;
+        } else {
+          regexSource += '.*';
+          index += 1;
+        }
+      } else {
+        regexSource += '[^/]*';
+      }
+      continue;
+    }
+
+    if (char === '?') {
+      regexSource += '[^/]';
+      continue;
+    }
+
+    if (char === '{') {
+      const closingIndex = normalizedPattern.indexOf('}', index + 1);
+      if (closingIndex !== -1) {
+        const alternatives = normalizedPattern
+          .slice(index + 1, closingIndex)
+          .split(',')
+          .map((alternative) => escapeRegExp(alternative));
+        regexSource += `(?:${alternatives.join('|')})`;
+        index = closingIndex;
+        continue;
+      }
+    }
+
+    regexSource += escapeRegExp(char);
+  }
+
+  return new RegExp(`${regexSource}$`);
+}
+
+function matchesAnyPattern(relativeFilePath, patterns) {
+  return patterns
+    .map(globPatternToRegExp)
+    .some((patternRegex) => patternRegex.test(relativeFilePath));
+}
+
+async function findMatchingFiles(baseDirectory, patterns) {
+  const files = [];
+
+  async function walk(directory) {
+    let dirents;
+    try {
+      dirents = await fs.readdir(directory, { withFileTypes: true });
+    } catch {
+      if (directory === baseDirectory) return;
+      throw new Error(`Could not read directory: ${directory}`);
+    }
+
+    for (const dirent of dirents) {
+      const fullPath = path.join(directory, dirent.name);
+      if (dirent.isDirectory()) {
+        await walk(fullPath);
+        continue;
+      }
+
+      if (!dirent.isFile()) continue;
+
+      const relativePath = toPosixPath(path.relative(baseDirectory, fullPath));
+      const extension = path.extname(relativePath).toLowerCase();
+      if (!CONTENT_EXTENSIONS.includes(extension)) continue;
+      if (!matchesAnyPattern(relativePath, patterns)) continue;
+
+      files.push(relativePath);
+    }
+  }
+
+  await walk(baseDirectory);
+  return files.sort();
+}
 
 /**
  * Split a filename (without extension) into base slug + locale, honouring the
@@ -28,7 +151,8 @@ const CONTENT_EXTENSIONS = ['.md', '.mdx', '.json'];
  */
 function splitLocale(nameWithoutExt, i18nConfig) {
   if (i18nConfig?.enabled && Array.isArray(i18nConfig.locales) && i18nConfig.locales.length > 0) {
-    const pattern = new RegExp(`\\.(${i18nConfig.locales.join('|')})$`, 'i');
+    const escapedLocales = i18nConfig.locales.map((locale) => escapeRegExp(locale));
+    const pattern = new RegExp(`\\.(${escapedLocales.join('|')})$`, 'i');
     const match = nameWithoutExt.match(pattern);
     if (match) {
       return { slug: nameWithoutExt.replace(pattern, ''), locale: match[1] };
@@ -38,26 +162,20 @@ function splitLocale(nameWithoutExt, i18nConfig) {
 }
 
 /**
- * Import a glob (directory) collection: src/content/<name>/*.{md,mdx,json}.
+ * Collect entries for a glob (directory) collection using the loader's base
+ * and pattern metadata when available.
  */
-async function importGlobCollection(name, i18nConfig) {
-  const dir = path.join(config.paths.content, name);
+async function collectGlobCollectionEntries(name, schema, i18nConfig) {
+  const baseDirectory = getGlobBaseDirectory(name, schema);
+  const patterns = getGlobPatterns(schema);
+  const files = await findMatchingFiles(baseDirectory, patterns);
+  const entries = [];
 
-  let files;
-  try {
-    files = await fs.readdir(dir);
-  } catch {
-    return 0; // Collection has no directory yet — nothing to import.
-  }
-
-  let imported = 0;
-  for (const file of files) {
-    const ext = path.extname(file).toLowerCase();
-    if (!CONTENT_EXTENSIONS.includes(ext)) continue; // skip .bak etc.
-
-    const nameWithoutExt = path.basename(file, ext);
+  for (const relativeFilePath of files) {
+    const ext = path.extname(relativeFilePath).toLowerCase();
+    const nameWithoutExt = relativeFilePath.slice(0, -ext.length);
     const { slug, locale } = splitLocale(nameWithoutExt, i18nConfig);
-    const raw = await fs.readFile(path.join(dir, file), 'utf-8');
+    const raw = await fs.readFile(path.join(baseDirectory, relativeFilePath), 'utf-8');
 
     let type;
     let data;
@@ -74,7 +192,7 @@ async function importGlobCollection(name, i18nConfig) {
     }
 
     const dataJson = JSON.stringify(data);
-    upsertEntry({
+    entries.push({
       collection: name,
       slug,
       locale,
@@ -84,34 +202,32 @@ async function importGlobCollection(name, i18nConfig) {
       position: null,
       digest: computeDigest(dataJson, body),
     });
-    imported++;
   }
 
-  return imported;
+  return entries;
 }
 
 /**
- * Import a file() collection: a single JSON array of objects.
+ * Collect entries for a file() collection: a single JSON array of objects.
  */
-async function importFileCollection(name, loaderFilePath) {
-  const fullPath = path.join(config.paths.projectRoot, loaderFilePath);
+async function collectFileCollectionEntries(name, loaderFilePath) {
+  const fullPath = resolveProjectPath(loaderFilePath);
 
   let raw;
   try {
     raw = await fs.readFile(fullPath, 'utf-8');
   } catch {
-    return 0;
+    return [];
   }
 
   const arr = JSON.parse(raw);
-  if (!Array.isArray(arr)) return 0;
+  if (!Array.isArray(arr)) return [];
 
-  let imported = 0;
-  arr.forEach((item, index) => {
+  return arr.map((item, index) => {
     const slug = item.id || item.slug || String(index);
     const data = { ...item, id: slug };
     const dataJson = JSON.stringify(data);
-    upsertEntry({
+    return {
       collection: name,
       slug,
       locale: null,
@@ -120,11 +236,8 @@ async function importFileCollection(name, loaderFilePath) {
       body: null,
       position: index,
       digest: computeDigest(dataJson, null),
-    });
-    imported++;
+    };
   });
-
-  return imported;
 }
 
 /**
@@ -138,16 +251,24 @@ export async function importFiles({ i18n } = {}) {
   const i18nConfig = i18n || config.i18n || { enabled: false, locales: [] };
 
   const summary = { total: 0, collections: {} };
+  const pendingEntries = [];
 
   for (const [name, schema] of Object.entries(schemas)) {
-    const imported =
+    const entries =
       schema.loaderType === 'file' && schema.loaderFilePath
-        ? await importFileCollection(name, schema.loaderFilePath)
-        : await importGlobCollection(name, i18nConfig);
+        ? await collectFileCollectionEntries(name, schema.loaderFilePath)
+        : await collectGlobCollectionEntries(name, schema, i18nConfig);
 
-    summary.collections[name] = imported;
-    summary.total += imported;
+    pendingEntries.push(...entries);
+    summary.collections[name] = entries.length;
+    summary.total += entries.length;
   }
+
+  withTransaction(() => {
+    for (const entry of pendingEntries) {
+      upsertEntry(entry);
+    }
+  });
 
   return summary;
 }
