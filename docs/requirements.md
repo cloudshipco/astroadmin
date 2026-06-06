@@ -6,9 +6,9 @@ AstroAdmin requires a specific project structure to work. This page details all 
 
 | Requirement | Minimum Version |
 |-------------|-----------------|
-| Node.js | 18.0.0 |
-| Astro | 4.0.0 |
-| Zod | 3.20.0 |
+| Bun | 1.0.0 (runs AstroAdmin and, by default, the site build) |
+| Astro | 6.0.0 (Astro-6-only since the DB content store) |
+| Zod | 3.20.0+ (zod 4 supported; Astro 6 ships zod 4) |
 
 ## Project Structure
 
