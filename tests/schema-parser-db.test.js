@@ -40,7 +40,24 @@ const team = defineCollection({
   schema: z.object({ name: z.string() }),
 });
 
-export const collections = { pages, team };
+// Block-based page: a discriminated union drives the block editor UI.
+const heroBlock = z.object({ type: z.literal('hero'), heading: z.string() });
+const featuresBlock = z.object({
+  type: z.literal('features'),
+  testimonialIds: z.array(z.string()).optional(),
+});
+const blocks = z.discriminatedUnion('type', [heroBlock, featuresBlock]);
+
+const landing = defineCollection({
+  loader: astroadminLoader({ collection: 'landing' }),
+  schema: z.object({
+    title: z.string(),
+    pubDate: z.coerce.date(),
+    blocks: z.array(blocks),
+  }),
+});
+
+export const collections = { pages, team, landing };
 `
   );
 
@@ -68,6 +85,33 @@ export const collections = { pages, team };
   check('zod schema still extracted', () => {
     assert.ok(schemas.pages.schema.properties.title, 'title property present');
     assert.ok(schemas.team.schema.properties.name, 'name property present');
+  });
+
+  check('schema with coerce.date does not break extraction', () => {
+    // z.coerce.date() is unrepresentable in JSON Schema; it must not throw away
+    // the surrounding properties (regression: zod 4 toJSONSchema throws by default).
+    assert.ok(schemas.landing.schema.properties.title, 'title present alongside date field');
+    assert.ok('pubDate' in schemas.landing.schema.properties, 'date field still listed');
+  });
+
+  check('discriminated unions are detected for the block editor', () => {
+    const unions = schemas.landing.discriminatedUnions;
+    assert.equal(unions.length, 1, 'one discriminated union found');
+    assert.equal(unions[0].discriminator, 'type', 'discriminator is "type"');
+    const values = unions[0].options.map((o) => o.value).sort();
+    assert.deepEqual(values, ['features', 'hero'], 'both block types extracted');
+    const hero = unions[0].options.find((o) => o.value === 'hero');
+    assert.ok(hero.schema.properties.heading, 'option schema properties extracted');
+  });
+
+  check('block-collection references are detected from union options', () => {
+    // featuresBlock.testimonialIds (array of strings) -> "testimonials" collection
+    const refs = schemas.landing.blockCollectionRefs.testimonials;
+    assert.ok(refs, 'testimonials referenced');
+    assert.ok(
+      refs.some((r) => r.blockType === 'features' && r.field === 'testimonialIds'),
+      'features block references testimonials via testimonialIds'
+    );
   });
 
   console.log('='.repeat(40));

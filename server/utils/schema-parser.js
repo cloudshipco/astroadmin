@@ -223,12 +223,8 @@ export async function parseAstroSchemas(projectRoot) {
       }
 
       try {
-        // Convert Zod schema to JSON Schema
-        // Don't pass 'name' option - it causes wrapping in definitions
-        const jsonSchema = zodToJsonSchema(zodSchema, {
-          $refStrategy: 'none', // Inline all refs for simplicity
-          errorMessages: true,
-        });
+        // Convert Zod schema to JSON Schema (zod 3 and zod 4 — see toJsonSchema)
+        const jsonSchema = toJsonSchema(zodSchema);
 
         // Find discriminated unions for block UI
         const discriminatedUnions = findDiscriminatedUnions(zodSchema);
@@ -273,35 +269,115 @@ export async function parseAstroSchemas(projectRoot) {
  * @param {string[]} path - Current path in schema
  * @returns {Array} - List of discriminated unions found
  */
+/**
+ * Convert a Zod schema to JSON Schema, tolerant of zod 3 and zod 4.
+ *
+ * Astro 6 depends on zod 4, whose internals differ from zod 3 — and the
+ * external `zod-to-json-schema` package does NOT understand zod 4 (it silently
+ * returns an empty schema, which would render admin forms with no fields). zod
+ * 4 ships a native serializer instead. We prefer the schema's OWN native
+ * `.toJSONSchema()` method so the serializer always matches the zod copy that
+ * built the schema (the site's bundled zod), and fall back to the package for
+ * zod 3, which has no native serializer.
+ *
+ * Options for the zod 4 path:
+ *   - reused: 'inline'        inline reused subschemas (no $ref/$defs), matching
+ *                             the old `$refStrategy: 'none'` behaviour the UI expects
+ *   - unrepresentable: 'any'  emit {} for JSON-unrepresentable types (e.g.
+ *                             z.coerce.date()) instead of throwing
+ *   - io: 'input'             describe the editable INPUT shape (defaults optional)
+ */
+function toJsonSchema(zodSchema) {
+  if (typeof zodSchema?.toJSONSchema === 'function') {
+    return zodSchema.toJSONSchema({ reused: 'inline', unrepresentable: 'any', io: 'input' });
+  }
+  return zodToJsonSchema(zodSchema, { $refStrategy: 'none', errorMessages: true });
+}
+
+/**
+ * Normalise zod 3 vs zod 4 schema internals into a uniform node, or null for a
+ * non-schema value. zod 3 exposes `_def` (with a `typeName` string); zod 4
+ * exposes `_zod.def` (with a `type` string) and distinguishes some kinds by
+ * constructor name (e.g. ZodDiscriminatedUnion, which shares type 'union').
+ */
+function zodInternals(schema) {
+  if (!schema) return null;
+  if (schema._zod?.def) {
+    return { version: 4, def: schema._zod.def, ctor: schema.constructor?.name };
+  }
+  if (schema._def) {
+    return { version: 3, def: schema._def, ctor: schema._def.typeName };
+  }
+  return null;
+}
+
+/** Uniform kind string ('object'|'array'|'literal'|'optional'|'nullable'|'default'|'discriminatedUnion'|…). */
+function zodKind(node) {
+  if (!node) return null;
+  if (node.version === 4) {
+    if (node.def.type === 'union' && node.ctor === 'ZodDiscriminatedUnion') {
+      return 'discriminatedUnion';
+    }
+    return node.def.type;
+  }
+  switch (node.def.typeName) {
+    case 'ZodDiscriminatedUnion': return 'discriminatedUnion';
+    case 'ZodObject': return 'object';
+    case 'ZodArray': return 'array';
+    case 'ZodLiteral': return 'literal';
+    case 'ZodOptional': return 'optional';
+    case 'ZodNullable': return 'nullable';
+    case 'ZodDefault': return 'default';
+    default: return node.def.typeName;
+  }
+}
+
+/** Object field map. zod 4 `def.shape` is a plain object; zod 3's is a function. */
+function zodObjectShape(node) {
+  const shape = node.def.shape;
+  return typeof shape === 'function' ? shape() : shape;
+}
+
+/** Array element schema (zod 4: def.element; zod 3: def.type). */
+function zodArrayElement(node) {
+  return node.version === 4 ? node.def.element : node.def.type;
+}
+
+/** Literal value (zod 4 stores values in def.values[]; zod 3 in def.value). */
+function zodLiteralValue(node) {
+  if (node.version === 4) {
+    return Array.isArray(node.def.values) ? node.def.values[0] : node.def.values;
+  }
+  return node.def.value;
+}
+
 function findDiscriminatedUnions(schema, currentPath = []) {
   const unions = [];
 
-  if (!schema || !schema._def) {
-    return unions;
-  }
+  const node = zodInternals(schema);
+  if (!node) return unions;
 
-  const typeName = schema._def.typeName;
+  const kind = zodKind(node);
 
   // Check if this is a discriminated union
-  if (typeName === 'ZodDiscriminatedUnion') {
-    const discriminator = schema._def.discriminator;
+  if (kind === 'discriminatedUnion') {
+    const discriminator = node.def.discriminator;
     const options = [];
 
     // Extract options from the union
-    for (const option of schema._def.options) {
-      if (option._def?.typeName === 'ZodObject') {
-        const shape = option._def.shape();
-        const discriminatorField = shape[discriminator];
+    for (const option of node.def.options) {
+      const optionNode = zodInternals(option);
+      if (zodKind(optionNode) === 'object') {
+        const shape = zodObjectShape(optionNode);
+        const discriminatorNode = zodInternals(shape[discriminator]);
 
-        if (discriminatorField?._def?.typeName === 'ZodLiteral') {
-          const value = discriminatorField._def.value;
+        if (discriminatorNode && zodKind(discriminatorNode) === 'literal') {
+          const value = zodLiteralValue(discriminatorNode);
 
           // Convert the option schema to JSON Schema
           let optionSchema;
           try {
-            optionSchema = zodToJsonSchema(option, {
-              $refStrategy: 'none',
-            });
+            optionSchema = toJsonSchema(option);
           } catch {
             optionSchema = { type: 'object' };
           }
@@ -323,26 +399,21 @@ function findDiscriminatedUnions(schema, currentPath = []) {
   }
 
   // Recurse into objects
-  if (typeName === 'ZodObject') {
-    const shape = schema._def.shape();
+  if (kind === 'object') {
+    const shape = zodObjectShape(node);
     for (const [key, value] of Object.entries(shape)) {
       unions.push(...findDiscriminatedUnions(value, [...currentPath, key]));
     }
   }
 
   // Recurse into arrays
-  if (typeName === 'ZodArray') {
-    unions.push(...findDiscriminatedUnions(schema._def.type, [...currentPath, '[]']));
+  if (kind === 'array') {
+    unions.push(...findDiscriminatedUnions(zodArrayElement(node), [...currentPath, '[]']));
   }
 
-  // Recurse into optionals
-  if (typeName === 'ZodOptional' || typeName === 'ZodNullable') {
-    unions.push(...findDiscriminatedUnions(schema._def.innerType, currentPath));
-  }
-
-  // Recurse into defaults
-  if (typeName === 'ZodDefault') {
-    unions.push(...findDiscriminatedUnions(schema._def.innerType, currentPath));
+  // Recurse into optionals, nullables and defaults (single inner type)
+  if (kind === 'optional' || kind === 'nullable' || kind === 'default') {
+    unions.push(...findDiscriminatedUnions(node.def.innerType, currentPath));
   }
 
   return unions;
