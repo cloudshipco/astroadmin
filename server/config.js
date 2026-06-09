@@ -79,15 +79,23 @@ const defaultConfig = {
     ttl: 1000 * 60 * 60 * 24 * 7, // 7 days (match cookie maxAge)
   } : null,
 
+  // Content store selection: 'files' (default — git is the source of truth,
+  // the site reads content via Astro's native glob()/file() loaders) or 'db'
+  // (the shelved SQLite content store, kept for the future SaaS/DB direction).
+  content: {
+    store: process.env.ASTROADMIN_CONTENT_STORE || 'files',
+  },
+
   // Git integration
-  // Content lives in the SQLite store, so publishing no longer requires git.
-  // When enabled, publish stages only these asset paths (never src/content);
-  // the binary content DB is committed only when includeDb is true.
+  // In files mode content lives in src/content, so publishing commits + pushes
+  // these paths and the site rebuilds from git (e.g. Netlify build-on-push).
+  // In db mode src/content is empty; the binary content DB is committed only
+  // when includeDb is true.
   git: {
     enabled: process.env.GIT_ENABLED !== 'false',
     autoCommit: IS_PROD,  // Auto-commit in production, manual in dev
     autoPush: process.env.GIT_AUTO_PUSH === 'true',
-    paths: ['src/styles/', 'public/images/'],
+    paths: ['src/content/', 'src/styles/', 'public/images/'],
     includeDb: false,
   },
 

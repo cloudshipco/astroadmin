@@ -9,7 +9,11 @@ import path from 'path';
 import chokidar from 'chokidar';
 import { config } from '../config.js';
 import { parseAstroSchemas } from './schema-parser.js';
-import { listSlugs, distinctCollections, getCollectionTypeFromDb } from './db.js';
+import {
+  listSlugs,
+  distinctCollections,
+  getCollectionType as getCollectionTypeFromStore,
+} from './content-store.js';
 
 // Cache for parsed schemas
 let cachedSchemas = null;
@@ -173,7 +177,7 @@ export async function getCollectionType(collectionName) {
 
   // Infer from any stored entry's type
   try {
-    return getCollectionTypeFromDb(collectionName) || 'content';
+    return (await getCollectionTypeFromStore(collectionName)) || 'content';
   } catch {
     return 'content'; // Default
   }
