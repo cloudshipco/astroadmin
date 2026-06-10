@@ -328,6 +328,38 @@ program
     }
   });
 
+program
+  .command('hash-password [password]')
+  .description('Generate an argon2 hash to set as ADMIN_PASSWORD_HASH')
+  .action(async (password) => {
+    try {
+      const { hashPassword } = await import('../server/utils/auth.js');
+
+      let pw = password;
+      if (!pw) {
+        process.stderr.write('Password (input is echoed; pipe via stdin to hide): ');
+        pw = await new Promise((resolve) => {
+          let data = '';
+          process.stdin.setEncoding('utf8');
+          process.stdin.on('data', (chunk) => { data += chunk; });
+          process.stdin.on('end', () => resolve(data));
+        });
+      }
+      pw = (pw || '').replace(/\r?\n$/, '');
+      if (!pw) {
+        console.error('No password provided.');
+        process.exit(1);
+      }
+
+      const hash = await hashPassword(pw);
+      console.log(hash);
+      process.exit(0);
+    } catch (error) {
+      console.error('❌ hash-password failed:', error.message);
+      process.exit(1);
+    }
+  });
+
 // If no command specified, show help
 if (!process.argv.slice(2).length) {
   program.outputHelp();

@@ -61,9 +61,12 @@ const defaultConfig = {
   },
 
   // Authentication
+  // Prefer ADMIN_PASSWORD_HASH (argon2, generated via `astroadmin hash-password`).
+  // ADMIN_PASSWORD is a plaintext fallback for local/dev only.
   auth: {
     username: process.env.ADMIN_USERNAME || 'admin',
     password: process.env.ADMIN_PASSWORD || 'admin',
+    passwordHash: process.env.ADMIN_PASSWORD_HASH || null,
     sessionSecret: process.env.SESSION_SECRET || 'dev-secret-change-in-prod',
     sessionCookie: {
       secure: IS_PROD,  // HTTPS only in production
