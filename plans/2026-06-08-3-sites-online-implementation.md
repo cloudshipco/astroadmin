@@ -11,6 +11,20 @@
 **Parent decision:** `plans/2026-06-08-hosted-platform-near-term-architecture.md`
 (B = files+git; per-site instances; Astro 6 + files; Netlify builds-on-push; SaaS later)
 
+## Progress (branch `feat/files-content-store`)
+
+- ✅ **Phase 1** — file-based content store behind a `content.store` seam (db preserved).
+- ✅ **Phase 2** — `astroadmin export` (DB→files), `import-files` deduped onto `glob-files`.
+- ✅ **Auth hardening** (Phase 3 slice) — argon2 + timing-safe login, prod weak-config
+  warnings, `astroadmin hash-password`. Login plumbing already existed; this hardened it.
+- ✅ Removed legacy `docker/`.
+- ⏳ **Next (needs the live sites / external infra — pause point):** run `astroadmin export`
+  against Waveney + RWE and swap their `content.config.ts` to `glob()`/`file()`; design the
+  minimal per-site runtime + deploy keys + TLS; stand up Feathered Thorns first.
+
+All server-less tests green: content-files 8, content-store(db) 7, export 5, import 8,
+loader 4, schema-parser-db 6, auth 5. (`api.test.js` needs a running server — pre-existing.)
+
 ## Goal
 
 Let 3 non-technical clients edit the **content** of their already-deployed Astro sites via
