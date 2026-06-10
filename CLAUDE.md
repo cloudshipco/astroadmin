@@ -18,3 +18,25 @@
 
 - **AstroAdmin UI** (`ui/*.css`) - Styles for the admin dashboard, modals, forms, etc.
 - **Site Content Preview** - Must use the site's own CSS, loaded dynamically via the Astro integration
+
+## Testing
+
+Tests are standalone scripts under `tests/`, run individually (there is no test
+runner aggregating them). Most run server-less and need env vars:
+
+- `bun tests/content-files.test.js` — files store. Needs `ASTROADMIN_PROJECT_ROOT=<tmp>`.
+- `bun tests/content-store.test.js` — SQLite store. Self-pins `ASTROADMIN_CONTENT_STORE=db`;
+  pass `ASTROADMIN_DB=<tmp.db> ASTROADMIN_PROJECT_ROOT=<tmp>`.
+- `bun tests/export-files.test.js`, `tests/import-files.test.js`, `tests/schema-parser-db.test.js` —
+  build their own throwaway project (symlink `node_modules` for zod); just `bun tests/<x>.test.js`.
+- `bun tests/loader.test.js` — DB loader; self-pins db mode; pass `ASTROADMIN_DB` + `ASTROADMIN_PROJECT_ROOT`.
+- `bun tests/auth.test.js` — auth helpers (needs Bun for `Bun.password`).
+
+**Storage modes:** the content store is selected by `config.content.store`
+(`files` default | `db`), env `ASTROADMIN_CONTENT_STORE`. Tests that exercise the
+DB store **must pin db mode** (a `process.env.ASTROADMIN_CONTENT_STORE = 'db'` line
+before imports), since `files` is now the default.
+
+**Caveat:** `npm test` / the `test` script only runs `tests/api.test.js`, which
+needs a **running server** and is currently red (tracked as issue #2). Don't read
+that single red as the suite being broken — run the server-less tests above.
