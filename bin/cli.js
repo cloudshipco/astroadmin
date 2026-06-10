@@ -291,6 +291,43 @@ program
     }
   });
 
+program
+  .command('export')
+  .description('Export the content database back to src/content files (inverse of migrate)')
+  .option('--project <path>', 'Astro project root directory', process.cwd())
+  .action(async (options) => {
+    const projectRoot = path.resolve(options.project);
+    process.env.ASTROADMIN_PROJECT_ROOT = projectRoot;
+    console.log(`\n📁 Project root: ${projectRoot}`);
+
+    try {
+      const { validateProject } = await import('../server/config.js');
+      const validation = await validateProject();
+      if (!validation.valid) {
+        console.error('\n❌ Invalid Astro project:\n');
+        validation.errors.forEach((err) => {
+          console.error(`   • ${err.message}`);
+          if (err.hint) console.error(`     → ${err.hint}`);
+        });
+        process.exit(1);
+      }
+
+      const { exportFiles } = await import('../server/utils/export-files.js');
+      console.log('📤 Exporting the content store into src/content files...\n');
+      console.log('   Run this BEFORE switching content.config.ts to glob()/file().\n');
+      const summary = await exportFiles();
+      for (const [name, count] of Object.entries(summary.collections)) {
+        console.log(`   ${name}: ${count}`);
+      }
+      console.log(`\n✅ Exported ${summary.total} entries (${summary.files} files written).`);
+      process.exit(0);
+    } catch (error) {
+      console.error('❌ Export failed:', error.message);
+      if (process.env.DEBUG) console.error(error.stack);
+      process.exit(1);
+    }
+  });
+
 // If no command specified, show help
 if (!process.argv.slice(2).length) {
   program.outputHelp();

@@ -141,8 +141,6 @@ export async function writeContent(collection, slug, { data, body, type }, local
     return writeFileCollectionEntry(info.filePath, slug, data);
   }
 
-  await fs.mkdir(info.baseDirectory, { recursive: true });
-
   const baseSlug = locale ? `${sanitizePath(slug)}.${locale}` : sanitizePath(slug);
   const effectiveType = type || info.type || 'content';
 
@@ -156,6 +154,9 @@ export async function writeContent(collection, slug, { data, body, type }, local
     content = matter.stringify(body || '', data);
   }
 
+  // The slug may be nested (e.g. "guides/start"), so create the file's own
+  // directory, not just the collection base.
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, 'utf-8');
   return { filePath, locale };
 }
