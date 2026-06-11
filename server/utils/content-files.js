@@ -12,13 +12,15 @@
  *   getAvailableLocales / listSlugs / distinctCollections / getCollectionType
  *
  * Glob base/pattern resolution and locale splitting are shared with the
- * importer via glob-files.js.
+ * importer via glob-files.js. Writes are atomic (temp file + rename) and
+ * serialized per target file, so concurrent saves can't tear a file or lose
+ * a file()-collection update.
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import matter from 'gray-matter';
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 import { loadSchemas } from './collections.js';
 import {
   getGlobBaseDirectory,
@@ -26,23 +28,15 @@ import {
   findMatchingFiles,
   splitLocale,
   resolveProjectPath,
+  sanitizePath,
+  allowedContentExtensions,
   CONTENT_EXTENSIONS,
 } from './glob-files.js';
 
-/**
- * Defence-in-depth path guard. Slugs/collections become path segments, so
- * reject traversal even though callers are already schema-bounded.
- */
-function sanitizePath(userPath) {
-  const normalized = path.normalize(userPath);
-  if (normalized.includes('..')) {
-    throw new Error('Invalid path: directory traversal not allowed');
-  }
-  return normalized;
-}
-
-function getI18n() {
-  return config.i18n || { enabled: false, locales: [] };
+async function getI18n() {
+  // Must be the merged config — i18n is only enableable via astroadmin.config.js.
+  const fullConfig = await getConfig();
+  return fullConfig.i18n || { enabled: false, locales: [] };
 }
 
 /**
@@ -73,9 +67,9 @@ async function getCollectionLoaderInfo(collection) {
 }
 
 /** Candidate file paths for a glob entry, in extension preference order. */
-function candidatePaths(baseDirectory, slug, locale) {
+function candidatePaths(baseDirectory, slug, locale, extensions = CONTENT_EXTENSIONS) {
   const baseSlug = locale ? `${sanitizePath(slug)}.${locale}` : sanitizePath(slug);
-  return CONTENT_EXTENSIONS.map((ext) => path.join(baseDirectory, baseSlug + ext));
+  return extensions.map((ext) => path.join(baseDirectory, baseSlug + ext));
 }
 
 async function findExistingFile(paths) {
@@ -88,6 +82,72 @@ async function findExistingFile(paths) {
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Write safety: per-file serialization + atomic replace
+// ---------------------------------------------------------------------------
+
+const fileWriteQueues = new Map();
+
+/**
+ * Serialize tasks targeting the same file so read-modify-write cycles (the
+ * file()-collection array) can't interleave and lose an update.
+ */
+function withFileWriteQueue(filePath, task) {
+  const previous = fileWriteQueues.get(filePath) || Promise.resolve();
+  const run = previous.catch(() => {}).then(task);
+  fileWriteQueues.set(filePath, run);
+  const cleanup = () => {
+    if (fileWriteQueues.get(filePath) === run) fileWriteQueues.delete(filePath);
+  };
+  run.then(cleanup, cleanup);
+  return run;
+}
+
+/**
+ * Write via temp file + rename so a concurrent reader (the Astro dev server,
+ * a parallel request) never sees a truncated file. Creates parent directories
+ * — slugs may be nested (e.g. "guides/start").
+ */
+async function atomicWriteFile(filePath, content) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  await fs.writeFile(tempPath, content, 'utf-8');
+  await fs.rename(tempPath, filePath);
+}
+
+// ---------------------------------------------------------------------------
+// file()-collection array helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a file() collection's JSON array. With missingOk, a missing file reads
+ * as an empty array — so the first entry of a fresh collection can be created
+ * and lookups report "not found" rather than ENOENT.
+ */
+async function readFileCollectionArray(filePath, { missingOk = false } = {}) {
+  let raw;
+  try {
+    raw = await fs.readFile(filePath, 'utf-8');
+  } catch (error) {
+    if (missingOk && error.code === 'ENOENT') return [];
+    throw error;
+  }
+  const arr = JSON.parse(raw);
+  if (!Array.isArray(arr)) {
+    throw new Error(`File collection is not an array: ${filePath}`);
+  }
+  return arr;
+}
+
+/** Entry identity within a file() collection array: id, falling back to slug. */
+function findEntryIndex(arr, entryId) {
+  return arr.findIndex((item) => item.id === entryId || item.slug === entryId);
+}
+
+function serializeFileCollection(arr) {
+  return `${JSON.stringify(arr, null, 2)}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,16 +179,23 @@ export async function readContent(collection, slug, locale = null) {
 }
 
 async function readFileCollectionEntry(filePath, entryId) {
-  const raw = await fs.readFile(filePath, 'utf-8');
-  const arr = JSON.parse(raw);
-  if (!Array.isArray(arr)) {
-    throw new Error(`File collection is not an array: ${filePath}`);
-  }
-  const entry = arr.find((item) => item.id === entryId || item.slug === entryId);
-  if (!entry) {
+  const arr = await readFileCollectionArray(filePath, { missingOk: true });
+  const index = findEntryIndex(arr, entryId);
+  if (index < 0) {
     throw new Error(`Content not found: ${entryId}`);
   }
-  return { type: 'data', data: entry, body: null, filePath, locale: null };
+  return { type: 'data', data: arr[index], body: null, filePath, locale: null };
+}
+
+/**
+ * Extension for a brand-new entry: data is always JSON; content gets whatever
+ * markdown flavour the collection's loader pattern expects (.mdx only when the
+ * pattern excludes .md, e.g. '**' + '/*.mdx').
+ */
+function newEntryExtension(effectiveType, allowedExtensions) {
+  if (effectiveType === 'data') return '.json';
+  if (!allowedExtensions.includes('.md') && allowedExtensions.includes('.mdx')) return '.mdx';
+  return '.md';
 }
 
 export async function writeContent(collection, slug, { data, body, type }, locale = null) {
@@ -142,41 +209,64 @@ export async function writeContent(collection, slug, { data, body, type }, local
   }
 
   const baseSlug = locale ? `${sanitizePath(slug)}.${locale}` : sanitizePath(slug);
-  const effectiveType = type || info.type || 'content';
+  const allowedExtensions = allowedContentExtensions(info.patterns);
 
-  let filePath;
+  // An update must land in the entry's existing file (considering only
+  // extensions the loader pattern can match, so a stale out-of-pattern file
+  // can't absorb the write invisibly), and a new entry gets the extension the
+  // pattern expects — editing home.mdx never creates a duplicate home.md, and
+  // creates on an mdx-only collection don't produce unreachable .md files.
+  let filePath = await findExistingFile(
+    candidatePaths(info.baseDirectory, slug, locale, allowedExtensions)
+  );
+  if (!filePath) {
+    const effectiveType = type || info.type || 'content';
+    filePath = path.join(
+      info.baseDirectory,
+      baseSlug + newEntryExtension(effectiveType, allowedExtensions)
+    );
+  }
+
   let content;
-  if (effectiveType === 'data') {
-    filePath = path.join(info.baseDirectory, `${baseSlug}.json`);
+  if (path.extname(filePath).toLowerCase() === '.json') {
+    // A JSON file can't hold a markdown body — fail loudly rather than
+    // silently dropping it.
+    if (typeof body === 'string' && body.trim() !== '') {
+      throw new Error(
+        `Entry ${collection}/${slug} is stored as JSON (${filePath}); a markdown body cannot be saved into it`
+      );
+    }
     content = `${JSON.stringify(data, null, 2)}\n`;
   } else {
-    filePath = path.join(info.baseDirectory, `${baseSlug}.md`);
     content = matter.stringify(body || '', data);
   }
 
-  // The slug may be nested (e.g. "guides/start"), so create the file's own
-  // directory, not just the collection base.
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, content, 'utf-8');
+  await withFileWriteQueue(filePath, () => atomicWriteFile(filePath, content));
   return { filePath, locale };
 }
 
+/**
+ * Replace a file() collection's entire array (used by the DB→files exporter),
+ * through the same serialized + atomic write path as entry-level updates so
+ * the on-disk format has exactly one definition.
+ */
+export async function writeFileCollectionArray(filePath, array) {
+  await withFileWriteQueue(filePath, () => atomicWriteFile(filePath, serializeFileCollection(array)));
+  return { filePath };
+}
+
 async function writeFileCollectionEntry(filePath, entryId, entryData) {
-  const raw = await fs.readFile(filePath, 'utf-8');
-  const arr = JSON.parse(raw);
-  if (!Array.isArray(arr)) {
-    throw new Error(`File collection is not an array: ${filePath}`);
-  }
-
-  const index = arr.findIndex((item) => item.id === entryId || item.slug === entryId);
-  const next = { ...entryData, id: entryId };
-  if (index >= 0) {
-    arr[index] = next; // preserve array order (position)
-  } else {
-    arr.push(next);
-  }
-
-  await fs.writeFile(filePath, `${JSON.stringify(arr, null, 2)}\n`, 'utf-8');
+  await withFileWriteQueue(filePath, async () => {
+    const arr = await readFileCollectionArray(filePath, { missingOk: true });
+    const index = findEntryIndex(arr, entryId);
+    const next = { ...entryData, id: entryId };
+    if (index >= 0) {
+      arr[index] = next; // preserve array order (position)
+    } else {
+      arr.push(next);
+    }
+    await atomicWriteFile(filePath, serializeFileCollection(arr));
+  });
   return { filePath, locale: null };
 }
 
@@ -196,22 +286,22 @@ export async function deleteContent(collection, slug, locale = null) {
     throw new Error(`Content not found: ${collection}/${slug}${localeHint}`);
   }
 
-  await fs.unlink(filePath);
+  // Queued like writes, so a delete can't interleave with a pending save's
+  // rename and resurrect the file.
+  await withFileWriteQueue(filePath, () => fs.unlink(filePath));
   return { deleted: filePath, locale };
 }
 
 async function deleteFileCollectionEntry(filePath, entryId) {
-  const raw = await fs.readFile(filePath, 'utf-8');
-  const arr = JSON.parse(raw);
-  if (!Array.isArray(arr)) {
-    throw new Error(`File collection is not an array: ${filePath}`);
-  }
-  const index = arr.findIndex((item) => item.id === entryId || item.slug === entryId);
-  if (index < 0) {
-    throw new Error(`Content not found: ${entryId}`);
-  }
-  arr.splice(index, 1);
-  await fs.writeFile(filePath, `${JSON.stringify(arr, null, 2)}\n`, 'utf-8');
+  await withFileWriteQueue(filePath, async () => {
+    const arr = await readFileCollectionArray(filePath, { missingOk: true });
+    const index = findEntryIndex(arr, entryId);
+    if (index < 0) {
+      throw new Error(`Content not found: ${entryId}`);
+    }
+    arr.splice(index, 1);
+    await atomicWriteFile(filePath, serializeFileCollection(arr));
+  });
   return { deleted: filePath, locale: null };
 }
 
@@ -219,8 +309,8 @@ export async function contentExists(collection, slug, locale = null) {
   const info = await getCollectionLoaderInfo(collection);
   if (info.isFile) {
     try {
-      const arr = JSON.parse(await fs.readFile(info.filePath, 'utf-8'));
-      return Array.isArray(arr) && arr.some((item) => item.id === slug || item.slug === slug);
+      const arr = await readFileCollectionArray(info.filePath, { missingOk: true });
+      return findEntryIndex(arr, slug) >= 0;
     } catch {
       return false;
     }
@@ -230,11 +320,16 @@ export async function contentExists(collection, slug, locale = null) {
 }
 
 export async function getAvailableLocales(collection, baseSlug, configuredLocales) {
+  const info = await getCollectionLoaderInfo(collection);
+
+  // file() collections have no locale variants (parity with the db store,
+  // which stored them locale-less and listed no locales for them).
+  if (info.isFile) return [];
+
   const available = [];
   for (const locale of configuredLocales) {
-    if (await contentExists(collection, baseSlug, locale)) {
-      available.push(locale);
-    }
+    const filePath = await findExistingFile(candidatePaths(info.baseDirectory, baseSlug, locale));
+    if (filePath) available.push(locale);
   }
   return available;
 }
@@ -249,15 +344,14 @@ export async function listSlugs(collection) {
 
   if (info.isFile) {
     try {
-      const arr = JSON.parse(await fs.readFile(info.filePath, 'utf-8'));
-      if (!Array.isArray(arr)) return [];
+      const arr = await readFileCollectionArray(info.filePath, { missingOk: true });
       return arr.map((item, index) => item.id || item.slug || String(index));
     } catch {
       return [];
     }
   }
 
-  const i18n = getI18n();
+  const i18n = await getI18n();
   const files = await findMatchingFiles(info.baseDirectory, info.patterns);
   const seen = new Set();
   const slugs = [];

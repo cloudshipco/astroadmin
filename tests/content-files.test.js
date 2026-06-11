@@ -105,6 +105,32 @@ await check('i18n: locale-suffixed files and available locales', async () => {
   assert.deepEqual(available, ['fr'], 'only fr present among configured');
 });
 
+await check('nested slugs are listed under the default pattern', async () => {
+  await writeContent('pages', 'guides/start', { data: { title: 'Start' }, body: 'Start here', type: 'content' }, null);
+  const slugs = await getCollectionEntries('pages');
+  assert.ok(slugs.includes('guides/start'), 'nested entry appears in the listing');
+});
+
+await check('editing an entry stored as .mdx updates it in place (no .md sibling)', async () => {
+  const mdxPath = path.join(CONTENT_DIR, 'pages', 'note.mdx');
+  await fs.writeFile(mdxPath, '---\ntitle: Note\n---\n<Note>hi</Note>', 'utf-8');
+
+  const result = await writeContent(
+    'pages',
+    'note',
+    { data: { title: 'Note v2' }, body: '<Note>updated</Note>', type: 'content' },
+    null
+  );
+  assert.equal(result.filePath, mdxPath, 'write landed in the existing .mdx');
+
+  const onDisk = await fs.readFile(mdxPath, 'utf-8');
+  assert.ok(onDisk.includes('Note v2'), 'mdx content updated');
+  await assert.rejects(
+    () => fs.access(path.join(CONTENT_DIR, 'pages', 'note.md')),
+    'no duplicate .md created'
+  );
+});
+
 await check('delete removes the file and is idempotent-guarded', async () => {
   const result = await deleteContent('pages', 'about', null);
   assert.ok(result.deleted.endsWith(path.join('pages', 'about.md')), 'deleted path');

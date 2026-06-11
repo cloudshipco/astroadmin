@@ -313,8 +313,9 @@ program
       }
 
       const { exportFiles } = await import('../server/utils/export-files.js');
-      console.log('📤 Exporting the content store into src/content files...\n');
-      console.log('   Run this BEFORE switching content.config.ts to glob()/file().\n');
+      console.log('📤 Exporting the content store into content files...\n');
+      console.log('   Run this AFTER switching content.config.ts to glob()/file(),');
+      console.log('   so the export matches the loaders the site will read from.\n');
       const summary = await exportFiles();
       for (const [name, count] of Object.entries(summary.collections)) {
         console.log(`   ${name}: ${count}`);

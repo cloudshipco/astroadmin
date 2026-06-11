@@ -19,8 +19,9 @@
 import fs from 'fs/promises';
 import path from 'path';
 import matter from 'gray-matter';
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 import { loadSchemas } from './collections.js';
+import { activeStoreMode } from './content-store.js';
 import { upsertEntry, computeDigest, countAll, getMeta, setMeta, withTransaction } from './db.js';
 import {
   getGlobBaseDirectory,
@@ -112,12 +113,13 @@ async function collectFileCollectionEntries(name, loaderFilePath) {
 /**
  * Import every configured collection's files into the content database.
  * @param {object} [options]
- * @param {object} [options.i18n] - i18n config override (defaults to config.i18n)
+ * @param {object} [options.i18n] - i18n config override (defaults to the merged config's i18n)
  * @returns {Promise<{total: number, collections: Record<string, number>}>}
  */
 export async function importFiles({ i18n } = {}) {
   const schemas = await loadSchemas();
-  const i18nConfig = i18n || config.i18n || { enabled: false, locales: [] };
+  // Merged config — i18n is only enableable via astroadmin.config.js.
+  const i18nConfig = i18n || (await getConfig()).i18n || { enabled: false, locales: [] };
 
   const summary = { total: 0, collections: {} };
   const pendingEntries = [];
@@ -152,10 +154,10 @@ export async function maybeAutoImport() {
   try {
     // Only meaningful for the db store; in files mode there is no DB to seed
     // (and touching it would create a stray content.db).
-    const storeMode = process.env.ASTROADMIN_CONTENT_STORE || config.content?.store || 'files';
-    if (storeMode !== 'db') return { imported: false };
+    if ((await activeStoreMode()) !== 'db') return { imported: false };
 
-    if (!config.database?.autoImportOnEmpty) return { imported: false };
+    const fullConfig = await getConfig();
+    if (!fullConfig.database?.autoImportOnEmpty) return { imported: false };
     if (getMeta('imported') === '1') return { imported: false };
     if (countAll() > 0) return { imported: false };
 

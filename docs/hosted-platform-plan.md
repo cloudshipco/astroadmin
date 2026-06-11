@@ -1,5 +1,11 @@
 # Hosted Platform Plan
 
+> **Status note (2026-06):** the self-hosted `docker/` deployment referenced as the
+> "current baseline" / "Phase 0" below has been **removed** (it didn't fit the
+> files+git, build-on-push model). For the current direction see
+> `plans/2026-06-08-content-store-direction.md` and
+> `plans/2026-06-08-3-sites-online-implementation.md`.
+
 This plan describes how AstroAdmin should evolve from a single-site Docker deployment into a hosted CMS platform for many Astro sites.
 
 The core position is:

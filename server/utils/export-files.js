@@ -7,20 +7,22 @@
  * through the file store, preserving frontmatter/body, data JSON, locales, and
  * file()-collection array order.
  *
- * Run via `astroadmin export` BEFORE switching the site's content.config.ts from
- * astroadminLoader to glob()/file(): while the config still declares the db
- * loader, db collections have no glob base, so they export to the conventional
- * `src/content/<collection>` — exactly where the new glob() loader will read.
+ * Run via `astroadmin export` AFTER switching the site's content.config.ts from
+ * astroadminLoader to its target glob()/file() loaders: the parsed loaders tell
+ * the exporter exactly where each collection lives on disk (glob base/pattern,
+ * the file() array path) and which markdown extension the glob expects. A
+ * collection still declaring astroadminLoader has none of that: if its rows
+ * came from a file() loader the export fails (per-entry files would lose the
+ * array order), otherwise it falls back to the conventional
+ * `src/content/<collection>/` layout with a loud warning.
  *
  * Bridges stores directly: reads db.js, writes content-files.js (not the
  * dispatcher), so it works regardless of the active content.store setting.
  */
 
-import fs from 'fs/promises';
-import path from 'path';
 import { loadSchemas } from './collections.js';
 import { listAllEntries } from './db.js';
-import { writeContent } from './content-files.js';
+import { writeContent, writeFileCollectionArray } from './content-files.js';
 import { resolveProjectPath } from './glob-files.js';
 
 /**
@@ -44,18 +46,40 @@ export async function exportFiles() {
     const schema = schemas[collection] || {};
     const isFileCollection = schema.loaderType === 'file' && schema.loaderFilePath;
 
+    if (schema.loaderType === 'db') {
+      // Rows imported from a file() loader carry array positions; exporting
+      // them as per-entry files would silently lose the array order, so make
+      // the user fix the config rather than warn-and-corrupt.
+      const hasFilePositions = collectionRows.some(
+        (row) => row.position !== null && row.position !== undefined
+      );
+      if (hasFilePositions) {
+        throw new Error(
+          `Collection "${collection}" was imported from a file() loader (its rows carry ` +
+            `array positions) but content.config.ts still declares astroadminLoader for it. ` +
+            `Switch the loader back to file() first, then re-run the export.`
+        );
+      }
+      console.warn(
+        `⚠️  Collection "${collection}" still uses astroadminLoader in content.config.ts, ` +
+          `so the exporter doesn't know its target layout — falling back to ` +
+          `src/content/${collection}/. Switch the loader to glob() first to control ` +
+          `the base/pattern, then re-run the export.`
+      );
+    }
+
     if (isFileCollection) {
-      // file() loader: rebuild the single JSON array, ordered by position.
+      // file() loader: rebuild the single JSON array, ordered by position,
+      // through the file store's canonical array writer.
       const ordered = [...collectionRows].sort(
         (a, b) => (a.position ?? 0) - (b.position ?? 0)
       );
       const array = ordered.map((row) => JSON.parse(row.data));
-      const target = resolveProjectPath(schema.loaderFilePath);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, `${JSON.stringify(array, null, 2)}\n`, 'utf-8');
+      await writeFileCollectionArray(resolveProjectPath(schema.loaderFilePath), array);
       summary.files += 1;
     } else {
-      // glob (or db) loader: one file per entry, honouring loaderBase if set.
+      // glob (or still-db) loader: one file per entry; writeContent honours
+      // loaderBase and derives the extension from the loader pattern.
       for (const row of collectionRows) {
         await writeContent(
           collection,

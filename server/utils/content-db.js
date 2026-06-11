@@ -14,8 +14,8 @@
  * `filePath` here is a synthetic logical id kept for API/UI compatibility.
  */
 
-import path from 'path';
 import { loadSchemas } from './collections.js';
+import { sanitizePath } from './glob-files.js';
 import {
   getEntry,
   upsertEntry,
@@ -39,14 +39,6 @@ async function getCollectionLoaderInfo(collection) {
     console.warn(`Could not get loader info for ${collection}:`, error.message);
     return { isFile: false };
   }
-}
-
-function sanitizePath(userPath) {
-  const normalized = path.normalize(userPath);
-  if (normalized.includes('..')) {
-    throw new Error('Invalid path: directory traversal not allowed');
-  }
-  return normalized;
 }
 
 function logicalId(collection, slug, locale) {

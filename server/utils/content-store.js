@@ -1,9 +1,11 @@
 /**
  * Content store dispatcher
  *
- * Selects the active content store at runtime from `config.content.store`
- * (env `ASTROADMIN_CONTENT_STORE` wins): 'files' (default) → content-files.js,
- * 'db' → content-db.js (the shelved SQLite path kept for the SaaS direction).
+ * Selects the active content store at runtime from the merged config's
+ * `content.store` — astroadmin.config.js can set it, env
+ * `ASTROADMIN_CONTENT_STORE` wins over both: 'files' (default) →
+ * content-files.js, 'db' → content-db.js (the shelved SQLite path kept for
+ * the SaaS direction).
  *
  * The selected module is imported dynamically and cached, so file-based
  * deployments never load the SQLite driver (and vice versa), and there is no
@@ -13,21 +15,28 @@
  * (the file store is async, db.js is sync) present the same shape.
  */
 
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 
 let storePromise = null;
 
-function store() {
-  if (!storePromise) {
-    const mode = process.env.ASTROADMIN_CONTENT_STORE || config.content?.store || 'files';
-    storePromise = mode === 'db' ? import('./content-db.js') : import('./content-files.js');
-  }
-  return storePromise;
+/**
+ * The active store mode. Single source of truth for env-vs-config precedence:
+ * ASTROADMIN_CONTENT_STORE beats astroadmin.config.js beats the 'files'
+ * default. Must read the merged config — the static `config` export never
+ * includes astroadmin.config.js overrides.
+ */
+export async function activeStoreMode() {
+  const fullConfig = await getConfig();
+  return process.env.ASTROADMIN_CONTENT_STORE || fullConfig.content?.store || 'files';
 }
 
-/** Test/diagnostic helper: which store is active without forcing a load. */
-export function activeStoreMode() {
-  return process.env.ASTROADMIN_CONTENT_STORE || config.content?.store || 'files';
+function store() {
+  if (!storePromise) {
+    storePromise = activeStoreMode().then((mode) =>
+      mode === 'db' ? import('./content-db.js') : import('./content-files.js')
+    );
+  }
+  return storePromise;
 }
 
 export async function readContent(...args) {

@@ -15,7 +15,21 @@ import path from 'path';
 import { config } from '../config.js';
 
 export const CONTENT_EXTENSIONS = ['.md', '.mdx', '.json'];
-export const DEFAULT_GLOB_PATTERN = '*.{md,mdx,json}';
+// Recursive, matching Astro's legacy src/content semantics — entries may be
+// nested (e.g. guides/start.md), and the store writes nested slugs.
+export const DEFAULT_GLOB_PATTERN = '**/*.{md,mdx,json}';
+
+/**
+ * Defence-in-depth path guard. Slugs/collections become path segments, so
+ * reject traversal even though callers are already schema-bounded.
+ */
+export function sanitizePath(userPath) {
+  const normalized = path.normalize(userPath);
+  if (normalized.includes('..')) {
+    throw new Error('Invalid path: directory traversal not allowed');
+  }
+  return normalized;
+}
 
 export function escapeRegExp(value) {
   return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
@@ -42,7 +56,19 @@ export function getGlobBaseDirectory(collectionName, schema) {
 }
 
 /**
- * Match pattern(s) for a glob collection. Defaults to `*.{md,mdx,json}`.
+ * Subset of CONTENT_EXTENSIONS the collection's pattern(s) can match (probed
+ * at top level and nested). Falls back to all extensions when the patterns
+ * match none — better to over-match than to make entries unreachable.
+ */
+export function allowedContentExtensions(patterns) {
+  const allowed = CONTENT_EXTENSIONS.filter((ext) =>
+    [`probe${ext}`, `nested/probe${ext}`].some((probe) => matchesAnyPattern(probe, patterns))
+  );
+  return allowed.length > 0 ? allowed : CONTENT_EXTENSIONS;
+}
+
+/**
+ * Match pattern(s) for a glob collection. Defaults to `**\/*.{md,mdx,json}`.
  */
 export function getGlobPatterns(schema) {
   if (Array.isArray(schema?.loaderPattern) && schema.loaderPattern.length > 0) {
@@ -117,6 +143,8 @@ export function matchesAnyPattern(relativeFilePath, patterns) {
  * restricted to content extensions. Returns POSIX-relative paths, sorted.
  */
 export async function findMatchingFiles(baseDirectory, patterns) {
+  // Compile once per call, not per file visited.
+  const patternRegexes = patterns.map(globPatternToRegExp);
   const files = [];
 
   async function walk(directory) {
@@ -140,7 +168,7 @@ export async function findMatchingFiles(baseDirectory, patterns) {
       const relativePath = toPosixPath(path.relative(baseDirectory, fullPath));
       const extension = path.extname(relativePath).toLowerCase();
       if (!CONTENT_EXTENSIONS.includes(extension)) continue;
-      if (!matchesAnyPattern(relativePath, patterns)) continue;
+      if (!patternRegexes.some((patternRegex) => patternRegex.test(relativePath))) continue;
 
       files.push(relativePath);
     }

@@ -13,7 +13,9 @@ import {
   listSlugs,
   distinctCollections,
   getCollectionType as getCollectionTypeFromStore,
-} from './content-store.js';
+  readContent,
+  getAvailableLocales,
+} from './content.js';
 
 // Cache for parsed schemas
 let cachedSchemas = null;
@@ -106,11 +108,14 @@ export async function getCollectionNames() {
   } catch (error) {
     console.error('Error loading schemas for collection names:', error);
 
-    // Fallback to collections present in the content database
+    // Fallback to collections present in the content store. Only the db store
+    // can answer without schemas (the files store needs them to locate
+    // collections, so files mode degrades to []). Must await — the store
+    // functions are async, and an un-awaited return would skip the catch.
     try {
-      return distinctCollections();
+      return await distinctCollections();
     } catch (fallbackError) {
-      console.error('Error reading collections from database:', fallbackError);
+      console.error('Error reading collections from the content store:', fallbackError);
       return [];
     }
   }
@@ -119,16 +124,18 @@ export async function getCollectionNames() {
 /**
  * Get all entry slugs for a collection.
  *
- * Slugs are stored in the content database without a locale suffix, so i18n
- * deduplication is inherent (one row per slug+locale, SELECT DISTINCT slug).
- * The file()-vs-glob distinction no longer affects listing — both are rows;
- * file collections keep their original array order via the `position` column.
+ * The store handles i18n deduplication itself (the db store keys rows by
+ * slug+locale; the file store strips locale suffixes via the merged config),
+ * so listing needs no i18n options. file() collections keep their original
+ * array order.
  *
  * @param {string} collectionName - Collection name
  */
 export async function getCollectionEntries(collectionName) {
   try {
-    return listSlugs(collectionName);
+    // Must await — listSlugs is async, and an un-awaited return would skip
+    // the catch and bubble store errors to API callers as 500s.
+    return await listSlugs(collectionName);
   } catch (error) {
     console.error(`Error reading collection ${collectionName}:`, error);
     return [];
@@ -142,11 +149,7 @@ export async function getCollectionEntries(collectionName) {
  * @returns {Promise<Array<{slug: string, locales: string[]}>>}
  */
 export async function getCollectionEntriesWithLocales(collectionName, locales) {
-  const { getAvailableLocales } = await import('./content.js');
-  const slugs = await getCollectionEntries(collectionName, {
-    i18nEnabled: true,
-    locales,
-  });
+  const slugs = await getCollectionEntries(collectionName);
 
   const entries = await Promise.all(
     slugs.map(async (slug) => {
@@ -247,10 +250,22 @@ function buildCollectionBlockMap(schemas) {
 }
 
 /**
- * Get all collections with their metadata
- * @param {object} options - { i18nEnabled: boolean, locales: string[] }
+ * Which block types reference a collection (for component preview). Derived
+ * purely from the cached schemas — no store/filesystem access.
  */
-export async function getAllCollections(options = {}) {
+export async function getCollectionUsedByBlocks(collectionName) {
+  try {
+    const schemas = await loadSchemas();
+    return buildCollectionBlockMap(schemas)[collectionName] || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get all collections with their metadata
+ */
+export async function getAllCollections() {
   const collectionNames = await getCollectionNames();
 
   // Try to load schemas (don't fail if it doesn't work)
@@ -266,8 +281,7 @@ export async function getAllCollections(options = {}) {
 
   const collections = await Promise.all(
     collectionNames.map(async (name) => {
-      // Pass i18n options to getCollectionEntries for proper deduplication
-      const entries = await getCollectionEntries(name, options);
+      const entries = await getCollectionEntries(name);
       const schemaInfo = schemas[name] || {};
 
       return {
@@ -307,7 +321,6 @@ export async function hasBlockEditor(collectionName) {
  * Returns entries with slug, title, and preview text
  */
 export async function getCollectionEntriesWithPreview(collectionName) {
-  const { readContent } = await import('./content.js');
   const slugs = await getCollectionEntries(collectionName);
 
   const entries = await Promise.all(

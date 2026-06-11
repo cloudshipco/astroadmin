@@ -18,11 +18,13 @@
 - ✅ **Auth hardening** (Phase 3 slice) — argon2 + timing-safe login, prod weak-config
   warnings, `astroadmin hash-password`. Login plumbing already existed; this hardened it.
 - ✅ Removed legacy `docker/`.
-- ⏳ **Next (needs the live sites / external infra — pause point):** run `astroadmin export`
-  against Waveney + RWE and swap their `content.config.ts` to `glob()`/`file()`; design the
-  minimal per-site runtime + deploy keys + TLS; stand up Feathered Thorns first.
+- ⏳ **Next (needs the live sites / external infra — pause point):** for Waveney + RWE, swap
+  `content.config.ts` to `glob()`/`file()` **first**, then run `astroadmin export` (the exporter
+  reads the parsed loaders for the target layout and refuses to export file()-origin rows under
+  `astroadminLoader`); design the minimal per-site runtime + deploy keys + TLS; stand up
+  Feathered Thorns first.
 
-All server-less tests green: content-files 8, content-store(db) 7, export 5, import 8,
+All server-less tests green: content-files 10, content-store(db) 7, export 7, import 8,
 loader 4, schema-parser-db 6, auth 5. (`api.test.js` needs a running server — pre-existing.)
 
 ## Goal
@@ -112,8 +114,11 @@ Make AstroAdmin read/write content **files** again, keeping the v1.0.0 zod-4 / b
    Phase-1 file `writeContent`: for each collection, read all DB rows (`db.js`), write files
    to the glob base. Mirror of `astroadmin migrate`. Idempotent.
 2. **Per site (waveney, then RWE):**
-   - Run `export` → `src/content` files (preserves current **live** content from local `content.db`).
-   - Swap `content.config.ts`: `astroadminLoader` → `glob()` (and `file()` where used).
+   - Swap `content.config.ts`: `astroadminLoader` → `glob()` (and `file()` where used) **first** —
+     the exporter reads the parsed loaders to know each collection's target layout
+     (glob base/pattern, the file() array path, .md vs .mdx). It warns and falls back to
+     `src/content/<collection>/` for any collection still on `astroadminLoader`.
+   - Run `export` → content files (preserves current **live** content from local `content.db`).
    - Drop `.astroadmin/content.db` from the build path.
    - **Verify build byte-equivalence** to the current live build (same check used in the
      original migration) before cutover.

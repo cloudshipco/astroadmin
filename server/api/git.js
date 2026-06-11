@@ -5,45 +5,16 @@
 
 import express from 'express';
 import path from 'path';
-import simpleGit from 'simple-git';
 import { getConfig } from '../config.js';
-import { publishHandler } from './publish.js';
+import {
+  publishHandler,
+  createGitClient,
+  getGitPaths,
+  stageGitPaths,
+  getStagedFilesForPaths,
+} from './publish.js';
 
 const router = express.Router();
-const DEFAULT_GIT_PATHS = ['src/styles/', 'public/images/'];
-
-function getGitPaths(fullConfig) {
-  return Array.isArray(fullConfig.git?.paths) && fullConfig.git.paths.length > 0
-    ? fullConfig.git.paths
-    : DEFAULT_GIT_PATHS;
-}
-
-function createGitClient(fullConfig) {
-  return simpleGit(fullConfig.paths.projectRoot);
-}
-
-async function getStagedFilesForPaths(git, gitPaths) {
-  if (gitPaths.length === 0) return [];
-
-  const diffOutput = await git.diff(['--name-only', '--cached', '--', ...gitPaths]);
-  return diffOutput.split(/\r?\n/).filter(Boolean);
-}
-
-async function stageGitPaths(git, gitPaths) {
-  const stagedPaths = [];
-
-  for (const gitPath of gitPaths) {
-    try {
-      await git.add(['-A', '--', gitPath]);
-      stagedPaths.push(gitPath);
-    } catch (error) {
-      // A configured path may not exist in every project — non-fatal.
-      console.log('Staging note:', error.message);
-    }
-  }
-
-  return stagedPaths;
-}
 
 export async function commitConfiguredGitPaths(fullConfig, message) {
   const git = createGitClient(fullConfig);
@@ -60,9 +31,9 @@ export async function commitConfiguredGitPaths(fullConfig, message) {
 }
 
 /**
- * Allowed directories for git file operations (relative to project root).
- * Content now lives in the SQLite store, so src/content is intentionally
- * excluded — git operations are limited to configured editable asset paths.
+ * Allowed directories for git file operations (relative to project root) —
+ * the configured git paths: src/content plus assets in files mode, assets
+ * only in db mode (see config.js defaultGitPathsForStore).
  */
 function getAllowedGitPaths(fullConfig) {
   return getGitPaths(fullConfig).map((gitPath) => path.normalize(gitPath).replace(/[\\/]+$/, ''));

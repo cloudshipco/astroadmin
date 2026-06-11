@@ -1,9 +1,9 @@
 /**
- * Content utility (public CRUD surface)
+ * Content utility (public storage surface)
  *
- * Thin re-export of the active content store's CRUD functions so existing
- * importers (`server/api/content.js`, `server/utils/collections.js`) keep
- * working unchanged. The store (file-based by default, SQLite when
+ * Thin re-export of the active content store's full interface so every
+ * consumer (`server/api/content.js`, `server/utils/collections.js`, tests)
+ * imports from one place. The store (file-based by default, SQLite when
  * `config.content.store = 'db'`) is selected in content-store.js.
  */
 
@@ -13,4 +13,7 @@ export {
   deleteContent,
   contentExists,
   getAvailableLocales,
+  listSlugs,
+  distinctCollections,
+  getCollectionType,
 } from './content-store.js';
