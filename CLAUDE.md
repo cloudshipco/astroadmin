@@ -41,3 +41,12 @@ before imports), since `files` is now the default.
 **Caveat:** `npm test` / the `test` script only runs `tests/api.test.js`, which
 needs a **running server** and is currently red (tracked as issue #2). Don't read
 that single red as the suite being broken — run the server-less tests above.
+
+## Releasing
+
+`npm publish` requires interactive browser auth — ask the user to run
+`! npm publish` themselves; then tag `vX.Y.Z` and create the GitHub release.
+Version semantics: npm `0.2.0 → 1.1.0` is the files-first line; git tag
+`v1.0.0` is the shelved SQLite store and was **never published to npm** — don't
+reuse 1.0.0. Pre-publish sanity: `npm pack --dry-run` (the `files` allowlist
+must keep plans/, docs/, tests/ out of the tarball).
