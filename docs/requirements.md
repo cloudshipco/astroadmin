@@ -6,8 +6,8 @@ AstroAdmin requires a specific project structure to work. This page details all 
 
 | Requirement | Minimum Version |
 |-------------|-----------------|
-| Bun | 1.0.0 (runs AstroAdmin and, by default, the site build) |
-| Astro | 6.0.0 (Astro-6-only since the DB content store) |
+| Bun | 1.0.0 (runs AstroAdmin) |
+| Astro | 5.0.0 in the default files mode (legacy collections and `glob()`/`file()` loaders both parse); 6.0.0 if you opt into the shelved DB store |
 | Zod | 3.20.0+ (zod 4 supported; Astro 6 ships zod 4) |
 
 ## Project Structure
@@ -18,8 +18,8 @@ AstroAdmin expects this directory structure:
 your-astro-site/
 ├── astro.config.mjs        # or astro.config.ts
 ├── src/
+│   ├── content.config.ts   # Collection schemas (required)
 │   └── content/
-│       ├── config.ts       # Collection schemas (required)
 │       ├── pages/          # Example collection folder
 │       │   ├── home.md
 │       │   └── about.md
@@ -37,26 +37,23 @@ your-astro-site/
 
 You must have either `astro.config.mjs` or `astro.config.ts` in your project root. This tells AstroAdmin it's an Astro project.
 
-### 2. Content Directory
-
-The `src/content/` directory must exist. This is where Astro Content Collections live.
-
-### 3. Collection Config
+### 2. Collection Config
 
 You must have a collection config file at one of these paths:
-- `src/content/config.ts` (most common)
-- `src/content/config.mts`
-- `src/content/config.js`
-- `src/content/config.mjs`
+- `src/content.config.ts` (most common)
+- `src/content.config.mts`
+- `src/content.config.js`
+- `src/content.config.mjs`
 
-This file must export a `collections` object:
+This file must export a `collections` object. With Astro's `glob()` loader:
 
 ```typescript
-// src/content/config.ts
+// src/content.config.ts
 import { defineCollection, z } from 'astro:content';
+import { glob } from 'astro/loaders';
 
 const pages = defineCollection({
-  type: 'content',
+  loader: glob({ pattern: '**/*.md', base: './src/content/pages' }),
   schema: z.object({
     title: z.string(),
     description: z.string().optional(),
@@ -66,20 +63,19 @@ const pages = defineCollection({
 export const collections = { pages };
 ```
 
+Legacy (pre-loader) collections defined with `type: 'content'` are also
+understood; they resolve to `src/content/<collection>/`.
+
 ## Validation Errors
 
 When you run `npx astroadmin dev`, it validates your project. Here's what each error means:
 
-### "Missing src/content directory"
+### "Missing src/content.config.ts (Content Collections not set up)"
 
-**Cause:** No `src/content/` folder found.
+**Cause:** No content config file found at the paths above.
 
-**Fix:**
-```bash
-mkdir -p src/content
-```
-
-Then create a `config.ts` file. See [Content Collections](./content-collections.md).
+**Fix:** create `src/content.config.ts` exporting your collections. See
+[Content Collections](./content-collections.md).
 
 ### "No astro.config.mjs or astro.config.ts found"
 
@@ -138,10 +134,10 @@ If you install AstroAdmin as a project dependency (not just npx), add these peer
 ```json
 {
   "dependencies": {
-    "astroadmin": "^0.1.0"
+    "astroadmin": "^1.1.0"
   },
   "peerDependencies": {
-    "astro": ">=4.0.0",
+    "astro": ">=5.0.0",
     "zod": ">=3.20.0"
   }
 }
