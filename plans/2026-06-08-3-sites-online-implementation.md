@@ -24,9 +24,15 @@
   one *additive* Tailwind utility (`.transform`) because `src/content` is scannable again
   (a content file's prose contains the bare token) — the files build is a strict superset
   of the live build. Recipe + detail in the private ops repo.
-- ⏳ **Next (needs the live sites / external infra — pause point):** repeat for real on a
-  branch of the Site B repo (then Site C: same + version bump); design the minimal
-  per-site runtime + deploy keys + TLS; stand up Site A first.
+- ✅ **Site B real migration (2026-06-11)** — branch + PR on the site repo, byte-verified
+  against both the dev checkout and the published package. **astroadmin v1.1.0 published
+  to npm** (first files-first release; docs rewritten for files-first, closing #13), which
+  unblocks fresh-clone/CI builds — the site's version-pin issue is closed and its PR is
+  mergeable.
+- ⏳ **Next:** merge the Site B PR + confirm the Netlify production build, then cutover/DNS
+  (client coordination). Site C: same recipe **plus** delete its stale `src/content`
+  before exporting (leftover files would resurrect DB-deleted entries) and the 0.1.0→1.1.0
+  bump. Then Phase 3: per-site runtime + deploy keys + TLS, standing up Site A first.
 
 All server-less tests green: content-files 10, content-store(db) 7, export 7, import 8,
 loader 4, schema-parser-db 6, auth 5. (`api.test.js` needs a running server — pre-existing.)
