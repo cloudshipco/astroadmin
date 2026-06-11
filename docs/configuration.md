@@ -12,8 +12,8 @@ export default {
     url: 'http://localhost:4321',
   },
   auth: {
-    username: process.env.ADMIN_USER || 'admin',
-    password: process.env.ADMIN_PASSWORD || 'admin',
+    username: process.env.ADMIN_USERNAME || 'admin',
+    passwordHash: process.env.ADMIN_PASSWORD_HASH,
   },
 };
 ```
@@ -37,26 +37,19 @@ The preview panel loads your Astro site in an iframe. Make sure your Astro dev s
 
 ### Authentication
 
-Configure admin login credentials:
+Configure admin login credentials. For anything internet-facing, prefer an
+argon2 password **hash** over a plaintext password:
 
-```javascript
-export default {
-  auth: {
-    username: 'admin',
-    password: 'admin',
-  },
-};
+```bash
+npx astroadmin hash-password   # prints a hash to set as ADMIN_PASSWORD_HASH
 ```
 
-**Security note:** Change the default credentials in production!
-
-### Using Environment Variables
-
 ```javascript
 export default {
   auth: {
-    username: process.env.ADMIN_USER || 'admin',
-    password: process.env.ADMIN_PASSWORD || 'admin',
+    username: process.env.ADMIN_USERNAME || 'admin',
+    passwordHash: process.env.ADMIN_PASSWORD_HASH, // preferred
+    // password: process.env.ADMIN_PASSWORD,       // plaintext fallback, local/dev only
   },
 };
 ```
@@ -64,9 +57,13 @@ export default {
 Then set in `.env`:
 
 ```bash
-ADMIN_USER=myuser
-ADMIN_PASSWORD=securepassword
+ADMIN_USERNAME=myuser
+ADMIN_PASSWORD_HASH='$argon2id$...'
+SESSION_SECRET=a-long-random-string
 ```
+
+**Security note:** AstroAdmin warns at startup when production runs with the
+default credentials, a plaintext-only password, or the default session secret.
 
 ## CLI Options
 
@@ -87,10 +84,13 @@ npx astroadmin dev --project ./my-astro-site
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ADMIN_USER` | Login username | `admin` |
-| `ADMIN_PASSWORD` | Login password | `admin` |
+| `ADMIN_USERNAME` | Login username | `admin` |
+| `ADMIN_PASSWORD_HASH` | argon2 hash (via `astroadmin hash-password`) | unset |
+| `ADMIN_PASSWORD` | Plaintext password (local/dev fallback) | `admin` |
+| `SESSION_SECRET` | Session signing secret | dev-only default |
 | `ASTROADMIN_PROJECT_ROOT` | Project path | Current directory |
-| `ASTROADMIN_DB` | Content store (SQLite) path | `<project>/.astroadmin/content.db` |
+| `ASTROADMIN_CONTENT_STORE` | Content store: `files` or `db` | `files` |
+| `ASTROADMIN_DB` | SQLite path (db mode only) | `<project>/.astroadmin/content.db` |
 | `GIT_ENABLED` | Enable git integration | `true` (`false` to disable) |
 | `DEBUG` | Show stack traces | `false` |
 
@@ -102,45 +102,53 @@ Images are uploaded to `public/images/` by default. Ensure this directory exists
 mkdir -p public/images
 ```
 
-## Database (content store)
+## Content store
 
-Content is stored in a SQLite database, not in `src/content` files. By default
-it lives at `<project>/.astroadmin/content.db` (created automatically). Override
-the location with the `ASTROADMIN_DB` environment variable or config:
+By default content is stored as **files** in your repo (`src/content/`, or
+wherever your `glob()`/`file()` loaders point) — git is the source of truth and
+your site reads the files natively. There is nothing to configure.
+
+The shelved SQLite backend can be selected explicitly:
 
 ```javascript
 export default {
+  content: {
+    store: 'db', // 'files' (default) | 'db'; env ASTROADMIN_CONTENT_STORE wins
+  },
   database: {
-    path: process.env.ASTROADMIN_DB, // defaults to .astroadmin/content.db
+    path: process.env.ASTROADMIN_DB, // db mode only; defaults to .astroadmin/content.db
   },
 };
 ```
 
-Add `.astroadmin/` and `content.db*` to `.gitignore` (the default project
-template already does). Your site reads this store at build time via the
-`astroadmin/loader` content-layer loader — see the README.
+In db mode, add `.astroadmin/` and `content.db*` to `.gitignore`, and the site
+reads the store at build time via the `astroadmin/loader` content-layer loader
+— see the README. To migrate a db-mode site back to files, swap the loaders in
+`src/content.config.ts` first, then run `npx astroadmin export`.
 
 ## Git Integration
 
-Git is **optional** — content lives in the database, so publishing does not
-require it. Publishing is build + deploy (via a [deploy adapter](./deploy-adapters.md)),
-with git as an optional pre-step.
+In files mode, git **is the publish mechanism**: publishing commits the
+configured paths — `src/content/` plus assets — and pushes, and a
+build-on-push host (e.g. Netlify) rebuilds the site. A
+[deploy adapter](./deploy-adapters.md) is optional for self-hosted setups.
 
 ```javascript
 export default {
   git: {
-    enabled: true,                          // or GIT_ENABLED=false to disable
+    enabled: true,        // or GIT_ENABLED=false to disable
     autoPush: false,
-    paths: ['src/styles/', 'public/images/'], // staged on publish (never src/content)
-    includeDb: false,                       // commit the binary content.db too
+    // Defaults are store-aware: files mode stages src/content/ + assets;
+    // db mode stages assets only (src/content may hold stale files).
+    paths: ['src/content/', 'src/styles/', 'public/images/'],
+    includeDb: false,     // db mode: commit the binary content.db too
   },
 };
 ```
 
 When git is disabled, the admin hides the git "Changes" panel and the
-`/api/git/*` routes are not mounted; publishing still works via `/api/publish`.
-When enabled, publishing commits the configured `paths` (never `src/content`,
-and never the binary DB unless `includeDb` is true).
+`/api/git/*` routes are not mounted; publishing still works via `/api/publish`
+with a deploy adapter. An explicitly-empty `paths: []` means "stage nothing".
 
 ## CORS and Preview
 
@@ -160,8 +168,8 @@ export default {
 
   // Authentication
   auth: {
-    username: process.env.ADMIN_USER || 'admin',
-    password: process.env.ADMIN_PASSWORD || 'admin',
+    username: process.env.ADMIN_USERNAME || 'admin',
+    passwordHash: process.env.ADMIN_PASSWORD_HASH,
   },
 };
 ```

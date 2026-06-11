@@ -1,5 +1,12 @@
 # AstroAdmin: SQLite content store + Astro 6 loader + deploy adapters
 
+> **Status: SHELVED (2026-06-08).** This plan shipped as v1.0.0 (git tag
+> `v1.0.0`), but the project then reverted to **files + git as the source of
+> truth** — see `plans/2026-06-08-content-store-direction.md`. The DB store is
+> preserved behind `config.content.store = 'db'` for a future hosted/SaaS
+> phase; `astroadmin export` migrates a db-mode site back to files. Kept for
+> historical context.
+
 ## Context
 
 AstroAdmin (`/home/user/repo`, an Express+Bun headless CMS for Astro sites) currently stores
