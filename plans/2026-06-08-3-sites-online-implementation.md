@@ -18,11 +18,15 @@
 - ✅ **Auth hardening** (Phase 3 slice) — argon2 + timing-safe login, prod weak-config
   warnings, `astroadmin hash-password`. Login plumbing already existed; this hardened it.
 - ✅ Removed legacy `docker/`.
-- ⏳ **Next (needs the live sites / external infra — pause point):** for Site B + Site C, swap
-  `content.config.ts` to `glob()`/`file()` **first**, then run `astroadmin export` (the exporter
-  reads the parsed loaders for the target layout and refuses to export file()-origin rows under
-  `astroadminLoader`); design the minimal per-site runtime + deploy keys + TLS; stand up
-  Site A first.
+- ✅ **Phase 2 dry-run (Site B, 2026-06-11)** — against a throwaway COPY of the checkout:
+  swapped `content.config.ts` to `glob()`, ran `astroadmin export` (10 entries → files),
+  rebuilt. **All 11 HTML pages byte-identical** to the db-mode baseline; the only diff is
+  one *additive* Tailwind utility (`.transform`) because `src/content` is scannable again
+  (a content file's prose contains the bare token) — the files build is a strict superset
+  of the live build. Recipe + detail in the private ops repo.
+- ⏳ **Next (needs the live sites / external infra — pause point):** repeat for real on a
+  branch of the Site B repo (then Site C: same + version bump); design the minimal
+  per-site runtime + deploy keys + TLS; stand up Site A first.
 
 All server-less tests green: content-files 10, content-store(db) 7, export 7, import 8,
 loader 4, schema-parser-db 6, auth 5. (`api.test.js` needs a running server — pre-existing.)
