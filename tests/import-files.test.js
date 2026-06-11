@@ -63,7 +63,7 @@ export const collections = { pages, testimonials, metadata, articles };
 `
   );
 
-  // Sample content (mirrors rhythm-works-east: md pages/testimonials, json metadata).
+  // Sample content (mirrors a typical brochure site: md pages/testimonials, json metadata).
   fs.mkdirSync(path.join(tmpRoot, 'src/content/pages'), { recursive: true });
   fs.mkdirSync(path.join(tmpRoot, 'src/content/pages/guides'), { recursive: true });
   fs.mkdirSync(path.join(tmpRoot, 'src/content/testimonials'), { recursive: true });

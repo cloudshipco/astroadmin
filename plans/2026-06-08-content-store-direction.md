@@ -13,7 +13,7 @@ framing/rationale that led there.
 Read top to bottom, then jump to **Questions for the brainstorm**. The goal of the
 next session is to *decide a direction* (A, B, or C below) — or at least decide what
 we'd need to learn to choose. Do not start building until we've picked. The DB-store
-work is shipped and proven, so there is no time pressure beyond the waveney go-live.
+work is shipped and proven, so there is no time pressure beyond the Site B go-live.
 
 ---
 
@@ -21,8 +21,8 @@ work is shipped and proven, so there is no time pressure beyond the waveney go-l
 
 We moved AstroAdmin from editing **filesystem** content (`src/content/*.md`) to a
 **SQLite content store** (`.astroadmin/content.db`) read at build time via an Astro-6
-content-layer loader. It works — proven byte-equivalent on two sites (rhythm-works-east,
-waveney-build). But the move surfaced a gap we haven't built: **content now lives only
+content-layer loader. It works — proven byte-equivalent on two sites (Site C,
+Site B). But the move surfaced a gap we haven't built: **content now lives only
 on the machine running AstroAdmin** (the DB is gitignored), which breaks durability and
 continuous deployment for a real client site.
 
@@ -54,14 +54,14 @@ file-based builds. Admin UI dogfooded.
   Laptop dies → content is gone (code is in git, content is not).
 - **Continuous deployment** — a CI checkout (Netlify build-on-push) has no DB, so it
   would ship an empty site. Deploys are hand-run locally. (Documented; commented on
-  waveney #2.)
+  Site B #2.)
 - **Version history** for content (open issue #11).
 - A clean publish/sync story for static hosts.
 
 **Forcing functions making this live now:**
-- waveney-build wants to go live for a real client (#1: DNS cutover from Wix).
-- waveney can't build on a fresh clone/CI because `astroadmin` is pinned `^0.2.0` but the
-  build needs the unpublished v1.0.0 via a local symlink (waveney #6). Publishing v1.0.0
+- Site B wants to go live for a real client (repo #1: DNS cutover).
+- Site B can't build on a fresh clone/CI because `astroadmin` is pinned `^0.2.0` but the
+  build needs the unpublished v1.0.0 via a local symlink (Site B #6). Publishing v1.0.0
   to npm is the keystone that unblocks the migration PRs — but we shouldn't publish a
   direction we're about to reverse.
 
@@ -110,7 +110,7 @@ ambition*. The question is which set matters for what AstroAdmin is actually for
 
 The right answer changes with the product:
 - **(i) A developer's local CMS** for Astro sites I build and deploy for clients (current
-  reality — RWE, waveney). Here the editor is often *me* or a semi-technical client, deploys
+  reality — Site C, Site B). Here the editor is often *me* or a semi-technical client, deploys
   are controlled, and simplicity/durability matter most → **filesystem+git looks better.**
 - **(ii) A hosted CMS platform** where non-technical clients self-edit and we host
   (`hosted-platform-plan.md`). Here decoupling edits from git, drafts, and multi-tenancy
@@ -168,7 +168,7 @@ files (standard Astro), not the DB.
    product (ii)? This dominates everything else.
 2. Is `hosted-platform-plan.md` still the intended direction? If yes, why did we build a DB
    store against its stated position? If no, it needs rewriting.
-3. For the *actual clients we have* (RWE, waveney), does anyone benefit from DB-only
+3. For the *actual clients we have* (Site C, Site B), does anyone benefit from DB-only
    features (drafts, non-git editing, structured queries) — or would files+git serve them
    fully?
 4. How much do we value **content durability + CD** for a live client site? (Right now both
@@ -181,8 +181,8 @@ files (standard Astro), not the DB.
 
 ## State to preserve regardless of decision
 - AstroAdmin v1.0.0 is on `main` + tag `v1.0.0` (DB store intact even if we revert).
-- waveney: branch `astro6-migration` (PR #7), tag `astro5` (pre-migration rollback).
-- RWE: branch `astro6-migration` (pushed), tag `astro5`.
+- Site B: branch `astro6-migration` (PR #7), tag `astro5` (pre-migration rollback).
+- Site C: branch `astro6-migration` (pushed), tag `astro5`.
 - **Do not publish AstroAdmin to npm until this is decided** (publishing signals commitment
   to the DB store and unblocks merging the migration PRs).
 
@@ -191,7 +191,7 @@ files (standard Astro), not the DB.
 - `docs/hosted-platform-plan.md` — platform vision (git-backed filesystem as source of truth).
 - `docs/deploy-adapters.md` — current deploy model.
 - Open issues: #11 (content version history), #2/#3/#4/#10 (DB-store cleanups).
-- waveney repo: PR #7, issue #6 (npm pin), issue #2 (CD blocked by gitignored DB).
+- Site B repo: PR #7, issue #6 (npm pin), issue #2 (CD blocked by gitignored DB).
 - Auto-memory: `astroadmin-db-content-store` (full status of the effort).
 
 ## My lean (not a decision)

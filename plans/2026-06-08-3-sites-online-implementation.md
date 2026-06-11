@@ -18,11 +18,11 @@
 - ✅ **Auth hardening** (Phase 3 slice) — argon2 + timing-safe login, prod weak-config
   warnings, `astroadmin hash-password`. Login plumbing already existed; this hardened it.
 - ✅ Removed legacy `docker/`.
-- ⏳ **Next (needs the live sites / external infra — pause point):** for Waveney + RWE, swap
+- ⏳ **Next (needs the live sites / external infra — pause point):** for Site B + Site C, swap
   `content.config.ts` to `glob()`/`file()` **first**, then run `astroadmin export` (the exporter
   reads the parsed loaders for the target layout and refuses to export file()-origin rows under
   `astroadminLoader`); design the minimal per-site runtime + deploy keys + TLS; stand up
-  Feathered Thorns first.
+  Site A first.
 
 All server-less tests green: content-files 10, content-store(db) 7, export 7, import 8,
 loader 4, schema-parser-db 6, auth 5. (`api.test.js` needs a running server — pre-existing.)
@@ -108,12 +108,12 @@ Make AstroAdmin read/write content **files** again, keeping the v1.0.0 zod-4 / b
 
 **Effort:** medium. **Risk:** low (recovery + adaptation; UX untouched).
 
-## Phase 2 — Migrate Waveney + RWE off the DB store (content-preserving)
+## Phase 2 — Migrate Site B + Site C off the DB store (content-preserving)
 
 1. **Build `astroadmin export` (DB→files).** Reuse `import-files.js` glob metadata + the
    Phase-1 file `writeContent`: for each collection, read all DB rows (`db.js`), write files
    to the glob base. Mirror of `astroadmin migrate`. Idempotent.
-2. **Per site (waveney, then RWE):**
+2. **Per site (Site B, then Site C):**
    - Swap `content.config.ts`: `astroadminLoader` → `glob()` (and `file()` where used) **first** —
      the exporter reads the parsed loaders to know each collection's target layout
      (glob base/pattern, the file() array path, .md vs .mdx). It warns and falls back to
@@ -123,11 +123,11 @@ Make AstroAdmin read/write content **files** again, keeping the v1.0.0 zod-4 / b
    - **Verify build byte-equivalence** to the current live build (same check used in the
      original migration) before cutover.
    - Commit on a branch → PR. Keep the astro6+DB branch/tag as rollback.
-   - RWE also: bump `astroadmin` 0.1.0 → the new file-based version.
-3. **Feathered Thorns:** already file-based (Astro 5) — no content migration. It only becomes
+   - Site C also: bump `astroadmin` 0.1.0 → the new file-based version.
+3. **Site A:** already file-based (Astro 5) — no content migration. It only becomes
    a hosting target in Phase 3.
 
-**Effort:** low-medium per site. **Risk:** medium (waveney is live — gate on byte-equivalence;
+**Effort:** low-medium per site. **Risk:** medium (Site B is live — gate on byte-equivalence;
 keep DB + tag for rollback; do not touch the Netlify production build until verified).
 
 ## Phase 3 — Auth + public hosting (per-site instances)
@@ -155,11 +155,11 @@ client logins — auth correctness + TLS + credential handling matter).
 
 ## Phase 4 — Rollout order
 
-1. **Feathered Thorns first** — least work (already file-based); proves auth + hosting +
+1. **Site A first** — least work (already file-based); proves auth + hosting +
    publish→Netlify on the simplest site.
-2. **Waveney** — already live; migrate content to files (Phase 2), verify byte-equivalence,
+2. **Site B** — already live; migrate content to files (Phase 2), verify byte-equivalence,
    stand up the editor, cut over.
-3. **RWE** — same, plus the version bump.
+3. **Site C** — same, plus the version bump.
 
 ## Explicitly NOT building now (SaaS phase)
 
@@ -169,5 +169,5 @@ Near-term tenants edit content only on first-party code; Netlify is the build sa
 
 ## Sequencing note
 
-Phase 1 + the Feathered-Thorns slice of Phase 3 is the smallest end-to-end proof (one client
-editing online). Do that first, then Waveney (the one with a waiting client), then RWE.
+Phase 1 + the Site A slice of Phase 3 is the smallest end-to-end proof (one client
+editing online). Do that first, then Site B (the one with a waiting client), then Site C.

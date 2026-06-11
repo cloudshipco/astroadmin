@@ -31,7 +31,7 @@ a design/decision doc — no implementation here. Supersedes the open question i
 Clarified 2026-06-08: this is **not** the SaaS platform. The immediate need is to let 3
 non-technical clients edit the **content** of sites whose **code we own**, via AstroAdmin
 reachable on the internet. The SaaS multi-tenant cloud CMS/hosting product is a **later**
-phase that reuses what we learn here. Waveney is already live (built locally → Netlify); the
+phase that reuses what we learn here. Site B is already live (built locally → Netlify); the
 gap is the *editor*, not the site.
 
 **Key simplification — Netlify is the build sandbox + host.** Once content is files-in-git,
@@ -45,18 +45,18 @@ to the platform plan's existing *"Trusted self-hosted — single customer"* tier
 
 | Site | Astro | AstroAdmin | Store | Near-term work |
 |---|---|---|---|---|
-| Feathered Thorns (`feathered-thorns`, `cloudshipco/feathered-thorns`) | 5.16 | 0.2.0 | files | none on content; just hosted editor + auth |
-| Waveney (`…/waveney-build/site`, `cloudshipco/waveney-build-website`) | 6.4 | 0.2.0 | DB store, no files | DB→files export (preserve live content) + revert to file mode |
-| RWE (`…/rhythmworkseast.co.uk`, `cloudshipco/rhythmworkseast`) | 6.3 | 0.1.0 | DB store + stale files | same revert + version bump |
+| Site A (private repo) | 5.16 | 0.2.0 | files | none on content; just hosted editor + auth |
+| Site B (private repo) | 6.4 | 0.2.0 | DB store, no files | DB→files export (preserve live content) + revert to file mode |
+| Site C (private repo) | 6.3 | 0.1.0 | DB store + stale files | same revert + version bump |
 
 **Realizations:**
 - Published AstroAdmin **0.2.0 is already the file-based build** (FT runs it). "B" =
   continue the 0.2.0 file line + port the improved zod-form/block-editor UX onto it; do NOT
   publish the v1.0.0 DB store as mainline.
 - **Astro 6 was only required for the DB store** (content-layer loader is Astro-6-only).
-  Dropping the DB store removes that reason → simplest path for waveney/RWE is revert to
+  Dropping the DB store removes that reason → simplest path for Site B/Site C is revert to
   their `astro5` file-based tags (proven by FT). Confirm no other Astro-6 need.
-- Waveney/RWE **current live content lives in local `content.db`** → a one-time DB→files
+- Site B/Site C **current live content lives in local `content.db`** → a one-time DB→files
   export is required before revert so no content is lost.
 - AstroAdmin has a `session-store.js` but **no evidence of real multi-user auth** (it was a
   local tool). **Auth + public hosting is the main net-new near-term work** — verify first.
@@ -66,7 +66,7 @@ to the platform plan's existing *"Trusted self-hosted — single customer"* tier
   scoped to one repo, one client login, holding only that repo's write credential. No
   multi-tenancy code to build; smallest blast radius; matches the trusted-self-hosted tier.
   Multi-tenancy is built later for the SaaS phase, informed by operating these three.
-- **Waveney + RWE: stay on Astro 6, switch to file-based content.** Content config moves
+- **Site B + Site C: stay on Astro 6, switch to file-based content.** Content config moves
   from `astroadminLoader` (DB) to a `glob()` file collection over `src/content`. We keep
   v1.0.0's improved zod-4 / block-editor UX but point its storage at **files, not the DB**.
   (Implication: file editing must work under the v1.0.0 codebase + Astro 6 — verify; FT
@@ -74,8 +74,8 @@ to the platform plan's existing *"Trusted self-hosted — single customer"* tier
 
 **Near-term scope (revised, replaces the cut-down v1 list below for THIS phase):**
 1. AstroAdmin: make the v1.0.0 zod/block-editor UX read/write **files** instead of the DB;
-   build a one-time **DB→files exporter** for the waveney/RWE migration.
-2. Migrate waveney + RWE: export `content.db` → `src/content` files, swap
+   build a one-time **DB→files exporter** for the Site B/Site C migration.
+2. Migrate Site B + Site C: export `content.db` → `src/content` files, swap
    `astroadminLoader` → `glob()` in `content.config.ts`, commit. FT needs nothing here.
 3. Add **auth** (login per site) to AstroAdmin and deploy one instance per site publicly.
    AstroAdmin needs a working checkout of each site (for preview) + that repo's write cred.
@@ -258,7 +258,7 @@ Answered: external non-technical clients are in scope for v1. **Critical scoping
 
 **Timeline split (the live-client deadline and the platform must not compete):**
 1. **Next 1–2 weeks (shippable):** B revert + publish v1.0.0 files-based → **unblocks
-   waveney going live now** as a developer-deployed site. This is the thing with a deadline.
+   Site B going live now** as a developer-deployed site. This is the thing with a deadline.
 2. **Hosted multi-user editor** (auth/roles/draft-preview/tenant-isolation/hardened-commit/
    media) = the next milestone, **weeks not days**, built on the same file substrate.
 
@@ -273,7 +273,7 @@ artifact build job, manual domain/deploy, NO untrusted tenants:**
 
 1. **Revert admin to files + git (B):** restore file read/write, keep the zod-form /
    block-editor UX, demote loader/DB/importer out of the hot path.
-2. **Publish AstroAdmin v1.0.0 as a files-based release** — unblocks waveney go-live
+2. **Publish AstroAdmin v1.0.0 as a files-based release** — unblocks Site B go-live
    (gitignored-DB → empty-CI-build problem disappears). Files-based, not a DB commitment.
    *(Steps 1–2 are the plausible, self-contained slice. Everything below is the platform
    and should not be promised inside the same 1–2 weeks.)*
@@ -343,8 +343,8 @@ artifact build job, manual domain/deploy, NO untrusted tenants:**
 ## State to preserve (regardless)
 
 - AstroAdmin v1.0.0 on `main` + tag `v1.0.0` (DB store intact even though shelved).
-- waveney: branch `astro6-migration` (PR #7), tag `astro5` (pre-migration rollback).
-- RWE: branch `astro6-migration` (pushed), tag `astro5`.
+- Site B: branch `astro6-migration` (PR #7), tag `astro5` (pre-migration rollback).
+- Site C: branch `astro6-migration` (pushed), tag `astro5`.
 
 ## References
 
