@@ -10,6 +10,10 @@
  *     bun tests/loader.test.js
  */
 
+// Seeds the SQLite store and drives the DB content-layer loader, so pin the
+// dispatcher to the db store regardless of the default.
+process.env.ASTROADMIN_CONTENT_STORE = 'db';
+
 import assert from 'assert';
 import { pathToFileURL } from 'url';
 import { writeContent } from '../server/utils/content.js';

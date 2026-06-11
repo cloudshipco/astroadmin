@@ -11,155 +11,25 @@
  * Run this BEFORE switching a site's content.config.ts to astroadminLoader —
  * while the config still declares glob()/file() loaders — so collection
  * loader types and file paths are still discoverable.
+ *
+ * Glob base/pattern resolution and locale splitting are shared with the file
+ * store via glob-files.js.
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import matter from 'gray-matter';
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 import { loadSchemas } from './collections.js';
+import { activeStoreMode } from './content-store.js';
 import { upsertEntry, computeDigest, countAll, getMeta, setMeta, withTransaction } from './db.js';
-
-const CONTENT_EXTENSIONS = ['.md', '.mdx', '.json'];
-const DEFAULT_GLOB_PATTERN = '*.{md,mdx,json}';
-
-function escapeRegExp(value) {
-  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
-}
-
-function toPosixPath(filePath) {
-  return filePath.split(path.sep).join('/');
-}
-
-function resolveProjectPath(filePath) {
-  return path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(config.paths.projectRoot, filePath);
-}
-
-function getGlobBaseDirectory(collectionName, schema) {
-  return schema.loaderBase
-    ? resolveProjectPath(schema.loaderBase)
-    : path.join(config.paths.content, collectionName);
-}
-
-function getGlobPatterns(schema) {
-  if (Array.isArray(schema.loaderPattern) && schema.loaderPattern.length > 0) {
-    return schema.loaderPattern.map(String);
-  }
-  if (typeof schema.loaderPattern === 'string' && schema.loaderPattern.trim()) {
-    return [schema.loaderPattern];
-  }
-  return [DEFAULT_GLOB_PATTERN];
-}
-
-function normalizeGlobPattern(pattern) {
-  return pattern.replace(/\\/g, '/').replace(/^\.\//, '');
-}
-
-function globPatternToRegExp(pattern) {
-  const normalizedPattern = normalizeGlobPattern(pattern);
-  let regexSource = '^';
-
-  for (let index = 0; index < normalizedPattern.length; index++) {
-    const char = normalizedPattern[index];
-
-    if (char === '*') {
-      const isGlobStar = normalizedPattern[index + 1] === '*';
-      if (isGlobStar) {
-        const hasFollowingSlash = normalizedPattern[index + 2] === '/';
-        if (hasFollowingSlash) {
-          regexSource += '(?:.*/)?';
-          index += 2;
-        } else {
-          regexSource += '.*';
-          index += 1;
-        }
-      } else {
-        regexSource += '[^/]*';
-      }
-      continue;
-    }
-
-    if (char === '?') {
-      regexSource += '[^/]';
-      continue;
-    }
-
-    if (char === '{') {
-      const closingIndex = normalizedPattern.indexOf('}', index + 1);
-      if (closingIndex !== -1) {
-        const alternatives = normalizedPattern
-          .slice(index + 1, closingIndex)
-          .split(',')
-          .map((alternative) => escapeRegExp(alternative));
-        regexSource += `(?:${alternatives.join('|')})`;
-        index = closingIndex;
-        continue;
-      }
-    }
-
-    regexSource += escapeRegExp(char);
-  }
-
-  return new RegExp(`${regexSource}$`);
-}
-
-function matchesAnyPattern(relativeFilePath, patterns) {
-  return patterns
-    .map(globPatternToRegExp)
-    .some((patternRegex) => patternRegex.test(relativeFilePath));
-}
-
-async function findMatchingFiles(baseDirectory, patterns) {
-  const files = [];
-
-  async function walk(directory) {
-    let dirents;
-    try {
-      dirents = await fs.readdir(directory, { withFileTypes: true });
-    } catch {
-      if (directory === baseDirectory) return;
-      throw new Error(`Could not read directory: ${directory}`);
-    }
-
-    for (const dirent of dirents) {
-      const fullPath = path.join(directory, dirent.name);
-      if (dirent.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-
-      if (!dirent.isFile()) continue;
-
-      const relativePath = toPosixPath(path.relative(baseDirectory, fullPath));
-      const extension = path.extname(relativePath).toLowerCase();
-      if (!CONTENT_EXTENSIONS.includes(extension)) continue;
-      if (!matchesAnyPattern(relativePath, patterns)) continue;
-
-      files.push(relativePath);
-    }
-  }
-
-  await walk(baseDirectory);
-  return files.sort();
-}
-
-/**
- * Split a filename (without extension) into base slug + locale, honouring the
- * site's i18n config (e.g. "home.fr" -> { slug: "home", locale: "fr" }).
- */
-function splitLocale(nameWithoutExt, i18nConfig) {
-  if (i18nConfig?.enabled && Array.isArray(i18nConfig.locales) && i18nConfig.locales.length > 0) {
-    const escapedLocales = i18nConfig.locales.map((locale) => escapeRegExp(locale));
-    const pattern = new RegExp(`\\.(${escapedLocales.join('|')})$`, 'i');
-    const match = nameWithoutExt.match(pattern);
-    if (match) {
-      return { slug: nameWithoutExt.replace(pattern, ''), locale: match[1] };
-    }
-  }
-  return { slug: nameWithoutExt, locale: null };
-}
+import {
+  getGlobBaseDirectory,
+  getGlobPatterns,
+  findMatchingFiles,
+  splitLocale,
+  resolveProjectPath,
+} from './glob-files.js';
 
 /**
  * Collect entries for a glob (directory) collection using the loader's base
@@ -243,12 +113,13 @@ async function collectFileCollectionEntries(name, loaderFilePath) {
 /**
  * Import every configured collection's files into the content database.
  * @param {object} [options]
- * @param {object} [options.i18n] - i18n config override (defaults to config.i18n)
+ * @param {object} [options.i18n] - i18n config override (defaults to the merged config's i18n)
  * @returns {Promise<{total: number, collections: Record<string, number>}>}
  */
 export async function importFiles({ i18n } = {}) {
   const schemas = await loadSchemas();
-  const i18nConfig = i18n || config.i18n || { enabled: false, locales: [] };
+  // Merged config — i18n is only enableable via astroadmin.config.js.
+  const i18nConfig = i18n || (await getConfig()).i18n || { enabled: false, locales: [] };
 
   const summary = { total: 0, collections: {} };
   const pendingEntries = [];
@@ -281,7 +152,12 @@ export async function importFiles({ i18n } = {}) {
  */
 export async function maybeAutoImport() {
   try {
-    if (!config.database?.autoImportOnEmpty) return { imported: false };
+    // Only meaningful for the db store; in files mode there is no DB to seed
+    // (and touching it would create a stray content.db).
+    if ((await activeStoreMode()) !== 'db') return { imported: false };
+
+    const fullConfig = await getConfig();
+    if (!fullConfig.database?.autoImportOnEmpty) return { imported: false };
     if (getMeta('imported') === '1') return { imported: false };
     if (countAll() > 0) return { imported: false };
 

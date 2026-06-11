@@ -12,6 +12,10 @@
  * collection — file-loader specifics are covered by the fixture e2e later.)
  */
 
+// This suite asserts the SQLite store's behaviour (synthetic `db:` ids,
+// countAll), so pin the dispatcher to the db store regardless of the default.
+process.env.ASTROADMIN_CONTENT_STORE = 'db';
+
 import assert from 'assert';
 import {
   readContent,

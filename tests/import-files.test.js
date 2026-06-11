@@ -18,6 +18,9 @@ const repoRoot = path.resolve(import.meta.dir, '..');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-import-'));
 
 let passed = 0;
+// Failure sentinel: already reported by check(), just unwinds to the outer
+// catch so the finally cleanup still runs (process.exit would skip it).
+class CheckFailed extends Error {}
 async function check(name, fn) {
   try {
     await fn();
@@ -25,7 +28,7 @@ async function check(name, fn) {
     console.log(`✅ ${name}`);
   } catch (error) {
     console.error(`❌ ${name}\n   ${error.stack || error.message}`);
-    process.exit(1);
+    throw new CheckFailed(name);
   }
 }
 
@@ -60,7 +63,7 @@ export const collections = { pages, testimonials, metadata, articles };
 `
   );
 
-  // Sample content (mirrors rhythm-works-east: md pages/testimonials, json metadata).
+  // Sample content (mirrors a typical brochure site: md pages/testimonials, json metadata).
   fs.mkdirSync(path.join(tmpRoot, 'src/content/pages'), { recursive: true });
   fs.mkdirSync(path.join(tmpRoot, 'src/content/pages/guides'), { recursive: true });
   fs.mkdirSync(path.join(tmpRoot, 'src/content/testimonials'), { recursive: true });
@@ -161,7 +164,11 @@ export const collections = { pages, broken };
 
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed.\n`);
-  process.exit(0);
+} catch (error) {
+  if (!(error instanceof CheckFailed)) {
+    console.error(`❌ Test setup failed\n   ${error.stack || error.message}`);
+  }
+  process.exitCode = 1;
 } finally {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 }

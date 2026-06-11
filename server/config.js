@@ -21,6 +21,23 @@ export const IS_PROD = ENV === 'production';
 // Project root: from env var (set by CLI), or fall back to cwd
 export const PROJECT_ROOT = process.env.ASTROADMIN_PROJECT_ROOT || process.cwd();
 
+// Content store mode as far as the defaults can know it (env only —
+// astroadmin.config.js may still override content.store; getConfig()
+// recomputes mode-dependent defaults once that override is known, and
+// content-store.js's activeStoreMode() is the runtime source of truth).
+const CONTENT_STORE_MODE = process.env.ASTROADMIN_CONTENT_STORE || 'files';
+
+// In files mode content lives in src/content, so publishing commits + pushes
+// it along with assets. In db mode src/content is NOT staged — it may hold
+// stale pre-migration files.
+function defaultGitPathsForStore(storeMode) {
+  return [
+    ...(storeMode === 'db' ? [] : ['src/content/']),
+    'src/styles/',
+    'public/images/',
+  ];
+}
+
 // UI assets directory (inside astroadmin package)
 export const UI_DIR = path.resolve(__dirname, '../ui');
 
@@ -61,9 +78,12 @@ const defaultConfig = {
   },
 
   // Authentication
+  // Prefer ADMIN_PASSWORD_HASH (argon2, generated via `astroadmin hash-password`).
+  // ADMIN_PASSWORD is a plaintext fallback for local/dev only.
   auth: {
     username: process.env.ADMIN_USERNAME || 'admin',
     password: process.env.ADMIN_PASSWORD || 'admin',
+    passwordHash: process.env.ADMIN_PASSWORD_HASH || null,
     sessionSecret: process.env.SESSION_SECRET || 'dev-secret-change-in-prod',
     sessionCookie: {
       secure: IS_PROD,  // HTTPS only in production
@@ -79,15 +99,22 @@ const defaultConfig = {
     ttl: 1000 * 60 * 60 * 24 * 7, // 7 days (match cookie maxAge)
   } : null,
 
+  // Content store selection: 'files' (default — git is the source of truth,
+  // the site reads content via Astro's native glob()/file() loaders) or 'db'
+  // (the shelved SQLite content store, kept for the future SaaS/DB direction).
+  content: {
+    store: CONTENT_STORE_MODE,
+  },
+
   // Git integration
-  // Content lives in the SQLite store, so publishing no longer requires git.
-  // When enabled, publish stages only these asset paths (never src/content);
-  // the binary content DB is committed only when includeDb is true.
+  // git.paths defaults are store-mode dependent (see defaultGitPathsForStore);
+  // the site rebuilds from git on push (e.g. Netlify build-on-push). The
+  // binary content DB is committed only when includeDb is true.
   git: {
     enabled: process.env.GIT_ENABLED !== 'false',
     autoCommit: IS_PROD,  // Auto-commit in production, manual in dev
     autoPush: process.env.GIT_AUTO_PUSH === 'true',
-    paths: ['src/styles/', 'public/images/'],
+    paths: defaultGitPathsForStore(CONTENT_STORE_MODE),
     includeDb: false,
   },
 
@@ -165,11 +192,22 @@ async function loadUserConfig() {
 
   try {
     await fs.access(configPath);
+  } catch {
+    // No user config file — defaults apply.
+    userConfig = {};
+    return userConfig;
+  }
+
+  // The file exists, so a failed import must be loud, not treated as "no
+  // config" — silently falling back to defaults could flip the content store
+  // mode and split reads/writes across stores.
+  try {
     const imported = await import(configPath);
     userConfig = imported.default || imported;
     console.log('📋 Loaded user config from astroadmin.config.js');
-  } catch {
-    userConfig = {};
+  } catch (error) {
+    console.error(`❌ Failed to load astroadmin.config.js: ${error.message}`);
+    throw error;
   }
 
   return userConfig;
@@ -197,7 +235,17 @@ function deepMerge(target, source) {
  */
 export async function getConfig() {
   const user = await loadUserConfig();
-  return deepMerge(defaultConfig, user);
+  const merged = deepMerge(defaultConfig, user);
+
+  // The git.paths default depends on the store mode, and astroadmin.config.js
+  // can set content.store — recompute the default once the override is known.
+  // An explicit user git.paths always wins; env still beats the config file.
+  if (!Array.isArray(user.git?.paths)) {
+    const storeMode = process.env.ASTROADMIN_CONTENT_STORE || merged.content?.store || 'files';
+    merged.git = { ...merged.git, paths: defaultGitPathsForStore(storeMode) };
+  }
+
+  return merged;
 }
 
 // Resolve ASTROADMIN_DB to a concrete absolute path so every child process we

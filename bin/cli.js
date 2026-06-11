@@ -291,6 +291,76 @@ program
     }
   });
 
+program
+  .command('export')
+  .description('Export the content database back to src/content files (inverse of migrate)')
+  .option('--project <path>', 'Astro project root directory', process.cwd())
+  .action(async (options) => {
+    const projectRoot = path.resolve(options.project);
+    process.env.ASTROADMIN_PROJECT_ROOT = projectRoot;
+    console.log(`\n📁 Project root: ${projectRoot}`);
+
+    try {
+      const { validateProject } = await import('../server/config.js');
+      const validation = await validateProject();
+      if (!validation.valid) {
+        console.error('\n❌ Invalid Astro project:\n');
+        validation.errors.forEach((err) => {
+          console.error(`   • ${err.message}`);
+          if (err.hint) console.error(`     → ${err.hint}`);
+        });
+        process.exit(1);
+      }
+
+      const { exportFiles } = await import('../server/utils/export-files.js');
+      console.log('📤 Exporting the content store into content files...\n');
+      console.log('   Run this AFTER switching content.config.ts to glob()/file(),');
+      console.log('   so the export matches the loaders the site will read from.\n');
+      const summary = await exportFiles();
+      for (const [name, count] of Object.entries(summary.collections)) {
+        console.log(`   ${name}: ${count}`);
+      }
+      console.log(`\n✅ Exported ${summary.total} entries (${summary.files} files written).`);
+      process.exit(0);
+    } catch (error) {
+      console.error('❌ Export failed:', error.message);
+      if (process.env.DEBUG) console.error(error.stack);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('hash-password [password]')
+  .description('Generate an argon2 hash to set as ADMIN_PASSWORD_HASH')
+  .action(async (password) => {
+    try {
+      const { hashPassword } = await import('../server/utils/auth.js');
+
+      let pw = password;
+      if (!pw) {
+        process.stderr.write('Password (input is echoed; pipe via stdin to hide): ');
+        pw = await new Promise((resolve) => {
+          let data = '';
+          process.stdin.setEncoding('utf8');
+          process.stdin.on('data', (chunk) => { data += chunk; });
+          process.stdin.on('end', () => resolve(data));
+        });
+      }
+      pw = (pw || '').replace(/\r?\n$/, '');
+      if (!pw) {
+        console.error('No password provided.');
+        process.exit(1);
+      }
+
+      const hash = await hashPassword(pw);
+      console.log(hash);
+      process.exit(0);
+    } catch (error) {
+      console.error('❌ hash-password failed:', error.message);
+      process.exit(1);
+    }
+  });
+
 // If no command specified, show help
 if (!process.argv.slice(2).length) {
   program.outputHelp();

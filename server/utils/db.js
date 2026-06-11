@@ -116,6 +116,9 @@ export function getDb() {
       'SELECT type FROM entries WHERE collection = ? LIMIT 1'
     ),
     distinctCollections: db.prepare('SELECT DISTINCT collection FROM entries'),
+    listAll: db.prepare(
+      'SELECT collection, slug, locale, type, data, body, position FROM entries ORDER BY collection, position, slug, locale'
+    ),
     countAll: db.prepare('SELECT COUNT(*) AS count FROM entries'),
     metaGet: db.prepare('SELECT value FROM astroadmin_meta WHERE key = ?'),
     metaSet: db.prepare(
@@ -236,6 +239,16 @@ export function distinctCollections() {
   return ensureStmts()
     .distinctCollections.all()
     .map((row) => row.collection);
+}
+
+/**
+ * Every entry row (locale mapped back to null), ordered by collection then
+ * file()-position then slug. Used by the DB→files exporter.
+ */
+export function listAllEntries() {
+  return ensureStmts()
+    .listAll.all()
+    .map((row) => ({ ...row, locale: localeFromDb(row.locale) }));
 }
 
 /**

@@ -1,10 +1,10 @@
 /**
  * Publish API Router
  *
- * Publishing is build + deploy, with git as an OPTIONAL pre-step. Content lives
- * in the SQLite store (not src/content), so `git add src/content` is no longer
- * meaningful — when git is enabled we stage only configured asset paths
- * (config.git.paths), never the binary content DB unless config.git.includeDb.
+ * Publishing is build + deploy, with git as an OPTIONAL pre-step. When git is
+ * enabled we stage the configured paths (config.git.paths — src/content plus
+ * assets in files mode, assets only in db mode), and never the binary content
+ * DB unless config.git.includeDb.
  *
  * Pipeline: [git pull/commit/push if enabled] -> build -> deploy (if adapter).
  *
@@ -20,26 +20,27 @@ import { deploy, validateDeployConfig } from '../utils/deploy.js';
 import { runProductionBuild } from '../utils/build.js';
 
 const router = express.Router();
+// Conservative fallback for a malformed config; an explicitly-configured
+// empty array means "stage nothing" and is respected.
+// (Helpers are exported for reuse by api/git.js — keep one definition.)
 const DEFAULT_GIT_PATHS = ['src/styles/', 'public/images/'];
 
-function createGitClient(fullConfig) {
+export function createGitClient(fullConfig) {
   return simpleGit(fullConfig.paths.projectRoot);
 }
 
-function getGitPaths(fullConfig) {
-  return Array.isArray(fullConfig.git?.paths) && fullConfig.git.paths.length > 0
-    ? fullConfig.git.paths
-    : DEFAULT_GIT_PATHS;
+export function getGitPaths(fullConfig) {
+  return Array.isArray(fullConfig.git?.paths) ? fullConfig.git.paths : DEFAULT_GIT_PATHS;
 }
 
-async function getStagedFilesForPaths(git, gitPaths) {
+export async function getStagedFilesForPaths(git, gitPaths) {
   if (gitPaths.length === 0) return [];
 
   const diffOutput = await git.diff(['--name-only', '--cached', '--', ...gitPaths]);
   return diffOutput.split(/\r?\n/).filter(Boolean);
 }
 
-async function stageGitPaths(git, gitPaths) {
+export async function stageGitPaths(git, gitPaths) {
   const stagedPaths = [];
 
   for (const gitPath of gitPaths) {

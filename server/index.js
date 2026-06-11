@@ -21,6 +21,7 @@ import publishRouter from './api/publish.js';
 import imagesRouter from './api/images.js';
 import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collections.js';
 import { maybeAutoImport } from './utils/import-files.js';
+import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -94,18 +95,26 @@ export async function createServer() {
     });
   });
 
+  // Warn loudly (once, at startup) about weak auth config in production.
+  for (const warning of authConfigWarnings(fullConfig.auth, IS_PROD)) {
+    console.warn(`⚠️  Insecure auth: ${warning}`);
+  }
+
   // Authentication endpoints
-  app.post('/api/login', (req, res) => {
+  app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
 
-    console.log(`[Login] Attempt for user: ${username}`);
+    let ok = false;
+    try {
+      ok = await verifyCredentials(fullConfig.auth, username, password);
+    } catch (err) {
+      console.error('[Login] Verification error:', err);
+      return res.status(500).json({ success: false, error: 'Authentication error' });
+    }
 
-    if (
-      username === fullConfig.auth.username &&
-      password === fullConfig.auth.password
-    ) {
+    if (ok) {
       req.session.authenticated = true;
-      req.session.user = username;
+      req.session.user = fullConfig.auth.username;
 
       // Explicitly save session to ensure cookie is set
       req.session.save((err) => {
@@ -113,11 +122,11 @@ export async function createServer() {
           console.error('[Login] Session save error:', err);
           return res.status(500).json({ success: false, error: 'Session error' });
         }
-        console.log(`[Login] Success for user: ${username}, session ID: ${req.sessionID}`);
-        res.json({ success: true, user: username });
+        console.log(`[Login] Success, session ID: ${req.sessionID}`);
+        res.json({ success: true, user: fullConfig.auth.username });
       });
     } else {
-      console.log(`[Login] Failed for user: ${username}`);
+      console.log('[Login] Failed login attempt');
       res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
   });

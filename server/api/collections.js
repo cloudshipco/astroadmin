@@ -11,6 +11,7 @@ import {
   getCollectionEntriesWithPreview,
   getCollectionEntriesWithLocales,
   getCollectionSchema,
+  getCollectionUsedByBlocks,
 } from '../utils/collections.js';
 import { getConfig } from '../config.js';
 import { detectPreviewRoutes, getPreviewRoute } from '../utils/routes.js';
@@ -68,11 +69,7 @@ router.get('/', async (req, res) => {
     const fullConfig = await getConfig();
     const i18nConfig = fullConfig.i18n || { enabled: false };
 
-    // Pass i18n options for proper entry deduplication
-    const collections = await getAllCollections({
-      i18nEnabled: i18nConfig.enabled,
-      locales: i18nConfig.locales,
-    });
+    const collections = await getAllCollections();
 
     // Detect preview routes for collections
     const detectedRoutes = await detectPreviewRoutes();
@@ -122,11 +119,9 @@ router.get('/:collectionName', async (req, res) => {
     // Convert discriminatedUnions to blockTypes format for form-generator
     const enrichedSchema = enrichSchemaWithBlockTypes(schema, discriminatedUnions);
 
-    // Get usedByBlocks from the full collections list
-    // This tells us which block types reference this collection
-    const allCollections = await getAllCollections();
-    const thisCollection = allCollections.find(c => c.name === collectionName);
-    const usedByBlocks = thisCollection?.usedByBlocks || [];
+    // Which block types reference this collection — schema-derived, so no
+    // need to list every other collection's entries here.
+    const usedByBlocks = await getCollectionUsedByBlocks(collectionName);
 
     res.json({
       success: true,

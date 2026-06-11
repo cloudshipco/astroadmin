@@ -116,7 +116,7 @@ export const collections = { pages, team, landing };
 
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed.\n`);
-  process.exit(0);
+  // No process.exit here — it would skip the finally cleanup.
 } finally {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 }
