@@ -6,28 +6,38 @@
  * no running server and no Astro config (collections default to glob under
  * src/content/<collection>).
  *
- * Run with a throwaway project root:
- *   ASTROADMIN_PROJECT_ROOT=/tmp/aa-files-root bun tests/content-files.test.js
- *
- * (Does NOT set ASTROADMIN_CONTENT_STORE — 'files' is the default.)
+ * Self-contained: always runs against its own temp project root (any
+ * ASTROADMIN_PROJECT_ROOT in the environment is deliberately overridden, so a
+ * bare `bun tests/content-files.test.js` can never touch a real project's
+ * src/content). Does NOT set ASTROADMIN_CONTENT_STORE — 'files' is the default.
  */
 
 import assert from 'assert';
+import fsSync from 'fs';
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
-import {
+
+// Must be set before config loads, hence the dynamic imports below.
+const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'aa-files-'));
+process.env.ASTROADMIN_PROJECT_ROOT = tmpRoot;
+
+const {
   readContent,
   writeContent,
   deleteContent,
   contentExists,
   getAvailableLocales,
-} from '../server/utils/content.js';
-import { getCollectionEntries } from '../server/utils/collections.js';
-import { config } from '../server/config.js';
+} = await import('../server/utils/content.js');
+const { getCollectionEntries } = await import('../server/utils/collections.js');
+const { config } = await import('../server/config.js');
 
 const CONTENT_DIR = config.paths.content;
 
 let passed = 0;
+// Failure sentinel: already reported by check(), just unwinds to the outer
+// catch so the finally cleanup still runs (process.exit would skip it).
+class CheckFailed extends Error {}
 async function check(name, fn) {
   try {
     await fn();
@@ -35,12 +45,11 @@ async function check(name, fn) {
     console.log(`✅ ${name}`);
   } catch (error) {
     console.error(`❌ ${name}\n   ${error.message}`);
-    process.exit(1);
+    throw new CheckFailed(name);
   }
 }
 
-// Start from a clean content dir so listing assertions are deterministic.
-await fs.rm(CONTENT_DIR, { recursive: true, force: true });
+try {
 
 console.log('\n🧪 File content store round-trip\n' + '='.repeat(40));
 
@@ -140,4 +149,12 @@ await check('delete removes the file and is idempotent-guarded', async () => {
 
 console.log('='.repeat(40));
 console.log(`\n📊 ${passed} checks passed.\n`);
-process.exit(0);
+
+} catch (error) {
+  if (!(error instanceof CheckFailed)) {
+    console.error(`❌ Test setup failed\n   ${error.stack || error.message}`);
+  }
+  process.exitCode = 1;
+} finally {
+  fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+}

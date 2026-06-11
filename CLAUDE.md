@@ -24,7 +24,8 @@
 Tests are standalone scripts under `tests/`, run individually (there is no test
 runner aggregating them). Most run server-less and need env vars:
 
-- `bun tests/content-files.test.js` — files store. Needs `ASTROADMIN_PROJECT_ROOT=<tmp>`.
+- `bun tests/content-files.test.js` — files store. Self-contained (builds its own
+  temp root; deliberately overrides any `ASTROADMIN_PROJECT_ROOT` in the env).
 - `bun tests/content-store.test.js` — SQLite store. Self-pins `ASTROADMIN_CONTENT_STORE=db`;
   pass `ASTROADMIN_DB=<tmp.db> ASTROADMIN_PROJECT_ROOT=<tmp>`.
 - `bun tests/export-files.test.js`, `tests/import-files.test.js`, `tests/schema-parser-db.test.js` —
