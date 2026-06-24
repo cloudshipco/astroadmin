@@ -29,10 +29,19 @@
   to npm** (first files-first release; docs rewritten for files-first, closing #13), which
   unblocks fresh-clone/CI builds — the site's version-pin issue is closed and its PR is
   mergeable.
-- ⏳ **Next:** merge the Site B PR + confirm the Netlify production build, then cutover/DNS
-  (client coordination). Site C: same recipe **plus** delete its stale `src/content`
-  before exporting (leftover files would resurrect DB-deleted entries) and the 0.1.0→1.1.0
-  bump. Then Phase 3: per-site runtime + deploy keys + TLS, standing up Site A first.
+- ✅ **Site B merged + live-built (2026-06-24).** The migration branch merged to `main`
+  (carrying Astro 6 + files together); the `main` Netlify production deploy went green
+  (the repo is GitHub-linked for CD). The stale interim PR was closed (its commits had
+  already landed). Remaining for Site B: the go-live/DNS cutover (client coordination).
+- ✅ **Site C migrated + merged (2026-06-24).** Same recipe **plus** both its wrinkles:
+  the stale `src/content` was deleted before export (so DB-deleted entries couldn't
+  resurrect) and the version bump to `^1.1.0`. The files build was **byte-identical** to
+  the DB-loader build; 20 entries exported. One nuance vs Site B: Site C's host isn't
+  wired for GitHub-linked CD yet (manual deploys today), so the merge enables CD but
+  doesn't auto-build — connecting it is Phase 3 work.
+- ⏳ **Next: Phase 3** — per-site hosted editor + auth + deploy keys + TLS, and wiring
+  publish→Netlify CD. Standing up **Site A first** (already file-based — the simplest
+  end-to-end proof), then the Site B go-live.
 
 All server-less tests green: content-files 10, content-store(db) 7, export 7, import 8,
 loader 4, schema-parser-db 6, auth 5. (`api.test.js` needs a running server — pre-existing.)
