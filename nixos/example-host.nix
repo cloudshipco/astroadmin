@@ -1,15 +1,16 @@
 # Example NixOS host config wiring up AstroAdmin instances.
 #
-# Placeholders only — real per-site values (domains, repos, secret paths) live
-# privately, NOT in this public repo. Import the module and declare one instance
-# per site. Ports must be unique per instance.
+# Placeholders only — real per-site values (domains, repos) live privately, NOT
+# in this public repo. Import the module and declare one instance per site;
+# ports must be unique per instance. Conventions match omni-tend/hosts:
+# sops-nix secrets + nginx + security.acme.
 #
-# Secrets here are shown as agenix paths; sops-nix works equally. Each instance
-# needs:
-#   - <name>.env        → ADMIN_USERNAME, ADMIN_PASSWORD_HASH, SESSION_SECRET
-#   - <name>-deploykey  → SSH private key with write access to the site repo
-# Generate the hash with `astroadmin hash-password`; add the deploy key's PUBLIC
-# half to the repo's GitHub Deploy Keys (allow write).
+# The host's flake imports `sops-nix.nixosModules.sops` alongside this module.
+# Each instance's sopsFile holds, under astroadmin/<name>/:
+#   admin_password_hash   (from `astroadmin hash-password`)
+#   session_secret        (a long random string)
+#   deploy_key            (SSH private key; add its .pub to the repo's GitHub
+#                          Deploy Keys, write-enabled)
 
 { ... }:
 
@@ -22,17 +23,17 @@
 
     instances = {
       site-a = {
-        domain      = "admin.site-a.example";
-        repoUrl     = "git@github.com:org/site-a.git";
-        adminPort   = 4001;
-        previewPort = 4321;
-        environmentFile = "/run/secrets/astroadmin-site-a.env";
-        deployKeyFile   = "/run/secrets/astroadmin-site-a-deploykey";
+        domain        = "admin.site-a.example";
+        repoUrl       = "git@github.com:org/site-a.git";
+        adminPort     = 4001;
+        previewPort   = 4321;
+        adminUsername = "client-a";
+        sopsFile      = ./secrets/site-a.yaml;
       };
 
       # Add site-b / site-c the same way, with unique ports:
-      # site-b = { domain = "admin.site-b.example"; repoUrl = "..."; adminPort = 4002; previewPort = 4322; ... };
-      # site-c = { domain = "admin.site-c.example"; repoUrl = "..."; adminPort = 4003; previewPort = 4323; ... };
+      # site-b = { domain = "admin.site-b.example"; repoUrl = "..."; adminPort = 4002; previewPort = 4322; adminUsername = "client-b"; sopsFile = ./secrets/site-b.yaml; };
+      # site-c = { domain = "admin.site-c.example"; repoUrl = "..."; adminPort = 4003; previewPort = 4323; adminUsername = "client-c"; sopsFile = ./secrets/site-c.yaml; };
     };
   };
 }

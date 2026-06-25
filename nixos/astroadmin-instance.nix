@@ -5,29 +5,41 @@
 #   - a git checkout of the site repo (content + preview source),
 #   - the AstroAdmin Bun server (the editor + content-commit/push), and
 #   - an `astro dev` preview server, bound to localhost,
-# fronted by Caddy with automatic TLS at the instance's domain.
+# fronted by nginx with a per-host Let's Encrypt cert (HTTP-01) at the
+# instance's domain.
 #
-# This is the near-term hosting substrate for the 3-client rollout (see the
-# project's Phase 3 plan); it is also the seed of the later SaaS NixOS substrate.
-# No untrusted code runs here — the site code is first-party and the npm
-# dependency tree builds on Netlify (build-on-push), not on this host.
+# Conventions follow the omni-tend/hosts pattern: nginx + `security.acme`
+# (not Caddy), and **sops-nix** for secrets (not agenix). Import
+# `sops-nix.nixosModules.sops` at the host level. No untrusted code runs here —
+# the site code is first-party and the npm dependency tree builds on Netlify
+# (build-on-push), not on this host.
 #
-# Secrets are NEVER in the Nix store: `environmentFile` (the per-site admin
-# credentials + session secret) and `deployKeyFile` (the repo write deploy key)
-# are out-of-store paths, provisioned via agenix/sops-nix or placed on the host
-# out of band.
+# Secrets never enter the Nix store. Per instance, the host's sops file holds:
+#   astroadmin/<name>/admin_password_hash   (from `astroadmin hash-password`)
+#   astroadmin/<name>/session_secret        (a long random string)
+#   astroadmin/<name>/deploy_key            (SSH private key, repo write access)
+# This module declares the matching `sops.secrets` and renders the admin env
+# via a `sops.templates` file.
 #
-# Example (see ./example-host.nix for a fuller one):
+# ⚠️ OPEN: browser-reachable preview routing. The editor's iframe loads
+# `previewUrl` directly in the browser, so a localhost preview isn't reachable
+# as-is. `previewUrl` is left configurable and defaults to the localhost dev
+# server; exposing it safely (an authenticated admin preview-proxy route, or a
+# protected preview vhost) is to be finalized against a live instance — see the
+# Phase 3 plan. The admin vhost below is complete and correct regardless.
+#
+# Example (see ./example-host.nix):
 #
 #   services.astroadmin = {
 #     enable = true;
+#     acmeEmail = "ops@example.com";
 #     instances.site-a = {
 #       domain      = "admin.example.com";
 #       repoUrl     = "git@github.com:org/site-a.git";
 #       adminPort   = 4001;
 #       previewPort = 4321;
-#       environmentFile = "/run/secrets/astroadmin-site-a.env";
-#       deployKeyFile   = "/run/secrets/astroadmin-site-a-deploykey";
+#       adminUsername = "client";
+#       sopsFile      = ../secrets/site-a.yaml;
 #     };
 #   };
 
@@ -42,7 +54,7 @@ let
       domain = lib.mkOption {
         type = lib.types.str;
         example = "admin.example.com";
-        description = "Public hostname for the editor; Caddy serves TLS here.";
+        description = "Public hostname for the editor; nginx serves TLS here.";
       };
 
       repoUrl = lib.mkOption {
@@ -59,12 +71,36 @@ let
 
       adminPort = lib.mkOption {
         type = lib.types.port;
-        description = "Localhost port for the AstroAdmin server (Caddy proxies to it).";
+        description = "Localhost port for the AstroAdmin server (nginx proxies to it).";
       };
 
       previewPort = lib.mkOption {
         type = lib.types.port;
         description = "Localhost port for the `astro dev` preview server.";
+      };
+
+      adminUsername = lib.mkOption {
+        type = lib.types.str;
+        default = "admin";
+        description = "Login username (the password hash + session secret come from sops).";
+      };
+
+      previewUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "http://127.0.0.1:${toString config.previewPort}";
+        description = ''
+          Browser-facing preview URL handed to the editor iframe (PREVIEW_URL).
+          Defaults to the localhost dev server — NOT browser-reachable when
+          hosted; override once preview exposure is finalized (see module note).
+        '';
+      };
+
+      sopsFile = lib.mkOption {
+        type = lib.types.path;
+        description = ''
+          sops file holding this instance's secrets under the keys
+          astroadmin/<name>/{admin_password_hash,session_secret,deploy_key}.
+        '';
       };
 
       stateDir = lib.mkOption {
@@ -77,25 +113,6 @@ let
         type = lib.types.path;
         default = "${config.stateDir}/checkout";
         description = "Where the site repo is checked out (ASTROADMIN_PROJECT_ROOT).";
-      };
-
-      environmentFile = lib.mkOption {
-        type = lib.types.path;
-        description = ''
-          Out-of-store EnvironmentFile with the per-site secrets, one per line:
-            ADMIN_USERNAME=...
-            ADMIN_PASSWORD_HASH=...   (from `astroadmin hash-password`)
-            SESSION_SECRET=...        (a long random string)
-          Never commit this; provision via agenix/sops-nix.
-        '';
-      };
-
-      deployKeyFile = lib.mkOption {
-        type = lib.types.path;
-        description = ''
-          Out-of-store path to the SSH private deploy key with WRITE access to
-          the site repo. Its public half is added to the repo's Deploy Keys.
-        '';
       };
 
       committerName = lib.mkOption {
@@ -112,25 +129,30 @@ let
     };
   };
 
+  # sops secret/template key helpers.
+  secretKey = name: leaf: "astroadmin/${name}/${leaf}";
+  envTemplate = name: "astroadmin-${name}.env";
+  deployKeyPath = name: config.sops.secrets.${secretKey name "deploy_key"}.path;
+
   # Shared SSH command pinning the per-instance deploy key (no agent, no other
   # keys). accept-new trusts github.com's host key on first connect.
-  gitSshCommand = inst:
-    "${pkgs.openssh}/bin/ssh -i ${inst.deployKeyFile} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new";
+  gitSshCommand = name: inst:
+    "${pkgs.openssh}/bin/ssh -i ${deployKeyPath name} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new";
 
   # Common environment for an instance's units.
-  instanceEnv = inst: {
+  instanceEnv = name: inst: {
     NODE_ENV = "production";
     HOME = inst.stateDir;                       # bun/astro/git caches live here
     ASTROADMIN_PROJECT_ROOT = inst.projectRoot;
-    GIT_SSH_COMMAND = gitSshCommand inst;
+    GIT_SSH_COMMAND = gitSshCommand name inst;
   };
 
   # One-shot: clone the repo if absent, then `bun install`. Does NOT auto-pull
   # an existing checkout (the editor owns local commits/pushes) — site CODE
   # updates are a deliberate redeploy, not a restart side effect.
-  checkoutScript = inst: pkgs.writeShellScript "astroadmin-${inst.domain}-checkout" ''
+  checkoutScript = name: inst: pkgs.writeShellScript "astroadmin-${name}-checkout" ''
     set -euo pipefail
-    export GIT_SSH_COMMAND="${gitSshCommand inst}"
+    export GIT_SSH_COMMAND="${gitSshCommand name inst}"
     if [ ! -e ${inst.projectRoot}/.git ]; then
       ${pkgs.git}/bin/git clone --branch ${inst.branch} ${inst.repoUrl} ${inst.projectRoot}
     fi
@@ -151,17 +173,31 @@ let
     LockPersonality = true;
   };
 
+  mkCheckoutService = name: inst: lib.nameValuePair "astroadmin-${name}-checkout" {
+    description = "AstroAdmin checkout + deps — ${inst.domain}";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      User = cfg.user;
+      Group = cfg.group;
+      StateDirectory = "astroadmin/${name}";
+      ExecStart = checkoutScript name inst;
+    };
+  };
+
   mkAdminService = name: inst: lib.nameValuePair "astroadmin-${name}-admin" {
     description = "AstroAdmin editor — ${inst.domain}";
     after = [ "network-online.target" "astroadmin-${name}-checkout.service" ];
     requires = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
-    environment = (instanceEnv inst) // {
+    environment = (instanceEnv name inst) // {
       ASTROADMIN_HOST = "127.0.0.1";
       ASTROADMIN_PORT = toString inst.adminPort;
       SESSION_DB_PATH = "${inst.stateDir}/sessions.db";
       ALLOWED_ORIGINS = "https://${inst.domain}";
-      PREVIEW_URL = "http://127.0.0.1:${toString inst.previewPort}";
+      PREVIEW_URL = inst.previewUrl;
       GIT_AUTHOR_NAME = inst.committerName;
       GIT_COMMITTER_NAME = inst.committerName;
       GIT_AUTHOR_EMAIL = inst.committerEmail;
@@ -171,7 +207,9 @@ let
       User = cfg.user;
       Group = cfg.group;
       WorkingDirectory = inst.projectRoot;
-      EnvironmentFile = inst.environmentFile;
+      # Rendered by sops-nix from the host's sops file (ADMIN_USERNAME +
+      # ADMIN_PASSWORD_HASH + SESSION_SECRET); never in the Nix store.
+      EnvironmentFile = config.sops.templates.${envTemplate name}.path;
       # systemd creates + chowns this (under /var/lib) before the unit runs and
       # grants it read-write under ProtectSystem=strict.
       StateDirectory = "astroadmin/${name}";
@@ -186,33 +224,56 @@ let
     after = [ "astroadmin-${name}-checkout.service" ];
     requires = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
-    environment = instanceEnv inst;
+    environment = instanceEnv name inst;
     serviceConfig = hardening // {
       User = cfg.user;
       Group = cfg.group;
       WorkingDirectory = inst.projectRoot;
       StateDirectory = "astroadmin/${name}";
-      # Bind to localhost ONLY — the preview server is never publicly exposed;
-      # it is reached only via the authed admin's PREVIEW_URL proxy.
+      # Bind to localhost ONLY — never given an nginx vhost of its own.
       ExecStart = "${pkgs.bun}/bin/bunx --bun astro dev --host 127.0.0.1 --port ${toString inst.previewPort}";
       Restart = "on-failure";
       RestartSec = 5;
     };
   };
 
-  mkCheckoutService = name: inst: lib.nameValuePair "astroadmin-${name}-checkout" {
-    description = "AstroAdmin checkout + deps — ${inst.domain}";
-    after = [ "network-online.target" ];
-    wants = [ "network-online.target" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      User = cfg.user;
-      Group = cfg.group;
-      StateDirectory = "astroadmin/${name}";
-      ExecStart = checkoutScript inst;
+  # sops secrets for one instance: the deploy key (owned by the service user)
+  # plus the two values folded into the rendered env template.
+  mkInstanceSecrets = name: inst: {
+    ${secretKey name "deploy_key"} = {
+      sopsFile = inst.sopsFile;
+      owner = cfg.user;
+      mode = "0400";
+    };
+    ${secretKey name "admin_password_hash"} = { sopsFile = inst.sopsFile; owner = cfg.user; };
+    ${secretKey name "session_secret"}      = { sopsFile = inst.sopsFile; owner = cfg.user; };
+  };
+
+  mkInstanceTemplate = name: inst:
+    let
+      hashPlaceholder = config.sops.placeholder.${secretKey name "admin_password_hash"};
+      secretPlaceholder = config.sops.placeholder.${secretKey name "session_secret"};
+    in {
+      ${envTemplate name} = {
+        owner = cfg.user;
+        content = ''
+          ADMIN_USERNAME=${inst.adminUsername}
+          ADMIN_PASSWORD_HASH=${hashPlaceholder}
+          SESSION_SECRET=${secretPlaceholder}
+        '';
+      };
+    };
+
+  mkVhost = name: inst: lib.nameValuePair inst.domain {
+    forceSSL = true;
+    enableACME = true;            # per-host Let's Encrypt cert via HTTP-01
+    locations."/" = {
+      proxyPass = "http://127.0.0.1:${toString inst.adminPort}";
+      proxyWebsockets = true;     # admin live-reload / ws
     };
   };
+
+  eachInstance = f: lib.mapAttrsToList f cfg.instances;
 
 in {
   options.services.astroadmin = {
@@ -239,7 +300,7 @@ in {
     acmeEmail = lib.mkOption {
       type = lib.types.str;
       example = "ops@example.com";
-      description = "Contact email for Caddy's Let's Encrypt account.";
+      description = "Contact email for the Let's Encrypt account.";
     };
 
     instances = lib.mkOption {
@@ -265,25 +326,33 @@ in {
     environment.systemPackages = [ pkgs.bun pkgs.git ];
 
     # One checkout one-shot + admin + preview unit per instance.
-    systemd.services = lib.listToAttrs (lib.flatten (lib.mapAttrsToList (name: inst: [
+    systemd.services = lib.listToAttrs (lib.flatten (eachInstance (name: inst: [
       (mkCheckoutService name inst)
       (mkAdminService name inst)
       (mkPreviewService name inst)
-    ]) cfg.instances));
+    ])));
 
-    # Caddy: one auto-TLS vhost per instance → its admin port. The preview port
-    # is deliberately NOT given a vhost.
-    services.caddy = {
+    # sops secrets + rendered env templates, merged across instances.
+    sops.secrets = lib.mkMerge (eachInstance mkInstanceSecrets);
+    sops.templates = lib.mkMerge (eachInstance mkInstanceTemplate);
+
+    # nginx: one TLS vhost per instance → its admin port. The preview port is
+    # deliberately NOT given a vhost.
+    services.nginx = {
       enable = true;
-      email = cfg.acmeEmail;
-      virtualHosts = lib.mapAttrs' (name: inst:
-        lib.nameValuePair inst.domain {
-          extraConfig = "reverse_proxy 127.0.0.1:${toString inst.adminPort}";
-        }
-      ) cfg.instances;
+      recommendedProxySettings = true;
+      recommendedTlsSettings = true;
+      recommendedGzipSettings = true;
+      recommendedOptimisation = true;
+      virtualHosts = lib.listToAttrs (eachInstance mkVhost);
     };
 
-    # Caddy needs 80/443 open for ACME + serving.
+    security.acme = {
+      acceptTerms = true;
+      defaults.email = cfg.acmeEmail;
+    };
+
+    # nginx + ACME HTTP-01 need 80/443 open.
     networking.firewall.allowedTCPPorts = [ 80 443 ];
   };
 }
