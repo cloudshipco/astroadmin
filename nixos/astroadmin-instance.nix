@@ -8,7 +8,7 @@
 # fronted by nginx with a per-host Let's Encrypt cert (HTTP-01) at the
 # instance's domain.
 #
-# Conventions follow the omni-tend/hosts pattern: nginx + `security.acme`
+# Conventions follow our in-house NixOS hosts pattern: nginx + `security.acme`
 # (not Caddy), and **sops-nix** for secrets (not agenix). Import
 # `sops-nix.nixosModules.sops` at the host level. No untrusted code runs here —
 # the site code is first-party and the npm dependency tree builds on Netlify

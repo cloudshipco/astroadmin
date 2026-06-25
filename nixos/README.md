@@ -2,8 +2,8 @@
 
 `astroadmin-instance.nix` is a NixOS module that runs one hosted AstroAdmin
 editor per site. It's the near-term hosting substrate for self-editing client
-sites (and the seed of the later SaaS substrate). Conventions follow the
-`omni-tend/hosts` pattern: **nginx + `security.acme`** for TLS and **sops-nix**
+sites (and the seed of the later SaaS substrate). Conventions follow our
+in-house NixOS hosts pattern: **nginx + `security.acme`** for TLS and **sops-nix**
 for secrets.
 
 ## What each instance runs
@@ -63,10 +63,10 @@ See `example-host.nix` for a multi-site example.
 
 ## Provisioning the host
 
-Use **`nixos-infect`** (the proven `omni-tend/hosts` path: convert a fresh
-Ubuntu 24.04 DO droplet → NixOS 25.11 in place), not nixos-anywhere — mirror
-`omni-tend/hosts/scripts/bootstrap-droplet-phase-1.sh`. Spec: 2 vCPU / 4 GB /
-50–80 GB (1 vCPU / 2 GB is fine for one site).
+Use **`nixos-infect`** (our proven in-house path: convert a fresh Ubuntu 24.04
+DO droplet → NixOS 25.11 in place), not nixos-anywhere — mirror our existing
+host bootstrap script. Spec: 2 vCPU / 4 GB / 50–80 GB (1 vCPU / 2 GB is fine for
+one site).
 
 ## Notes / decisions
 

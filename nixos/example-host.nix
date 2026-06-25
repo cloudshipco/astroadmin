@@ -2,7 +2,7 @@
 #
 # Placeholders only — real per-site values (domains, repos) live privately, NOT
 # in this public repo. Import the module and declare one instance per site;
-# ports must be unique per instance. Conventions match omni-tend/hosts:
+# ports must be unique per instance. Conventions match our in-house NixOS hosts:
 # sops-nix secrets + nginx + security.acme.
 #
 # The host's flake imports `sops-nix.nixosModules.sops` alongside this module.
