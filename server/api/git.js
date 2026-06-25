@@ -12,6 +12,7 @@ import {
   getGitPaths,
   stageGitPaths,
   getStagedFilesForPaths,
+  assertNoStagedSymlinks,
 } from './publish.js';
 
 const router = express.Router();
@@ -26,7 +27,8 @@ export async function commitConfiguredGitPaths(fullConfig, message) {
     return { result: null, stagedFiles };
   }
 
-  const result = await git.commit(message, stagedPaths);
+  await assertNoStagedSymlinks(git, stagedPaths);
+  const result = await git.commit(message, stagedPaths, { '--no-verify': null });
   return { result, stagedFiles };
 }
 
