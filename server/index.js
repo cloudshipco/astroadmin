@@ -101,7 +101,18 @@ export async function createServer() {
   }
 
   // Authentication endpoints
-  app.post('/api/login', async (req, res) => {
+  // A stricter limiter on login specifically (the general /api/ limiter is far
+  // looser), to blunt password brute-forcing. Prod-only, like the general one;
+  // a no-op pass-through in dev so local testing isn't throttled.
+  const loginLimiter = fullConfig.rateLimit.enabled
+    ? rateLimit({
+        windowMs: fullConfig.rateLimit.windowMs,
+        max: 10,
+        message: 'Too many login attempts, please try again later.',
+      })
+    : (req, res, next) => next();
+
+  app.post('/api/login', loginLimiter, async (req, res) => {
     const { username, password } = req.body;
 
     let ok = false;
@@ -113,17 +124,27 @@ export async function createServer() {
     }
 
     if (ok) {
-      req.session.authenticated = true;
-      req.session.user = fullConfig.auth.username;
-
-      // Explicitly save session to ensure cookie is set
-      req.session.save((err) => {
-        if (err) {
-          console.error('[Login] Session save error:', err);
+      // Regenerate the session on login to prevent session fixation: a session
+      // id issued before authentication must not carry over to the
+      // authenticated session.
+      req.session.regenerate((regenErr) => {
+        if (regenErr) {
+          console.error('[Login] Session regenerate error:', regenErr);
           return res.status(500).json({ success: false, error: 'Session error' });
         }
-        console.log(`[Login] Success, session ID: ${req.sessionID}`);
-        res.json({ success: true, user: fullConfig.auth.username });
+
+        req.session.authenticated = true;
+        req.session.user = fullConfig.auth.username;
+
+        // Explicitly save session to ensure cookie is set
+        req.session.save((err) => {
+          if (err) {
+            console.error('[Login] Session save error:', err);
+            return res.status(500).json({ success: false, error: 'Session error' });
+          }
+          console.log(`[Login] Success, session ID: ${req.sessionID}`);
+          res.json({ success: true, user: fullConfig.auth.username });
+        });
       });
     } else {
       console.log('[Login] Failed login attempt');
