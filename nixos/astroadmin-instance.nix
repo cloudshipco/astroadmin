@@ -198,6 +198,11 @@ let
       SESSION_DB_PATH = "${inst.stateDir}/sessions.db";
       ALLOWED_ORIGINS = "https://${inst.domain}";
       PREVIEW_URL = inst.previewUrl;
+      # Push on EVERY commit path, not just the big Publish button. The
+      # changes-panel "Commit" hits /api/git/commit, which only pushes when
+      # autoPush is on; without this a client's commit lands locally but never
+      # triggers the Netlify build-on-push (silent "saved but site unchanged").
+      GIT_AUTO_PUSH = "true";
       GIT_AUTHOR_NAME = inst.committerName;
       GIT_COMMITTER_NAME = inst.committerName;
       GIT_AUTHOR_EMAIL = inst.committerEmail;
@@ -267,6 +272,9 @@ let
   mkVhost = name: inst: lib.nameValuePair inst.domain {
     forceSSL = true;
     enableACME = true;            # per-host Let's Encrypt cert via HTTP-01
+    # AstroAdmin is a CMS with image upload (/api/images); nginx's 1 MB default
+    # would 413 anything larger. Allow room for photos.
+    extraConfig = "client_max_body_size 25m;";
     locations."/" = {
       proxyPass = "http://127.0.0.1:${toString inst.adminPort}";
       proxyWebsockets = true;     # admin live-reload / ws
