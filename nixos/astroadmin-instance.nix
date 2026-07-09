@@ -21,12 +21,14 @@
 # This module declares the matching `sops.secrets` and renders the admin env
 # via a `sops.templates` file.
 #
-# ⚠️ OPEN: browser-reachable preview routing. The editor's iframe loads
-# `previewUrl` directly in the browser, so a localhost preview isn't reachable
-# as-is. `previewUrl` is left configurable and defaults to the localhost dev
-# server; exposing it safely (an authenticated admin preview-proxy route, or a
-# protected preview vhost) is to be finalized against a live instance — see the
-# Phase 3 plan. The admin vhost below is complete and correct regardless.
+# Browser-reachable preview: each instance gets a nested preview subdomain
+# (`previewHost`, default `preview.<domain>`) — an authenticated nginx TLS vhost
+# that reverse-proxies to the localhost `astro dev` at root. It's gated by an
+# `auth_request` to the admin's /api/session; the admin session cookie is scoped
+# to `domain` (SESSION_COOKIE_DOMAIN) so it reaches this child host but never a
+# sibling instance. `previewUrl` (PREVIEW_URL) defaults to `https://<previewHost>`,
+# so the iframe loads a real HTTPS origin instead of the viewer's localhost.
+# Point a DNS A-record for `previewHost` at the host before rebuilding (ACME).
 #
 # Example (see ./example-host.nix):
 #
@@ -85,13 +87,25 @@ let
         description = "Login username (the password hash + session secret come from sops).";
       };
 
+      previewHost = lib.mkOption {
+        type = lib.types.str;
+        default = "preview.${config.domain}";
+        description = ''
+          Nested preview subdomain (a CHILD of `domain`). nginx serves a TLS
+          vhost here that reverse-proxies to the localhost `astro dev` at root,
+          gated by an auth_request to the admin's /api/session. Being a child of
+          the admin host, the admin session cookie (scoped to `domain`) reaches
+          it, but sibling instances never do. Needs its own DNS A-record.
+        '';
+      };
+
       previewUrl = lib.mkOption {
         type = lib.types.str;
-        default = "http://127.0.0.1:${toString config.previewPort}";
+        default = "https://${config.previewHost}";
         description = ''
-          Browser-facing preview URL handed to the editor iframe (PREVIEW_URL).
-          Defaults to the localhost dev server — NOT browser-reachable when
-          hosted; override once preview exposure is finalized (see module note).
+          Browser-facing preview origin handed to the editor iframe (PREVIEW_URL).
+          Defaults to the preview subdomain — a real HTTPS origin, so the iframe
+          no longer points at the viewer's localhost.
         '';
       };
 
@@ -218,6 +232,10 @@ let
       SESSION_DB_PATH = "${inst.stateDir}/sessions.db";
       ALLOWED_ORIGINS = "https://${inst.domain}";
       PREVIEW_URL = inst.previewUrl;
+      # Scope the session cookie to the admin host so it also reaches the nested
+      # preview subdomain (for the preview vhost's auth_request) — but never a
+      # sibling instance's host. See config.js sessionCookie.domain.
+      SESSION_COOKIE_DOMAIN = inst.domain;
       # Push on EVERY commit path, not just the big Publish button. The
       # changes-panel "Commit" hits /api/git/commit, which only pushes when
       # autoPush is on; without this a client's commit lands locally but never
@@ -301,6 +319,44 @@ let
     };
   };
 
+  # Authenticated preview vhost on the nested preview subdomain: reverse-proxy
+  # to the localhost `astro dev` at ROOT (so Astro's absolute asset paths + HMR
+  # ws work), gated by an nginx auth_request to the admin's /api/session. The
+  # admin session cookie (scoped to `domain`) reaches this child host; siblings
+  # never do. The astro dev port itself is never given a public vhost.
+  mkPreviewVhost = name: inst: lib.nameValuePair inst.previewHost {
+    forceSSL = true;
+    enableACME = true;
+    locations."/" = {
+      proxyPass = "http://127.0.0.1:${toString inst.previewPort}";
+      proxyWebsockets = true;     # Astro HMR
+      extraConfig = ''
+        auth_request /__preview_authz;
+        error_page 401 = @preview_login;
+        # Vite dev rejects unknown Host values ("host not allowed"); present
+        # localhost upstream so the check passes. The browser still talks to the
+        # real preview origin, and Vite's HMR client derives its ws URL from
+        # window.location, so live-reload still targets this host.
+        proxy_set_header Host localhost;
+      '';
+    };
+    # Subrequest: 200 if the admin session is valid, 401 otherwise. Forwards the
+    # client's Cookie header (nginx does this by default); drop the body.
+    locations."= /__preview_authz" = {
+      proxyPass = "http://127.0.0.1:${toString inst.adminPort}/api/session";
+      extraConfig = ''
+        internal;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host ${inst.domain};
+      '';
+    };
+    # Unauthenticated: bounce the iframe to the admin login.
+    locations."@preview_login".extraConfig = ''
+      return 302 https://${inst.domain}/;
+    '';
+  };
+
   eachInstance = f: lib.mapAttrsToList f cfg.instances;
 
 in {
@@ -364,15 +420,18 @@ in {
     sops.secrets = lib.mkMerge (eachInstance mkInstanceSecrets);
     sops.templates = lib.mkMerge (eachInstance mkInstanceTemplate);
 
-    # nginx: one TLS vhost per instance → its admin port. The preview port is
-    # deliberately NOT given a vhost.
+    # nginx: per instance, a TLS admin vhost (→ admin port) and an authenticated
+    # preview vhost on the nested preview subdomain (→ astro dev at root). The
+    # astro dev port is never exposed directly.
     services.nginx = {
       enable = true;
       recommendedProxySettings = true;
       recommendedTlsSettings = true;
       recommendedGzipSettings = true;
       recommendedOptimisation = true;
-      virtualHosts = lib.listToAttrs (eachInstance mkVhost);
+      virtualHosts = lib.listToAttrs (
+        (eachInstance mkVhost) ++ (eachInstance mkPreviewVhost)
+      );
     };
 
     security.acme = {
