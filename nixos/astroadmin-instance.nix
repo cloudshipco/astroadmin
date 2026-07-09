@@ -346,13 +346,13 @@ let
         proxy_set_header Host localhost;
       '';
     };
-    # Subrequest: MUST 401 when unauthenticated. NOTE: do NOT use /api/session —
-    # it returns 200 {authenticated:false} for logged-out users, which
-    # auth_request reads as ALLOW (a wide-open preview). Use a requireAuth route:
-    # /api/collections returns 401 logged-out, 200 logged-in. Forwards the
-    # client's Cookie header (nginx does this by default); drop the body.
+    # Subrequest: the admin's dedicated /__authz (204 authed, 401 not). NOT an
+    # /api/ route — those are rate-limited, and a preview page fires one
+    # subrequest per asset, so a rate-limited endpoint 429s → auth_request 500.
+    # And NOT /api/session, which 200s logged-out (auth_request reads as ALLOW).
+    # nginx forwards the client's Cookie header by default; drop the body.
     locations."= /__preview_authz" = {
-      proxyPass = "http://127.0.0.1:${toString inst.adminPort}/api/collections";
+      proxyPass = "http://127.0.0.1:${toString inst.adminPort}/__authz";
       extraConfig = ''
         internal;
         proxy_pass_request_body off;

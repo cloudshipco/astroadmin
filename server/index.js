@@ -151,6 +151,15 @@ export async function createServer() {
     }
   });
 
+  // Lightweight auth probe for the hosted preview vhost's nginx `auth_request`.
+  // Deliberately NOT under /api/ (so the /api/ rate limiter can't trip it — one
+  // preview page load fires an auth_request per asset) and NOT /api/session
+  // (which 200s when logged out, which auth_request reads as ALLOW). 204 when
+  // authenticated, 401 otherwise — the only two statuses auth_request needs.
+  app.get('/__authz', (req, res) => {
+    res.sendStatus(req.session.authenticated ? 204 : 401);
+  });
+
   // Reload schemas endpoint (requires auth)
   app.post('/api/reload-schemas', (req, res) => {
     if (!req.session.authenticated) {
