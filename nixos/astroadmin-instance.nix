@@ -190,6 +190,7 @@ let
   mkAdminService = name: inst: lib.nameValuePair "astroadmin-${name}-admin" {
     description = "AstroAdmin editor — ${inst.domain}";
     after = [ "network-online.target" "astroadmin-${name}-checkout.service" ];
+    wants = [ "network-online.target" ];
     requires = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
     environment = (instanceEnv name inst) // {
