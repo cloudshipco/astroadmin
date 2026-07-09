@@ -85,6 +85,10 @@ const defaultConfig = {
     password: process.env.ADMIN_PASSWORD || 'admin',
     passwordHash: process.env.ADMIN_PASSWORD_HASH || null,
     sessionSecret: process.env.SESSION_SECRET || 'dev-secret-change-in-prod',
+    // Session cookie name (express-session default is connect.sid). Hosted
+    // instances set a distinct one to avoid the host-only/domain cookie
+    // collision when the cookie Domain changes — see server/index.js.
+    sessionName: process.env.SESSION_COOKIE_NAME || undefined,
     sessionCookie: {
       secure: IS_PROD,  // HTTPS only in production
       httpOnly: true,

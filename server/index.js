@@ -58,6 +58,11 @@ export async function createServer() {
     saveUninitialized: false,
     cookie: fullConfig.auth.sessionCookie,
   };
+  // A distinct cookie name (hosted instances set one) sidesteps the collision
+  // where an old host-only `connect.sid` and a new domain-scoped one coexist:
+  // the browser sends the stale one first and the user is logged straight out.
+  // A different name means the old cookie is simply ignored.
+  if (fullConfig.auth.sessionName) sessionConfig.name = fullConfig.auth.sessionName;
 
   // Use SQLite store in production for persistence across restarts
   // Only available when running under Bun (has built-in SQLite)

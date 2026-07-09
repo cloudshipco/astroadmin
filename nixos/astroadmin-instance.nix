@@ -240,6 +240,9 @@ let
       # preview subdomain (for the preview vhost's auth_request) — but never a
       # sibling instance's host. See config.js sessionCookie.domain.
       SESSION_COOKIE_DOMAIN = inst.domain;
+      # Per-instance cookie name: avoids the connect.sid host-only/domain
+      # collision, and further isolates instances (distinct names).
+      SESSION_COOKIE_NAME = "astroadmin_${name}";
       # Push on EVERY commit path, not just the big Publish button. The
       # changes-panel "Commit" hits /api/git/commit, which only pushes when
       # autoPush is on; without this a client's commit lands locally but never
