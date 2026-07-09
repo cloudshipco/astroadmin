@@ -360,9 +360,13 @@ let
         proxy_set_header Host ${inst.domain};
       '';
     };
-    # Unauthenticated: bounce the iframe to the admin login.
+    # Unauthenticated: serve a tiny static page INSIDE the iframe — never a
+    # redirect to the admin root (that loads the whole dashboard in the iframe,
+    # whose own preview pane re-triggers this → an infinite hall of mirrors).
+    # The link uses target=_top so login opens in the full window.
     locations."@preview_login".extraConfig = ''
-      return 302 https://${inst.domain}/;
+      default_type text/html;
+      return 401 '<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><style>body{font:15px/1.6 system-ui,sans-serif;color:#334155;margin:2.5rem;text-align:center}a{color:#4f46e5}</style><p>Preview needs an active editor session.</p><p><a href="https://${inst.domain}/" target="_top">Open the editor</a>, log in, then reload.</p>';
     '';
   };
 
