@@ -85,11 +85,22 @@ const defaultConfig = {
     password: process.env.ADMIN_PASSWORD || 'admin',
     passwordHash: process.env.ADMIN_PASSWORD_HASH || null,
     sessionSecret: process.env.SESSION_SECRET || 'dev-secret-change-in-prod',
+    // Session cookie name (express-session default is connect.sid). Hosted
+    // instances set a distinct one to avoid the host-only/domain cookie
+    // collision when the cookie Domain changes — see server/index.js.
+    sessionName: process.env.SESSION_COOKIE_NAME || undefined,
     sessionCookie: {
       secure: IS_PROD,  // HTTPS only in production
       httpOnly: true,
       sameSite: 'strict',
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+      // Host-only by default (undefined => cookie bound to the exact admin host).
+      // A hosted instance sets this to its OWN admin host (e.g.
+      // waveney.admin.example.com) so the cookie also reaches a nested preview
+      // subdomain (preview.waveney.admin.example.com) for the preview vhost's
+      // nginx auth_request — while STILL never reaching sibling instances
+      // (feathered-thorns.admin.example.com), which aren't subdomains of it.
+      domain: process.env.SESSION_COOKIE_DOMAIN || undefined,
     },
   },
 

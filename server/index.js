@@ -58,6 +58,11 @@ export async function createServer() {
     saveUninitialized: false,
     cookie: fullConfig.auth.sessionCookie,
   };
+  // A distinct cookie name (hosted instances set one) sidesteps the collision
+  // where an old host-only `connect.sid` and a new domain-scoped one coexist:
+  // the browser sends the stale one first and the user is logged straight out.
+  // A different name means the old cookie is simply ignored.
+  if (fullConfig.auth.sessionName) sessionConfig.name = fullConfig.auth.sessionName;
 
   // Use SQLite store in production for persistence across restarts
   // Only available when running under Bun (has built-in SQLite)
@@ -149,6 +154,15 @@ export async function createServer() {
     } else {
       res.json({ authenticated: false });
     }
+  });
+
+  // Lightweight auth probe for the hosted preview vhost's nginx `auth_request`.
+  // Deliberately NOT under /api/ (so the /api/ rate limiter can't trip it — one
+  // preview page load fires an auth_request per asset) and NOT /api/session
+  // (which 200s when logged out, which auth_request reads as ALLOW). 204 when
+  // authenticated, 401 otherwise — the only two statuses auth_request needs.
+  app.get('/__authz', (req, res) => {
+    res.sendStatus(req.session.authenticated ? 204 : 401);
   });
 
   // Reload schemas endpoint (requires auth)
