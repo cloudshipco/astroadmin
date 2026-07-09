@@ -226,6 +226,10 @@ let
     wants = [ "network-online.target" ];
     requires = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
+    # The admin shells out to bare `git` (simple-git, for Publish commit/push)
+    # and `bunx` (astro build); systemd's minimal service PATH lacks both, so
+    # put them on the unit's PATH explicitly.
+    path = [ pkgs.git pkgs.bun ];
     environment = (instanceEnv name inst) // {
       ASTROADMIN_HOST = "127.0.0.1";
       ASTROADMIN_PORT = toString inst.adminPort;
@@ -256,7 +260,9 @@ let
       # systemd creates + chowns this (under /var/lib) before the unit runs and
       # grants it read-write under ProtectSystem=strict.
       StateDirectory = "astroadmin/${name}";
-      ExecStart = "${pkgs.bun}/bin/bun ${inst.projectRoot}/node_modules/astroadmin/bin/cli.js start";
+      # --no-astro: the dedicated preview unit owns `astro dev`; the admin must
+      # NOT spawn a second one (it did, and a failed spawn killed the admin).
+      ExecStart = "${pkgs.bun}/bin/bun ${inst.projectRoot}/node_modules/astroadmin/bin/cli.js start --no-astro";
       Restart = "on-failure";
       RestartSec = 5;
     };
