@@ -12,12 +12,13 @@
  */
 
 import { rsyncAdapter } from './adapters/rsync.js';
+import { netlifyAdapter } from './adapters/netlify.js';
 
 /** @type {Record<string, { name: string, validate: Function, deploy: Function }>} */
 const ADAPTERS = {
   rsync: rsyncAdapter,
-  // netlify: netlifyAdapter,   // future — one line each
-  // cloudflare: cloudflareAdapter,
+  netlify: netlifyAdapter,
+  // cloudflare: cloudflareAdapter,   // future — one line each
 };
 
 function supportedList() {

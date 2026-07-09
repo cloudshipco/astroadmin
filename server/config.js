@@ -158,9 +158,11 @@ const defaultConfig = {
 
   // Deployment configuration
   // When configured, the publish flow will: git commit + push → build → deploy
-  // Supported adapters: 'rsync' (more coming: 's3', 'ftp', 'vercel', 'netlify')
+  // Supported adapters: 'rsync', 'netlify' (more coming: 's3', 'cloudflare')
+  // Env (DEPLOY_ADAPTER etc.) lets a hosted instance enable deploy with no
+  // astroadmin.config.js; astroadmin.config.js can still override any of it.
   deploy: {
-    adapter: null, // Set to 'rsync' to enable deployment
+    adapter: process.env.DEPLOY_ADAPTER || null, // 'rsync' | 'netlify'
     // rsync adapter configuration
     rsync: {
       path: null,           // Required: destination path (e.g., '/var/www/mysite/public')
@@ -170,6 +172,13 @@ const defaultConfig = {
       keyPath: null,        // Optional: path to SSH key (e.g., '~/.ssh/deploy_key')
       exclude: [],          // Optional: patterns to exclude (e.g., ['.git', 'node_modules'])
       dryRun: false,        // Optional: test without making changes
+    },
+    // netlify adapter: build dist on this host, push it to Netlify via the CLI
+    // (no repo access needed). Token via env, never committed.
+    netlify: {
+      siteId: process.env.NETLIFY_SITE_ID || null,        // Netlify site API id
+      authToken: process.env.NETLIFY_AUTH_TOKEN || null,   // scoped deploy token
+      dryRun: false,        // true = draft deploy (preview URL, not production)
     },
   },
 
