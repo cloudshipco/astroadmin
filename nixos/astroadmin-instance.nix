@@ -109,10 +109,29 @@ let
         description = "Per-instance state dir (checkout, session DB, caches).";
       };
 
-      projectRoot = lib.mkOption {
+      checkoutPath = lib.mkOption {
         type = lib.types.path;
         default = "${config.stateDir}/checkout";
-        description = "Where the site repo is checked out (ASTROADMIN_PROJECT_ROOT).";
+        description = "Where the site repo is cloned (the git root).";
+      };
+
+      subdir = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "site";
+        description = ''
+          Subdirectory of the repo that holds the Astro project, for monorepos
+          (e.g. the Netlify `base`). Empty = the repo root. astroadmin runs and
+          `bun install`s here; git commit/push still act on the whole checkout.
+        '';
+      };
+
+      projectRoot = lib.mkOption {
+        type = lib.types.path;
+        default =
+          if config.subdir == "" then config.checkoutPath
+          else "${config.checkoutPath}/${config.subdir}";
+        description = "Astro project root (ASTROADMIN_PROJECT_ROOT) — checkoutPath or its subdir.";
       };
 
       committerName = lib.mkOption {
@@ -153,8 +172,8 @@ let
   checkoutScript = name: inst: pkgs.writeShellScript "astroadmin-${name}-checkout" ''
     set -euo pipefail
     export GIT_SSH_COMMAND="${gitSshCommand name inst}"
-    if [ ! -e ${inst.projectRoot}/.git ]; then
-      ${pkgs.git}/bin/git clone --branch ${inst.branch} ${inst.repoUrl} ${inst.projectRoot}
+    if [ ! -e ${inst.checkoutPath}/.git ]; then
+      ${pkgs.git}/bin/git clone --branch ${inst.branch} ${inst.repoUrl} ${inst.checkoutPath}
     fi
     cd ${inst.projectRoot}
     ${pkgs.bun}/bin/bun install --frozen-lockfile || ${pkgs.bun}/bin/bun install
