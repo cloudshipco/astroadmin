@@ -346,10 +346,13 @@ let
         proxy_set_header Host localhost;
       '';
     };
-    # Subrequest: 200 if the admin session is valid, 401 otherwise. Forwards the
+    # Subrequest: MUST 401 when unauthenticated. NOTE: do NOT use /api/session —
+    # it returns 200 {authenticated:false} for logged-out users, which
+    # auth_request reads as ALLOW (a wide-open preview). Use a requireAuth route:
+    # /api/collections returns 401 logged-out, 200 logged-in. Forwards the
     # client's Cookie header (nginx does this by default); drop the body.
     locations."= /__preview_authz" = {
-      proxyPass = "http://127.0.0.1:${toString inst.adminPort}/api/session";
+      proxyPass = "http://127.0.0.1:${toString inst.adminPort}/api/collections";
       extraConfig = ''
         internal;
         proxy_pass_request_body off;
