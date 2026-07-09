@@ -364,9 +364,12 @@ let
     # redirect to the admin root (that loads the whole dashboard in the iframe,
     # whose own preview pane re-triggers this → an infinite hall of mirrors).
     # The link uses target=_top so login opens in the full window.
+    # Return 200 (not 401) here: a 401 from the error handler re-matches
+    # `error_page 401` → internal-redirect loop → nginx 500. The page itself is
+    # the "denied" signal; the code just can't be 401.
     locations."@preview_login".extraConfig = ''
       default_type text/html;
-      return 401 '<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><style>body{font:15px/1.6 system-ui,sans-serif;color:#334155;margin:2.5rem;text-align:center}a{color:#4f46e5}</style><p>Preview needs an active editor session.</p><p><a href="https://${inst.domain}/" target="_top">Open the editor</a>, log in, then reload.</p>';
+      return 200 '<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><style>body{font:15px/1.6 system-ui,sans-serif;color:#334155;margin:2.5rem;text-align:center}a{color:#4f46e5}</style><p>Preview needs an active editor session.</p><p><a href="https://${inst.domain}/" target="_top">Open the editor</a>, log in, then reload.</p>';
     '';
   };
 
