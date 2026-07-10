@@ -472,6 +472,12 @@ in {
       recommendedTlsSettings = true;
       recommendedGzipSettings = true;
       recommendedOptimisation = true;
+      # Each instance contributes two long vhost names (<slug>.<domain> +
+      # preview.<slug>.<domain>). With more than one instance the combined
+      # server_names exceed nginx's default 64-byte hash bucket, so nginx fails
+      # to start ("could not build server_names_hash"). Bump it so multi-instance
+      # hosts work out of the box. (A host may raise it further if needed.)
+      serverNamesHashBucketSize = lib.mkDefault 128;
       virtualHosts = lib.listToAttrs (
         (eachInstance mkVhost) ++ (eachInstance mkPreviewVhost)
       );
