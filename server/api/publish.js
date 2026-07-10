@@ -202,6 +202,82 @@ export async function publishHandler(req, res) {
   }
 }
 
+/**
+ * Resolve a requested page path against the configured public origin, refusing
+ * anything that would escape it (SSRF guard — `path` is client-supplied, e.g.
+ * `//evil.com` or `http://internal`). Returns a URL guaranteed to be same-origin
+ * as publicUrl.
+ */
+export function resolveLiveUrl(publicUrl, requestedPath) {
+  const base = new URL(publicUrl);
+  const resolved = new URL(requestedPath || '/', base);
+  if (resolved.origin !== base.origin) {
+    throw new Error('path must stay within the configured public site');
+  }
+  return resolved;
+}
+
+// Stable, fast content hash (djb2) so the editor can tell when a page's live
+// HTML changes after a publish without transferring the whole body around.
+function hashContent(text) {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * GET /api/publish/live-status?path=/some-page
+ * Fetch a page from the configured public (production) site and return a hash of
+ * its HTML. The editor captures this before a publish, then polls until the hash
+ * changes — i.e. the deploy went live. No-op (configured:false) when publicUrl
+ * is unset. Server-side fetch avoids the browser's cross-origin restriction.
+ */
+export async function liveStatusHandler(req, res) {
+  try {
+    const fullConfig = await getConfig();
+    const publicUrl = fullConfig.publicUrl;
+    if (!publicUrl) {
+      return res.json({ success: true, configured: false });
+    }
+
+    let target;
+    try {
+      target = resolveLiveUrl(publicUrl, req.query.path);
+    } catch (err) {
+      return res.status(400).json({ success: false, configured: true, error: err.message });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(target.href, {
+        signal: controller.signal,
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      const body = await response.text();
+      return res.json({
+        success: true,
+        configured: true,
+        reachable: response.ok,
+        status: response.status,
+        hash: response.ok ? hashContent(body) : null,
+      });
+    } catch (fetchError) {
+      // Unreachable/timeout is expected mid-deploy — report, don't 500.
+      return res.json({ success: true, configured: true, reachable: false, error: fetchError.message });
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (error) {
+    console.error('Error checking live status:', error);
+    res.status(500).json({ success: false, error: 'Failed to check live status', message: error.message });
+  }
+}
+
+router.get('/live-status', liveStatusHandler);
+
 export function buildPublishMessage({ gitEnabled, committed, pushed, deployResult }) {
   const parts = [];
   if (gitEnabled && committed && pushed) parts.push('committed and pushed');

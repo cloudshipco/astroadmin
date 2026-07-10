@@ -109,6 +109,19 @@ let
         '';
       };
 
+      publicUrl = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "https://example.com";
+        description = ''
+          Public/production site origin (PUBLIC_URL). Optional. When set, the
+          editor shows a "View live site" link and, after a Publish, polls this
+          origin to report when the change is actually live — useful with
+          build-on-push hosts (Netlify, Cloudflare Pages) where a deploy lags
+          the push by a short while. Leave null to disable the live check.
+        '';
+      };
+
       sopsFile = lib.mkOption {
         type = lib.types.path;
         description = ''
@@ -252,6 +265,9 @@ let
       GIT_COMMITTER_NAME = inst.committerName;
       GIT_AUTHOR_EMAIL = inst.committerEmail;
       GIT_COMMITTER_EMAIL = inst.committerEmail;
+    } // lib.optionalAttrs (inst.publicUrl != null) {
+      # Enables the editor's "View live site" link + post-publish live-status check.
+      PUBLIC_URL = inst.publicUrl;
     };
     serviceConfig = hardening // {
       User = cfg.user;

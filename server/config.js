@@ -70,6 +70,12 @@ const defaultConfig = {
     method: IS_DEV ? 'hot-reload' : 'build',
   },
 
+  // Public/production site origin (browser-facing), e.g. https://example.com.
+  // Optional. When set, the editor offers a "View live site" link and, after a
+  // Publish, polls this origin to detect when the change is actually live
+  // (useful with build-on-push hosts where a deploy takes a short while).
+  publicUrl: process.env.PUBLIC_URL || null,
+
   // Build commands
   // Run Astro under Bun so the content-layer loader's `bun:sqlite` import works.
   build: {

@@ -96,6 +96,7 @@ export async function createServer() {
       environment: IS_DEV ? 'development' : 'production',
       previewUrl: fullConfig.preview.url,
       previewMethod: fullConfig.preview.method,
+      publicUrl: fullConfig.publicUrl || null,
       gitEnabled: fullConfig.git.enabled,
     });
   });

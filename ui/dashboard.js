@@ -12,6 +12,7 @@ let currentCollection = null;
 let currentSlug = null;
 let currentData = null;
 let previewUrl = '';
+let publicUrl = ''; // Production site origin (optional); enables the live-status check
 let allPages = []; // Store all pages for dropdown
 let allCollections = []; // Store collection info for new entries
 let allStaticPages = []; // Store discovered static pages (virtual pages)
@@ -50,6 +51,7 @@ async function loadConfig() {
     const response = await fetch('/api/config');
     const data = await response.json();
     previewUrl = data.previewUrl;
+    publicUrl = data.publicUrl || '';
     gitEnabled = data.gitEnabled !== false;
 
     // Content lives in the database, so the git-history "Changes" panel only
@@ -1813,6 +1815,79 @@ function friendlyPublishMessage(result) {
   return '✅ Published! Your changes will appear on your live site in a minute or two.';
 }
 
+/**
+ * The production path of the current entry (e.g. '/', '/about'), or null when
+ * the entry has no real production page (component-preview-only collections).
+ * Mirrors getPreviewPageUrl()'s routing, minus the origin.
+ */
+function getCurrentPagePath() {
+  const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
+  const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
+
+  if (currentCollection === 'pages') {
+    if (currentSlug === 'home') return isDefaultLocale ? '/' : localePrefix;
+    return `${localePrefix}/${currentSlug}`;
+  }
+  const collection = allCollections.find(c => c.name === currentCollection);
+  if (collection?.previewRoute) {
+    return `${localePrefix}${collection.previewRoute.replace('{slug}', currentSlug)}`;
+  }
+  return null; // component-preview-only: no standalone production page
+}
+
+// A persistent, updatable status toast (unlike showNotification's fire-and-forget)
+// so the post-publish "publishing… → now live!" flow can update in place.
+function showPublishStatus(message) {
+  const el = document.createElement('div');
+  el.className = 'notification notification-info';
+  el.style.cssText = `position:fixed;top:60px;right:20px;padding:12px 20px;background:#667eea;` +
+    `color:white;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:1000;` +
+    `font-size:14px;max-width:360px;`;
+  el.textContent = message;
+  document.body.appendChild(el);
+  return {
+    update(msg, { type = 'info', link = null, autoDismissMs = null } = {}) {
+      el.style.background = type === 'success' ? '#22c55e' : type === 'error' ? '#ef4444' : '#667eea';
+      el.textContent = msg;
+      if (link) {
+        el.appendChild(document.createTextNode(' '));
+        const a = document.createElement('a');
+        a.href = link; a.target = '_blank'; a.rel = 'noopener';
+        a.textContent = 'View site →';
+        a.style.cssText = 'color:white;text-decoration:underline;font-weight:600;';
+        el.appendChild(a);
+      }
+      if (autoDismissMs) setTimeout(() => el.remove(), autoDismissMs);
+    },
+    remove() { el.remove(); },
+  };
+}
+
+async function fetchLiveHash(pagePath) {
+  try {
+    const res = await fetch(`/api/publish/live-status?path=${encodeURIComponent(pagePath)}`);
+    const data = await res.json();
+    if (data.configured && data.reachable && data.hash) return data.hash;
+  } catch { /* mid-deploy the site may be briefly unreachable */ }
+  return null;
+}
+
+// Poll the production URL until the page's HTML hash changes (the deploy went
+// live) or we give up. Updates the status toast in place.
+async function pollUntilLive(pagePath, preHash, status, liveUrl) {
+  const maxMs = 5 * 60 * 1000;
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    await new Promise(r => setTimeout(r, 5000));
+    const hash = await fetchLiveHash(pagePath);
+    if (hash && hash !== preHash) {
+      status.update('✅ Your changes are now live!', { type: 'success', link: liveUrl, autoDismissMs: 10000 });
+      return;
+    }
+  }
+  status.update('✅ Published. Your changes should be live shortly.', { type: 'success', link: liveUrl, autoDismissMs: 10000 });
+}
+
 // Publish changes
 document.getElementById('publishBtn').addEventListener('click', async () => {
   const message = await showPublishDialog();
@@ -1822,6 +1897,13 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   const originalText = publishBtn.textContent;
   publishBtn.textContent = 'Publishing...';
   publishBtn.disabled = true;
+
+  // Snapshot the live page hash BEFORE publishing so we can detect when the
+  // deploy actually goes live. Only possible with a configured publicUrl and a
+  // real production page for this entry.
+  const pagePath = getCurrentPagePath();
+  const liveUrl = (publicUrl && pagePath) ? publicUrl.replace(/\/$/, '') + pagePath : null;
+  const preHash = (publicUrl && pagePath) ? await fetchLiveHash(pagePath) : null;
 
   try {
     const response = await fetch('/api/publish', {
@@ -1833,8 +1915,21 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     const result = await response.json();
 
     if (result.success) {
-      showNotification(friendlyPublishMessage(result), 'success');
       updateChangesBadge();
+      const didPublish = result.committed || result.pushed || result.deploy;
+
+      if (didPublish && result.deploy) {
+        // Synchronous deploy adapter — already live.
+        showPublishStatus('').update('✅ Published! Your changes are now live on your site.',
+          { type: 'success', link: liveUrl, autoDismissMs: 8000 });
+      } else if (didPublish && preHash) {
+        // Build-on-push host — poll until the change appears on the live site.
+        const status = showPublishStatus('✅ Published! Waiting for your changes to go live…');
+        pollUntilLive(pagePath, preHash, status, liveUrl);
+      } else {
+        // No live-check available — fall back to the plain friendly message.
+        showNotification(friendlyPublishMessage(result), 'success');
+      }
     } else {
       showNotification('Failed to publish: ' + result.error, 'error');
     }
