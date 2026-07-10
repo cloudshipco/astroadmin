@@ -1,5 +1,13 @@
 # AstroAdmin Development Guidelines
 
+## This is a PUBLIC repository
+
+Never commit real client / customer / business names anywhere in this repo —
+**including as example or placeholder values** in code, comments, docs, plan
+files, commit messages, and issues. Use generic examples only: `site-a`,
+`site-b`, `example.com`, `admin.example.com`. Real deployment bindings live in
+the separate private ops repo, not here.
+
 ## Architecture Principles
 
 ### Site Agnosticism
