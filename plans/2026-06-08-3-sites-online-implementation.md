@@ -46,7 +46,7 @@
   - **Live host on Hetzner** (not DigitalOcean — provider switched; DO/AWS evaluated),
     provisioned declaratively via nixos-anywhere + disko. Config in the private ops
     repo (`astroadmin-ops/hosts`).
-  - **Site B (Waveney) editor LIVE** with TLS, auth, and working **Publish** (git
+  - **Site B editor LIVE** with TLS, auth, and working **Publish** (git
     commit/push). Note: Site A was assumed "simplest first" but actually needs an
     Astro 5→6 migration, so **Site B went first**.
   - **Live preview solved** — the open item is closed: a nested `preview.<domain>`

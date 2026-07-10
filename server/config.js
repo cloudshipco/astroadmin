@@ -96,10 +96,10 @@ const defaultConfig = {
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
       // Host-only by default (undefined => cookie bound to the exact admin host).
       // A hosted instance sets this to its OWN admin host (e.g.
-      // waveney.admin.example.com) so the cookie also reaches a nested preview
-      // subdomain (preview.waveney.admin.example.com) for the preview vhost's
+      // site-a.admin.example.com) so the cookie also reaches a nested preview
+      // subdomain (preview.site-a.admin.example.com) for the preview vhost's
       // nginx auth_request — while STILL never reaching sibling instances
-      // (feathered-thorns.admin.example.com), which aren't subdomains of it.
+      // (site-b.admin.example.com), which aren't subdomains of it.
       domain: process.env.SESSION_COOKIE_DOMAIN || undefined,
     },
   },
