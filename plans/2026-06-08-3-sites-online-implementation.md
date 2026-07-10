@@ -39,9 +39,25 @@
   the DB-loader build; 20 entries exported. One nuance vs Site B: Site C's host isn't
   wired for GitHub-linked CD yet (manual deploys today), so the merge enables CD but
   doesn't auto-build — connecting it is Phase 3 work.
-- ⏳ **Next: Phase 3** — per-site hosted editor + auth + deploy keys + TLS, and wiring
-  publish→Netlify CD. Standing up **Site A first** (already file-based — the simplest
-  end-to-end proof), then the Site B go-live.
+- ✅ **Phase 3 largely DONE (2026-07-09/10).** Substrate built + Site B live:
+  - **NixOS hosting module** shipped (astroadmin `v1.2.0`, PR #24): per-site editor
+    on a NixOS host — checkout one-shot + admin + `astro dev` preview + nginx/ACME,
+    sops-nix secrets, monorepo `subdir` support.
+  - **Live host on Hetzner** (not DigitalOcean — provider switched; DO/AWS evaluated),
+    provisioned declaratively via nixos-anywhere + disko. Config in the private ops
+    repo (`astroadmin-ops/hosts`).
+  - **Site B (Waveney) editor LIVE** with TLS, auth, and working **Publish** (git
+    commit/push). Note: Site A was assumed "simplest first" but actually needs an
+    Astro 5→6 migration, so **Site B went first**.
+  - **Live preview solved** — the open item is closed: a nested `preview.<domain>`
+    subdomain, nginx `auth_request` gate (`/__authz`), cookie-scoped + isolated,
+    validated end-to-end.
+  - **Auth already existed** (login/`requireAuth`/rate-limit) — the old "Phase 3
+    item 1: auth net-new" was stale.
+- ⏳ **Remaining:** Site C (RWE) standup (Astro 6, needs secrets+DNS+enable+CD);
+  Site A Astro 5→6 migration then standup; the **deploy path** (interim: Netlify Pro
+  build-on-push; target: self-host + Cloudflare + floating IP in ~4 weeks — see
+  `astroadmin-ops/plans/2026-07-09-self-host-migration.md`).
 
 All server-less tests green: content-files 10, content-store(db) 7, export 7, import 8,
 loader 4, schema-parser-db 6, auth 5. (`api.test.js` needs a running server — pre-existing.)
