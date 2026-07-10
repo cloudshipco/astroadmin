@@ -41,7 +41,7 @@
     "type": "git",
     "url": "https://github.com/cloudshipco/astroadmin.git"
   },
-  "homepage": "https://github.com/cloudshipco/astroadmin#readme",
+  "homepage": "https://astroadmin.dev",
   "dependencies": {
     "alpinejs": "^3.15.2",
     "chokidar": "^4.0.3",
