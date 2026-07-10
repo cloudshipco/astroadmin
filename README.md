@@ -7,7 +7,7 @@ editor, live preview, and publishing that's just a git push.
 [![npm](https://img.shields.io/npm/v/astroadmin)](https://www.npmjs.com/package/astroadmin)
 [![license](https://img.shields.io/npm/l/astroadmin)](./LICENSE)
 
-![AstroAdmin Screenshot](https://raw.githubusercontent.com/cloudshipco/astroadmin/main/design/astroadmin-example.png)
+![The AstroAdmin editor: a form for the page's hero block generated from the site's schema on the left; the site rendered live in its own dev server on the right](https://raw.githubusercontent.com/cloudshipco/astroadmin/main/design/astroadmin-editor.jpg)
 
 ## Why AstroAdmin?
 
