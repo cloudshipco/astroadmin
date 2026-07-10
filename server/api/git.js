@@ -40,6 +40,61 @@ function getAllowedGitPaths(fullConfig) {
 }
 
 /**
+ * The project root can be a SUBDIRECTORY of the git repository (the common
+ * hosted layout: `git clone repo checkout && projectRoot = checkout/site`).
+ * `git status` reports paths relative to the repo ROOT (e.g. `site/src/...`),
+ * but the rest of this API — validateFilePath, diff, revert, show — works in
+ * projectRoot-relative terms. `git rev-parse --show-prefix` gives the path from
+ * the repo root down to projectRoot (`site/`, or `''` when they coincide), so we
+ * can translate status paths back to projectRoot-relative before using them.
+ * @returns {Promise<string>} prefix with a trailing slash, or '' at the repo root
+ */
+export async function getRepoPrefix(git) {
+  const prefix = (await git.revparse(['--show-prefix'])).trim();
+  // Normalise to forward slashes; git already emits them, but be defensive.
+  return prefix.replace(/\\/g, '/');
+}
+
+/**
+ * Translate a repo-root-relative path (as reported by `git status`) to a
+ * projectRoot-relative path by stripping the subdirectory prefix. Paths outside
+ * the project subdirectory are returned unchanged (they get dropped by the
+ * git-path scoping that follows).
+ */
+export function toProjectRelative(repoRelativePath, repoPrefix) {
+  if (repoPrefix && repoRelativePath.startsWith(repoPrefix)) {
+    return repoRelativePath.slice(repoPrefix.length);
+  }
+  return repoRelativePath;
+}
+
+/**
+ * Whether a projectRoot-relative path falls within one of the configured git
+ * paths. The Changes panel and its badge should reflect exactly what Publish
+ * stages (config.git.paths — content + assets), not every stray working-tree
+ * change (e.g. a `bun update` touching package.json/bun.lock).
+ */
+export function isWithinAllowedGitPaths(projectRelativePath, allowedGitPaths) {
+  const normalized = path.normalize(projectRelativePath);
+  return allowedGitPaths.some(
+    (dir) => normalized === dir || normalized.startsWith(dir + path.sep) || normalized.startsWith(dir + '/')
+  );
+}
+
+/**
+ * Reduce a `git status` result to the files the editor actually manages:
+ * translate repo-root-relative paths to projectRoot-relative, then keep only
+ * those within the configured git paths. Fixes both (a) the subdirectory
+ * path mismatch that made diff/revert reject every content file, and (b) the
+ * panel listing files outside the editor's remit.
+ */
+export function scopeStatusFiles(files, repoPrefix, allowedGitPaths) {
+  return files
+    .map((file) => toProjectRelative(file, repoPrefix))
+    .filter((file) => isWithinAllowedGitPaths(file, allowedGitPaths));
+}
+
+/**
  * Validate that a file path is within allowed directories.
  * Uses path.resolve() + startsWith() for robust traversal prevention.
  * @param {string} filePath - User-provided file path
@@ -109,14 +164,31 @@ router.get('/status', async (req, res) => {
     const git = createGitClient(fullConfig);
     const status = await git.status();
 
+    // Translate repo-root-relative paths to projectRoot-relative and keep only
+    // files within the configured git paths (what Publish actually stages).
+    const repoPrefix = await getRepoPrefix(git);
+    const allowedGitPaths = getAllowedGitPaths(fullConfig);
+    const scope = (files) => scopeStatusFiles(files, repoPrefix, allowedGitPaths);
+    // renamed entries are { from, to } objects; scope on the destination path.
+    const scopeRenamed = (renamed) =>
+      (renamed || [])
+        .map((entry) => ({
+          from: toProjectRelative(entry.from, repoPrefix),
+          to: toProjectRelative(entry.to, repoPrefix),
+        }))
+        .filter((entry) => isWithinAllowedGitPaths(entry.to, allowedGitPaths));
+
     res.json({
       success: true,
       status: {
-        modified: status.modified,
-        created: status.created,
-        deleted: status.deleted,
-        renamed: status.renamed,
-        staged: status.staged,
+        modified: scope(status.modified),
+        // `created` = staged-new; `not_added` = untracked. The editor stages
+        // only at Publish time, so newly-created entries live in not_added —
+        // include them (Publish's `git add -A` will stage them too).
+        created: [...new Set([...scope(status.created), ...scope(status.not_added)])],
+        deleted: scope(status.deleted),
+        renamed: scopeRenamed(status.renamed),
+        staged: scope(status.staged),
         ahead: status.ahead,
         behind: status.behind,
         current: status.current,

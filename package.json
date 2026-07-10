@@ -1,7 +1,7 @@
 {
   "name": "astroadmin",
-  "version": "1.2.0",
-  "description": "Admin interface for Astro Content Collections - auto-generates forms from your Zod schemas",
+  "version": "1.2.1",
+  "description": "The git-native CMS for Astro — auto-generates an editing UI from your content collection Zod schemas; publish = git push",
   "type": "module",
   "main": "server/index.js",
   "exports": {
@@ -31,7 +31,9 @@
     "content-collections",
     "admin",
     "zod",
-    "headless-cms"
+    "headless-cms",
+    "git-based-cms",
+    "markdown"
   ],
   "author": "James Pickard",
   "license": "MIT",

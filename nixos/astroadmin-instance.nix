@@ -276,7 +276,15 @@ let
     after = [ "astroadmin-${name}-checkout.service" ];
     requires = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
-    environment = instanceEnv name inst;
+    # astro dev runs under Bun (`bunx --bun`), whose runtime file-watcher does NOT
+    # fire for src/content edits — the preview would serve stale content until a
+    # restart. Force chokidar (Vite's watcher) into polling mode so the editor's
+    # live preview reflects saves. Polling is a stat() loop, so it works
+    # regardless of runtime; the interval trades latency for CPU.
+    environment = (instanceEnv name inst) // {
+      CHOKIDAR_USEPOLLING = "1";
+      CHOKIDAR_INTERVAL = "300";
+    };
     serviceConfig = hardening // {
       User = cfg.user;
       Group = cfg.group;
