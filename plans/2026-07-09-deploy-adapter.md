@@ -1,7 +1,14 @@
 # Deploy adapter: build-on-host + push artifact (Option B)
 
 **Date:** 2026-07-09
-**Status:** building.
+**Status:** netlify adapter BUILT and PARKED on branch
+`feat/netlify-deploy-adapter` (not merged). Decision (2026-07-10): use **Netlify
+Pro build-on-push** as the interim (no deploy token on the box), and migrate to
+**self-host + Cloudflare** in ~4 weeks — where the deploy adapter (rsync, or this
+netlify one) gets used. Netlify deploy tokens are account-wide incl. billing, so
+the box-hosted netlify adapter is a non-starter for us; the self-host target uses
+the existing `rsync` adapter (no token). Migration plan lives in the private ops
+repo: `astroadmin-ops/plans/2026-07-09-self-host-migration.md`.
 
 ## Why
 
@@ -56,11 +63,14 @@ has `bun`/`git` on PATH (for `bunx --bun astro build` + git).
 
 ## Tasks
 
-- [ ] `adapters/netlify.js` + registry entry
-- [ ] env-driven `deploy` config in `config.js`
-- [ ] NixOS module: deploy env + `netlify-cli` + sops token
-- [ ] release astroadmin (minor) + bump the hosted site
-- [ ] ops: Netlify site id + auth token in sops; enable deploy for the instance
+- [x] `adapters/netlify.js` + registry entry (branch `feat/netlify-deploy-adapter`)
+- [x] env-driven `deploy` config in `config.js`
+- [ ] NixOS module: deploy env + CLI + sops token — **deferred**; the self-host
+      target uses `rsync` (no token), so this only matters if we ever deploy to
+      Netlify from the box (we won't, per the billing-token constraint)
+- [ ] release astroadmin (minor) + bump the hosted site — deferred to the
+      self-host migration
+- [ ] ops: enable the deploy step for the instance (rsync web-root, self-host)
 - [ ] live test: edit → Publish → build → deploy → change live
 
 ## Roadmap (beyond first-party)
