@@ -35,6 +35,25 @@ export default {
 
 The preview panel loads your Astro site in an iframe. Make sure your Astro dev server is running.
 
+### Public site URL (live-status)
+
+Optionally set your production site's origin. When set, the editor shows a
+"View live site" link and, after a Publish, polls the production URL to report
+when your change is actually live — handy with build-on-push hosts (Netlify,
+Cloudflare Pages) where a deploy lags the push by a short while:
+
+```javascript
+export default {
+  // Production site origin, e.g. https://example.com
+  publicUrl: 'https://example.com',
+};
+```
+
+Also settable via the `PUBLIC_URL` environment variable. Leave it unset to
+disable the live-status check (the editor falls back to a "live shortly"
+message). Backed by a server-side `GET /api/publish/live-status` endpoint, so
+there's no browser cross-origin issue.
+
 ### Authentication
 
 Configure admin login credentials. For anything internet-facing, prefer an
@@ -89,6 +108,8 @@ npx astroadmin dev --project ./my-astro-site
 | `ADMIN_PASSWORD` | Plaintext password (local/dev fallback) | `admin` |
 | `SESSION_SECRET` | Session signing secret | dev-only default |
 | `ASTROADMIN_PROJECT_ROOT` | Project path | Current directory |
+| `PREVIEW_URL` | Browser-facing preview origin (iframe) | `http://localhost:4321` |
+| `PUBLIC_URL` | Production site origin (enables the post-publish live-status check + View-site link) | unset |
 | `ASTROADMIN_CONTENT_STORE` | Content store: `files` or `db` | `files` |
 | `ASTROADMIN_DB` | SQLite path (db mode only) | `<project>/.astroadmin/content.db` |
 | `GIT_ENABLED` | Enable git integration | `true` (`false` to disable) |

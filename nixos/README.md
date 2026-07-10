@@ -35,6 +35,8 @@ dependency tree builds on Netlify (build-on-push), not here.
       adminPort     = 4001;     # unique per instance
       previewPort   = 4321;     # unique per instance
       adminUsername = "client";
+      publicUrl     = "https://site-a.com";  # optional: live-status + View-site link
+      # subdir     = "site";    # set only if the Astro project is in a subdir
       sopsFile      = ./secrets/site-a.yaml;
     };
   };
@@ -45,6 +47,14 @@ See `example-host.nix` for a multi-site example.
 
 ## Per-site provisioning checklist
 
+0. **Site `astro.config.mjs`** must be wired for the hosted editor, or the
+   preview iframe fails (Vite blocks the proxied preview host, and there are no
+   preview routes):
+   - `integrations: [astroadmin()]` (from `astroadmin/integration`);
+   - `vite.server.allowedHosts = [".your-editor-domain", "localhost"]` so the
+     `preview.<domain>` iframe (served through nginx) can reach the dev server;
+   - `vite.server.hmr = false` (the editor does its own refresh);
+   - `site: "https://…"`.
 1. **Secrets** in `sopsFile`, under `astroadmin/<name>/`:
    - `admin_password_hash` — from `astroadmin hash-password`;
    - `session_secret` — a long random string;
@@ -55,9 +65,13 @@ See `example-host.nix` for a multi-site example.
 2. **DNS**: an `A` record for `domain` → the host IP, at the domain's registrar
    (check its nameservers — not every site is on Namecheap). HTTP-01 needs the
    name resolving to the host before the first rebuild so ACME can validate.
-3. **Netlify CD**: connect the site's Netlify project to its GitHub repo so the
-   editor's push triggers a build-on-push. (Otherwise Publish pushes but nothing
-   rebuilds.)
+3. **Netlify CD** (if using Netlify): connect the site's Netlify project to its
+   GitHub repo **via the dashboard GitHub-App flow** (not the API, which leaves
+   the link half-provisioned) so the editor's push triggers a build-on-push.
+   Because the editor commits via a deploy key (an "unverified committer"),
+   Netlify holds each build for approval — enable **Team settings → Access &
+   security → Visitor access → "Auto-approve deploys from non-team members"**
+   (team-level) so pushes deploy automatically.
 4. `nixos-rebuild switch`. The checkout one-shot clones + `bun install`s on first
    activation; ACME issues the cert once `domain` resolves to the host.
 
