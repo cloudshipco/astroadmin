@@ -1793,6 +1793,26 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
   }
 });
 
+/**
+ * Turn the publish API result into a friendly, non-technical message for CMS
+ * users. The server's own message ("committed and pushed") is accurate for the
+ * API but too technical for the editor. A synchronous deploy adapter (e.g.
+ * rsync) is live immediately; a git push to a build-on-push host (Netlify,
+ * Cloudflare Pages, etc.) takes a short while to build, so we say so.
+ */
+function friendlyPublishMessage(result) {
+  const didPublish = result.committed || result.pushed || result.deploy;
+  if (!didPublish) {
+    return 'Nothing new to publish — your work is already saved.';
+  }
+  // A deploy adapter uploads the built site directly, so it's live right away.
+  if (result.deploy) {
+    return '✅ Published! Your changes are now live on your site.';
+  }
+  // Git push → the host builds and deploys, which takes a minute or two.
+  return '✅ Published! Your changes will appear on your live site in a minute or two.';
+}
+
 // Publish changes
 document.getElementById('publishBtn').addEventListener('click', async () => {
   const message = await showPublishDialog();
@@ -1813,7 +1833,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     const result = await response.json();
 
     if (result.success) {
-      showNotification(result.message, 'success');
+      showNotification(friendlyPublishMessage(result), 'success');
       updateChangesBadge();
     } else {
       showNotification('Failed to publish: ' + result.error, 'error');
