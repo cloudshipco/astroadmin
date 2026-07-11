@@ -10,9 +10,14 @@
 #
 # Conventions follow our in-house NixOS hosts pattern: nginx + `security.acme`
 # (not Caddy), and **sops-nix** for secrets (not agenix). Import
-# `sops-nix.nixosModules.sops` at the host level. No untrusted code runs here —
-# the site code is first-party and the npm dependency tree builds on Netlify
-# (build-on-push), not on this host.
+# `sops-nix.nixosModules.sops` at the host level.
+#
+# Isolation: each instance runs as its OWN Unix user (`astroadmin-<name>`), not
+# a shared account. The site's own code is first-party, but its npm/bun
+# dependency TREE is not, and that tree executes on this host — the checkout
+# one-shot runs `bun install` (postinstall scripts) and the preview runs
+# `astro dev`. Per-user identity is what makes the 0400 mode on each instance's
+# deploy key / session secret actually isolate one tenant from another.
 #
 # Secrets never enter the Nix store. Per instance, the host's sops file holds:
 #   astroadmin/<name>/admin_password_hash   (from `astroadmin hash-password`)
@@ -69,6 +74,27 @@ let
         type = lib.types.str;
         default = "main";
         description = "Branch the editor edits, commits to, and pushes.";
+      };
+
+      user = lib.mkOption {
+        type = lib.types.str;
+        default = "astroadmin-${name}";
+        description = ''
+          Dedicated Unix user this instance's units run as. Per-instance by
+          design (NOT a shared account): each instance runs untrusted code on the
+          host — the site repo's npm/bun dependency tree executes during the
+          checkout one-shot (`bun install` postinstall) and under `astro dev` —
+          so a shared user would let one site's process read another site's
+          deploy key / session secret / password hash despite their 0400 mode.
+          A per-user identity is what makes that mode actually isolate tenants.
+          Override only to pin a pre-existing uid.
+        '';
+      };
+
+      group = lib.mkOption {
+        type = lib.types.str;
+        default = config.user;
+        description = "Primary group for the instance user (defaults to a matching per-instance group).";
       };
 
       adminPort = lib.mkOption {
@@ -226,9 +252,15 @@ let
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      User = cfg.user;
-      Group = cfg.group;
+      User = inst.user;
+      Group = inst.group;
       StateDirectory = "astroadmin/${name}";
+      # 0750 (not systemd's 0755 default) so a sibling instance's user can't
+      # traverse in and read this instance's sessions.db (0644, in the home).
+      # systemd enforces this on the existing leaf dir at every start, so it
+      # takes effect on the already-provisioned live boxes too — unlike
+      # `homeMode`, which only applies when createHome first makes the dir.
+      StateDirectoryMode = "0750";
       ExecStart = checkoutScript name inst;
     };
   };
@@ -270,8 +302,8 @@ let
       PUBLIC_URL = inst.publicUrl;
     };
     serviceConfig = hardening // {
-      User = cfg.user;
-      Group = cfg.group;
+      User = inst.user;
+      Group = inst.group;
       WorkingDirectory = inst.projectRoot;
       # Rendered by sops-nix from the host's sops file (ADMIN_USERNAME +
       # ADMIN_PASSWORD_HASH + SESSION_SECRET); never in the Nix store.
@@ -279,6 +311,12 @@ let
       # systemd creates + chowns this (under /var/lib) before the unit runs and
       # grants it read-write under ProtectSystem=strict.
       StateDirectory = "astroadmin/${name}";
+      # 0750 (not systemd's 0755 default) so a sibling instance's user can't
+      # traverse in and read this instance's sessions.db (0644, in the home).
+      # systemd enforces this on the existing leaf dir at every start, so it
+      # takes effect on the already-provisioned live boxes too — unlike
+      # `homeMode`, which only applies when createHome first makes the dir.
+      StateDirectoryMode = "0750";
       # --no-astro: the dedicated preview unit owns `astro dev`; the admin must
       # NOT spawn a second one (it did, and a failed spawn killed the admin).
       ExecStart = "${pkgs.bun}/bin/bun ${inst.projectRoot}/node_modules/astroadmin/bin/cli.js start --no-astro";
@@ -302,10 +340,16 @@ let
       CHOKIDAR_INTERVAL = "300";
     };
     serviceConfig = hardening // {
-      User = cfg.user;
-      Group = cfg.group;
+      User = inst.user;
+      Group = inst.group;
       WorkingDirectory = inst.projectRoot;
       StateDirectory = "astroadmin/${name}";
+      # 0750 (not systemd's 0755 default) so a sibling instance's user can't
+      # traverse in and read this instance's sessions.db (0644, in the home).
+      # systemd enforces this on the existing leaf dir at every start, so it
+      # takes effect on the already-provisioned live boxes too — unlike
+      # `homeMode`, which only applies when createHome first makes the dir.
+      StateDirectoryMode = "0750";
       # Bind to localhost ONLY — never given an nginx vhost of its own.
       ExecStart = "${pkgs.bun}/bin/bunx --bun astro dev --host 127.0.0.1 --port ${toString inst.previewPort}";
       Restart = "on-failure";
@@ -318,11 +362,11 @@ let
   mkInstanceSecrets = name: inst: {
     ${secretKey name "deploy_key"} = {
       sopsFile = inst.sopsFile;
-      owner = cfg.user;
+      owner = inst.user;
       mode = "0400";
     };
-    ${secretKey name "admin_password_hash"} = { sopsFile = inst.sopsFile; owner = cfg.user; };
-    ${secretKey name "session_secret"}      = { sopsFile = inst.sopsFile; owner = cfg.user; };
+    ${secretKey name "admin_password_hash"} = { sopsFile = inst.sopsFile; owner = inst.user; };
+    ${secretKey name "session_secret"}      = { sopsFile = inst.sopsFile; owner = inst.user; };
   };
 
   mkInstanceTemplate = name: inst:
@@ -331,7 +375,7 @@ let
       secretPlaceholder = config.sops.placeholder.${secretKey name "session_secret"};
     in {
       ${envTemplate name} = {
-        owner = cfg.user;
+        owner = inst.user;
         content = ''
           ADMIN_USERNAME=${inst.adminUsername}
           ADMIN_PASSWORD_HASH=${hashPlaceholder}
@@ -406,17 +450,9 @@ in {
   options.services.astroadmin = {
     enable = lib.mkEnableOption "hosted AstroAdmin editor instances";
 
-    user = lib.mkOption {
-      type = lib.types.str;
-      default = "astroadmin";
-      description = "User the instances run as.";
-    };
-
-    group = lib.mkOption {
-      type = lib.types.str;
-      default = "astroadmin";
-      description = "Group the instances run as.";
-    };
+    # NOTE: identity is per-instance now (see `instances.<name>.user`), not a
+    # single shared `services.astroadmin.user`. That option was removed so each
+    # tenant is isolated by its own Unix user.
 
     stateDir = lib.mkOption {
       type = lib.types.path;
@@ -438,16 +474,68 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    # Dedicated unprivileged service user.
-    users.users = lib.mkIf (cfg.user == "astroadmin") {
-      astroadmin = {
+    # A dedicated unprivileged user + group PER instance, so one site's process
+    # can't read another site's 0400 secrets. Each user's home is its own state
+    # subdir (0750). The shared base dir stays root-owned (tmpfiles below).
+    users.users = lib.listToAttrs (eachInstance (name: inst:
+      lib.nameValuePair inst.user {
         isSystemUser = true;
-        group = cfg.group;
-        home = cfg.stateDir;
-        createHome = true;
-      };
+        group        = inst.group;
+        home         = inst.stateDir;
+        createHome   = true;
+        homeMode     = "0750";
+      }));
+    users.groups = lib.listToAttrs (eachInstance (name: inst:
+      lib.nameValuePair inst.group {}));
+
+    # A system username is capped at 31 chars; "astroadmin-<slug>" could exceed
+    # it for a very long slug. Fail eval with a clear message rather than a
+    # cryptic useradd error at switch time.
+    assertions = (eachInstance (name: inst: {
+      assertion = builtins.stringLength inst.user <= 31;
+      message = "astroadmin: instance '${name}' derives user '${inst.user}' (${toString (builtins.stringLength inst.user)} chars) which exceeds the 31-char system-username limit — use a shorter instance name or set instances.${name}.user.";
+    })) ++ [
+      # Distinct Unix identity per instance — two instances pinning the same
+      # explicit `user` would silently collapse (listToAttrs keeps the last),
+      # re-sharing the account this whole design exists to separate.
+      (let users = eachInstance (name: inst: inst.user); in {
+        assertion = (builtins.length users) == (builtins.length (lib.unique users));
+        message = "astroadmin: two instances resolve to the same Unix user (${lib.concatStringsSep ", " users}) — give each a distinct instances.<name>.user.";
+      })
+    ];
+
+    # Base state dir stays root-owned (each instance's home is a subdir it owns).
+    systemd.tmpfiles.rules = [ "d ${cfg.stateDir} 0755 root root -" ];
+
+    # Ownership migration: instances used to share the `astroadmin` user, so on
+    # an existing box each state subdir + its contents (checkout, node_modules,
+    # sessions.db) is still owned by that account. Re-chown to the per-instance
+    # user, once — guarded on the current owner so it's a no-op after migration
+    # and on fresh installs (StateDirectory/createHome make it correct there).
+    system.activationScripts.astroadmin-state-migrate = {
+      deps = [ "users" "groups" ];
+      text = ''
+        # Base dir root-owned + traversable, set HERE (this script is ordered
+        # before unit start via deps) rather than relying on tmpfiles ordering —
+        # it was the old shared user's 0700 home, and per-instance users need x
+        # on it to reach their own subdirs at first post-switch start.
+        if [ -e ${cfg.stateDir} ]; then
+          ${pkgs.coreutils}/bin/chown root:root ${cfg.stateDir}
+          ${pkgs.coreutils}/bin/chmod 0755 ${cfg.stateDir}
+        fi
+      '' + lib.concatStringsSep "\n" (eachInstance (name: inst: ''
+        # Per-instance state used to be owned by the shared `astroadmin` user;
+        # re-own to the per-instance user. The guard uses find (not a top-dir
+        # owner check) so an interrupted chown -R still converges — a top-only
+        # check would see the top already re-owned and skip, orphaning
+        # descendants under the deleted uid forever.
+        if [ -e ${inst.stateDir} ] \
+           && [ -n "$(${pkgs.findutils}/bin/find ${inst.stateDir} \! -user ${inst.user} -print -quit 2>/dev/null)" ]; then
+          echo "astroadmin: migrating ${inst.stateDir} ownership -> ${inst.user}:${inst.group}"
+          ${pkgs.coreutils}/bin/chown -R ${inst.user}:${inst.group} ${inst.stateDir}
+        fi
+      ''));
     };
-    users.groups = lib.mkIf (cfg.group == "astroadmin") { astroadmin = {}; };
 
     # Bun + git available host-wide (the checkout one-shot and units call them).
     environment.systemPackages = [ pkgs.bun pkgs.git ];
