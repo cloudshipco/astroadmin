@@ -1,12 +1,30 @@
 /**
  * Array Item Editor Component
  * Modal for editing complex arrays with drag-to-reorder
+ *
+ * The fields inside an item are rendered, wired, and read back by form-generator
+ * — the same code the main editor form uses. This modal owns the list (add,
+ * remove, reorder) and nothing about how an individual field looks or behaves.
  */
+
+import { escapeHtml } from './escape-html.js';
+
+import {
+  generateFields,
+  setupFieldHandlers,
+  extractFields,
+  getItemPreview,
+  createEmptyArrayItem,
+} from './form-generator.js';
+
+// Fields inside the modal get their ids prefixed so they can't collide with the
+// same-named fields on the form behind it — two elements sharing an id would send
+// a <label for> to whichever came first, which is never the one you clicked.
+const ITEM_ID_PREFIX = 'item_';
 
 let currentCallback = null;
 let currentItems = [];
 let currentSchema = null;
-let currentFieldName = '';
 let draggedItem = null;
 let draggedIndex = null;
 let dropPosition = null;
@@ -22,7 +40,6 @@ export function openArrayEditor(fieldName, items, schema, onSave) {
   currentCallback = onSave;
   currentItems = JSON.parse(JSON.stringify(items || []));
   currentSchema = schema;
-  currentFieldName = fieldName;
 
   let modal = document.getElementById('arrayEditorModal');
   if (!modal) {
@@ -98,16 +115,15 @@ function setupModalEvents(modal) {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
-      // Don't close if item editor is open
-      if (!document.getElementById('arrayItemEditModal')) {
+      // Don't close the list out from under an item editor stacked on top of it
+      if (!document.querySelector('.array-item-edit-overlay')) {
         closeArrayEditor();
       }
     }
   });
 
   modal.querySelector('[data-add]').addEventListener('click', () => {
-    const newItem = createEmptyItem(currentSchema);
-    currentItems.push(newItem);
+    currentItems.push(createEmptyArrayItem(currentSchema));
     renderItems();
     // Open editor for new item
     openItemEditor(currentItems.length - 1);
@@ -125,15 +141,13 @@ function setupModalEvents(modal) {
   list.addEventListener('click', (e) => {
     const editBtn = e.target.closest('[data-edit]');
     if (editBtn) {
-      const index = parseInt(editBtn.dataset.edit, 10);
-      openItemEditor(index);
+      openItemEditor(parseInt(editBtn.dataset.edit, 10));
       return;
     }
 
     const removeBtn = e.target.closest('[data-remove]');
     if (removeBtn) {
-      const index = parseInt(removeBtn.dataset.remove, 10);
-      currentItems.splice(index, 1);
+      currentItems.splice(parseInt(removeBtn.dataset.remove, 10), 1);
       renderItems();
     }
   });
@@ -162,7 +176,7 @@ function renderItems() {
   empty.classList.add('hidden');
 
   list.innerHTML = currentItems.map((item, index) => {
-    const preview = getItemPreview(item);
+    const preview = getItemPreview(item, currentSchema, 80);
 
     return `
       <div class="array-editor-item" draggable="true" data-index="${index}">
@@ -195,114 +209,46 @@ function renderItems() {
 }
 
 /**
- * Parse labelField hint from schema description
- * Format: "labelField:fieldName" anywhere in the description
- */
-function parseLabelFieldHint(schema) {
-  if (!schema?.description) return null;
-  const match = schema.description.match(/labelField:(\w+)/);
-  return match ? match[1] : null;
-}
-
-/**
- * Get preview text for an item
- * Uses currentSchema module variable for intelligent field detection
- */
-function getItemPreview(item) {
-  const titleFields = ['title', 'name', 'heading', 'label', 'quote', 'author', 'summary', 'message', 'caption'];
-  const subtitleFields = ['description', 'content', 'subtitle', 'text', 'author', 'source', 'quote'];
-
-  let title = '';
-  let subtitle = '';
-  let titleField = '';
-
-  // Check for explicit labelField hint in schema description
-  const labelFieldHint = parseLabelFieldHint(currentSchema);
-  if (labelFieldHint && item[labelFieldHint]) {
-    title = String(item[labelFieldHint]);
-    titleField = labelFieldHint;
-  }
-
-  // Try standard title fields if no hint or hint field was empty
-  if (!title) {
-    for (const field of titleFields) {
-      if (item[field]) {
-        title = String(item[field]);
-        titleField = field;
-        break;
-      }
-    }
-  }
-
-  // Fallback: use first string value from the item data
-  if (!title) {
-    for (const [field, value] of Object.entries(item)) {
-      if (typeof value === 'string' && value.trim()) {
-        title = value;
-        titleField = field;
-        break;
-      }
-    }
-  }
-
-  for (const field of subtitleFields) {
-    // Don't use the same field for both title and subtitle
-    if (field === titleField) continue;
-    if (item[field]) {
-      const text = String(item[field]);
-      subtitle = text.length > 80 ? text.substring(0, 80) + '...' : text;
-      break;
-    }
-  }
-
-  return { title, subtitle };
-}
-
-/**
- * Create an empty item based on schema
- */
-function createEmptyItem(schema) {
-  if (!schema || schema.type !== 'object') return {};
-
-  const item = {};
-  const props = schema.properties || {};
-
-  for (const [key, propSchema] of Object.entries(props)) {
-    if (propSchema.default !== undefined) {
-      item[key] = propSchema.default;
-    } else if (propSchema.type === 'string') {
-      item[key] = '';
-    } else if (propSchema.type === 'number') {
-      item[key] = 0;
-    } else if (propSchema.type === 'boolean') {
-      item[key] = false;
-    } else if (propSchema.type === 'array') {
-      item[key] = [];
-    } else if (propSchema.type === 'object') {
-      item[key] = {};
-    }
-  }
-
-  return item;
-}
-
-/**
- * Open the item editor modal
+ * Open the editor for one item of the array currently being edited
  */
 function openItemEditor(index) {
   const item = currentItems[index];
   if (!item) return;
 
-  let editModal = document.getElementById('arrayItemEditModal');
-  if (!editModal) {
-    editModal = document.createElement('div');
-    editModal.id = 'arrayItemEditModal';
-    document.body.appendChild(editModal);
-  }
+  openSingleItemEditor(item, currentSchema, (updatedItem) => {
+    currentItems[index] = updatedItem;
+    renderItems();
+  });
+}
 
-  const fields = generateItemFields(item, currentSchema);
+/**
+ * Open an editor for a single item, with or without the array list behind it.
+ * @param {Object} item - The item to edit
+ * @param {Object} schema - Schema for the item
+ * @param {Function} onSave - Called with the updated item
+ */
+export function openSingleItemEditor(item, schema, onSave) {
+  // A fresh overlay per call, never a shared one. An item can itself contain an
+  // array of objects, and editing one of those opens a second item editor on top of
+  // this one — reusing a single element would overwrite the parent mid-edit and
+  // throw its unsaved changes away.
+  const depth = document.querySelectorAll('.array-item-edit-overlay').length;
+  const editModal = document.createElement('div');
+  document.body.appendChild(editModal);
+
+  const fields = generateFields(schema?.properties, item, {
+    // Each nesting level needs its own id namespace, or the inner modal's labels
+    // point at the outer modal's inputs.
+    idPrefix: `${ITEM_ID_PREFIX}${depth}_`,
+    // The modal is narrow and its body scrolls, so a full-height image preview would
+    // push the picker's own buttons — and every field under it — below the fold.
+    pickerVariant: 'compact',
+  });
 
   editModal.className = 'array-item-edit-overlay';
+  // The CSS turns this into z-index 60 + depth, keeping every item editor above the
+  // array list (50) and below the gallery/textarea (70) and image library (80).
+  editModal.style.setProperty('--stack-depth', String(depth));
   editModal.innerHTML = `
     <div class="array-item-edit-modal">
       <div class="array-item-edit-header">
@@ -310,7 +256,7 @@ function openItemEditor(index) {
         <button type="button" class="array-item-edit-close" data-close>&times;</button>
       </div>
       <div class="array-item-edit-body">
-        <form id="arrayItemEditForm">
+        <form class="array-item-edit-form">
           ${fields}
         </form>
       </div>
@@ -321,26 +267,19 @@ function openItemEditor(index) {
     </div>
   `;
 
-  const closeEditModal = () => {
-    editModal.remove();
-  };
+  // A class, not an id: item editors stack, and duplicate ids in one document would
+  // make every id-based lookup ambiguous.
+  const form = editModal.querySelector('.array-item-edit-form');
+
+  // An item's fields get exactly what the main form's fields get: image pickers,
+  // galleries, colour pickers, expanding textareas, nested arrays.
+  setupFieldHandlers(form);
+
+  const closeEditModal = () => editModal.remove();
 
   const saveAndClose = () => {
-    const form = editModal.querySelector('#arrayItemEditForm');
-    const formData = new FormData(form);
-    const updatedItem = { ...item };
-
-    for (const [key, value] of formData.entries()) {
-      updatedItem[key] = value;
-    }
-
-    // Handle checkboxes (unchecked ones don't appear in FormData)
-    form.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-      updatedItem[cb.name] = cb.checked;
-    });
-
-    currentItems[index] = updatedItem;
-    renderItems();
+    // Spread over the original so a property the schema doesn't render survives
+    if (onSave) onSave({ ...item, ...extractFields(form) });
     closeEditModal();
   };
 
@@ -363,77 +302,9 @@ function openItemEditor(index) {
 
   // Focus first input
   setTimeout(() => {
-    const firstInput = editModal.querySelector('input, textarea, select');
+    const firstInput = editModal.querySelector('input:not([type="hidden"]), textarea, select');
     if (firstInput) firstInput.focus();
   }, 100);
-}
-
-/**
- * Generate form fields for item editing
- */
-function generateItemFields(item, schema) {
-  if (!schema || schema.type !== 'object') return '';
-
-  const props = schema.properties || {};
-
-  return Object.entries(props).map(([key, propSchema]) => {
-    const value = item[key] ?? '';
-    const label = formatLabel(key);
-    const id = `edit_${key}`;
-
-    if (propSchema.type === 'boolean') {
-      return `
-        <div class="form-group">
-          <label class="checkbox-label">
-            <input type="checkbox" name="${key}" id="${id}" ${value ? 'checked' : ''}>
-            <span>${label}</span>
-          </label>
-        </div>
-      `;
-    }
-
-    if (propSchema.enum) {
-      return `
-        <div class="form-group">
-          <label for="${id}" class="form-label">${label}</label>
-          <select name="${key}" id="${id}" class="form-input">
-            ${propSchema.enum.map(opt => `<option value="${opt}" ${value === opt ? 'selected' : ''}>${opt}</option>`).join('')}
-          </select>
-        </div>
-      `;
-    }
-
-    // Check if it's a long text field
-    const isLongText = key.includes('description') || key.includes('content') ||
-                       (typeof value === 'string' && value.length > 100);
-
-    if (isLongText) {
-      return `
-        <div class="form-group">
-          <label for="${id}" class="form-label">${label}</label>
-          <textarea name="${key}" id="${id}" class="form-input" rows="4">${escapeHtml(value)}</textarea>
-        </div>
-      `;
-    }
-
-    return `
-      <div class="form-group">
-        <label for="${id}" class="form-label">${label}</label>
-        <input type="text" name="${key}" id="${id}" class="form-input" value="${escapeHtml(value)}">
-      </div>
-    `;
-  }).join('');
-}
-
-/**
- * Format field name as label
- */
-function formatLabel(name) {
-  return name
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/[_-]/g, ' ')
-    .replace(/^\w/, c => c.toUpperCase())
-    .trim();
 }
 
 /**
@@ -505,93 +376,3 @@ function handleDrop(e) {
   dropPosition = null;
 }
 
-/**
- * Escape HTML
- */
-function escapeHtml(text) {
-  if (text === null || text === undefined) return '';
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-/**
- * Open a single item editor directly (without the array list modal)
- * @param {Object} item - The item to edit
- * @param {Object} schema - Schema for the item
- * @param {Function} onSave - Callback when saved with updated item
- */
-export function openSingleItemEditor(item, schema, onSave) {
-  let editModal = document.getElementById('arrayItemEditModal');
-  if (!editModal) {
-    editModal = document.createElement('div');
-    editModal.id = 'arrayItemEditModal';
-    document.body.appendChild(editModal);
-  }
-
-  const fields = generateItemFields(item, schema);
-
-  editModal.className = 'array-item-edit-overlay';
-  editModal.innerHTML = `
-    <div class="array-item-edit-modal">
-      <div class="array-item-edit-header">
-        <h3>Edit Item</h3>
-        <button type="button" class="array-item-edit-close" data-close>&times;</button>
-      </div>
-      <div class="array-item-edit-body">
-        <form id="arrayItemEditForm">
-          ${fields}
-        </form>
-      </div>
-      <div class="array-item-edit-footer">
-        <button type="button" class="btn btn-secondary" data-cancel>Cancel</button>
-        <button type="button" class="btn btn-primary" data-save>Done</button>
-      </div>
-    </div>
-  `;
-
-  const closeEditModal = () => {
-    editModal.remove();
-  };
-
-  const saveAndClose = () => {
-    const form = editModal.querySelector('#arrayItemEditForm');
-    const formData = new FormData(form);
-    const updatedItem = { ...item };
-
-    for (const [key, value] of formData.entries()) {
-      updatedItem[key] = value;
-    }
-
-    // Handle checkboxes (unchecked ones don't appear in FormData)
-    form.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-      updatedItem[cb.name] = cb.checked;
-    });
-
-    if (onSave) onSave(updatedItem);
-    closeEditModal();
-  };
-
-  editModal.querySelectorAll('[data-close], [data-cancel]').forEach(btn => {
-    btn.addEventListener('click', closeEditModal);
-  });
-  editModal.querySelector('[data-save]').addEventListener('click', saveAndClose);
-  editModal.addEventListener('click', (e) => {
-    if (e.target === editModal) closeEditModal();
-  });
-
-  // Handle keyboard
-  editModal.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeEditModal();
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      saveAndClose();
-    }
-  });
-
-  // Focus first input
-  setTimeout(() => {
-    const firstInput = editModal.querySelector('input, textarea, select');
-    if (firstInput) firstInput.focus();
-  }, 100);
-}

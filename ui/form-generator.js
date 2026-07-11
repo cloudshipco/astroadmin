@@ -2,7 +2,15 @@
  * Form Generator
  * Auto-generates forms from schema definitions
  * Supports blocks (discriminated unions) with type-based fields
+ *
+ * generateField is the single renderer for every field, everywhere: the main
+ * editor form, block bodies, and the array item modal all go through it, so a
+ * widget added here shows up on all three.
  */
+
+import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl } from './field-widgets.js';
+
+import { escapeHtml } from './escape-html.js';
 
 /**
  * Generate a form from schema
@@ -21,27 +29,57 @@ export function generateForm(schema, data = {}) {
   for (const [fieldName, fieldSchema] of Object.entries(schema.properties || {})) {
     const value = data[fieldName];
 
-    // Hidden fields are rendered as hidden inputs to preserve data
+    // Hidden fields are rendered as hidden inputs to preserve data. JSON-encode
+    // every value, not just objects: a hidden input has no type to read back, so a
+    // plain-string encoding would return a number or boolean as "4" / "true".
     if (fieldSchema.hidden) {
       if (value !== undefined && value !== null) {
-        // For objects, serialize as JSON with special data attribute
-        if (typeof value === 'object') {
-          const escapedValue = JSON.stringify(value).replace(/"/g, '&quot;');
-          hiddenHtml.push(`<input type="hidden" name="${fieldName}" value="${escapedValue}" data-json="true">`);
-        } else {
-          const escapedValue = String(value).replace(/"/g, '&quot;');
-          hiddenHtml.push(`<input type="hidden" name="${fieldName}" value="${escapedValue}">`);
-        }
+        const escapedValue = JSON.stringify(value).replace(/"/g, '&quot;');
+        hiddenHtml.push(`<input type="hidden" name="${fieldName}" value="${escapedValue}" data-json="true">`);
       }
       continue;
     }
 
-    const fieldHtml = generateField(fieldName, fieldSchema, value, '', data);
+    const fieldHtml = generateField(fieldName, fieldSchema, value, '', {
+      siblingData: data,
+      siblingProps: schema.properties,
+    });
     formHtml.push(fieldHtml);
   }
 
   // Add hidden fields at the start
   return hiddenHtml.join('\n') + '\n' + formHtml.join('\n');
+}
+
+/**
+ * Render every property of an object schema.
+ * The shared entry point for anything that renders a set of fields — used by the
+ * main form, nested objects, block bodies, and the array item modal.
+ *
+ * @param {object} properties - Schema properties map
+ * @param {object} data - Values for those properties
+ * @param {object} [options]
+ * @param {string} [options.path] - Path prefix for input names ('' = top level)
+ * @param {string} [options.idPrefix] - Prefix for element ids, so fields rendered
+ *   into a modal don't collide with same-named fields on the form behind it
+ * @param {string[]} [options.skip] - Property names to leave out
+ * @param {string} [options.pickerVariant] - Size variant for any image picker in these
+ *   fields: 'thumb' (a 70px square in a tight inline row) or 'compact' (a shorter
+ *   preview for the item modal, whose body scrolls). Empty for the full-size default.
+ */
+export function generateFields(properties, data = {}, options = {}) {
+  const { path = '', idPrefix = '', skip = [], pickerVariant = '' } = options;
+  if (!properties) return '';
+
+  return Object.entries(properties)
+    .filter(([key]) => !skip.includes(key))
+    .map(([key, schema]) => generateField(key, schema, data?.[key], path, {
+      siblingData: data || {},
+      siblingProps: properties,
+      idPrefix,
+      pickerVariant,
+    }))
+    .join('\n');
 }
 
 /**
@@ -77,11 +115,15 @@ function generateTopLevelArrayForm(schema, data) {
  * @param {object} schema - Field schema
  * @param {any} value - Field value
  * @param {string} path - Parent path prefix
- * @param {object} siblingData - Data object containing sibling fields (for related field lookups like imageAlt)
+ * @param {object} [ctx] - Render context
+ * @param {object} [ctx.siblingData] - Values of the sibling fields (e.g. to find existing alt text)
+ * @param {object} [ctx.siblingProps] - Schema of the sibling fields (e.g. to detect an explicit alt field)
+ * @param {string} [ctx.idPrefix] - Prefix for the element id
  */
-function generateField(name, schema, value, path = '', siblingData = {}) {
+function generateField(name, schema, value, path = '', ctx = {}) {
+  const { siblingData = {}, siblingProps = null, idPrefix = '', pickerVariant = '' } = ctx;
   const fullPath = path ? `${path}.${name}` : name;
-  const id = fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
+  const id = idPrefix + fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
 
   // Handle blocks array (discriminated union)
   if (schema.type === 'array' && schema.blockTypes) {
@@ -89,16 +131,13 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
   }
 
   if (schema.type === 'object') {
-    // Nested object - pass the nested object's data as siblingData for nested fields
     const nestedData = value || {};
     return `
       <div class="mb-6">
         <fieldset class="nested-fieldset">
           <legend class="text-sm font-semibold text-gray-700 mb-3">${formatLabel(name)}</legend>
           <div class="space-y-4">
-            ${Object.entries(schema.properties || {}).map(([key, subSchema]) =>
-              generateField(key, subSchema, nestedData[key], fullPath, nestedData)
-            ).join('\n')}
+            ${generateFields(schema.properties, nestedData, { path: fullPath, idPrefix, pickerVariant })}
           </div>
         </fieldset>
       </div>
@@ -230,11 +269,13 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
 
   // Check if this is an image field
   if (isImageField(name, schema)) {
-    // Look for corresponding alt text in sibling data (e.g., imageAlt for image)
+    // The picker offers its own alt input named `<field>Alt`. If the schema already
+    // declares that property it gets rendered as a field in its own right, so the
+    // built-in one has to stand down — two inputs sharing a name means whichever
+    // renders last silently wins.
+    const explicitAlt = findAltProperty(name, siblingProps);
     const altValue = siblingData[`${name}Alt`] || siblingData[`${name}_alt`] || '';
-    // Hide built-in alt if parent object has its own 'alt' field (e.g., gallery images with {src, alt})
-    const hideBuiltinAlt = name.toLowerCase() === 'src' && 'alt' in siblingData;
-    return generateImageField(name, schema, value, fullPath, id, altValue, hideBuiltinAlt);
+    return generateImageField(name, schema, value, fullPath, id, altValue, Boolean(explicitAlt), pickerVariant);
   }
 
   // Check if this is a color field
@@ -286,7 +327,7 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
   // Default to textarea unless:
   // - maxLength is short (under 100 chars), OR
   // - field name suggests it's a short field (title, link, etc.)
-  const shortFieldNames = ['text', 'link', 'href', 'url', 'title', 'heading', 'name', 'label', 'icon', 'value', 'number'];
+  const shortFieldNames = ['text', 'link', 'href', 'url', 'title', 'heading', 'name', 'label', 'icon', 'value', 'number', 'alt'];
   const isShortByName = shortFieldNames.some(short => lowerName === short || lowerName.endsWith(short));
   const isShortByLength = schema.maxLength && schema.maxLength < 100;
   const isLongByName = lowerName.includes('description') || lowerName.includes('content') || lowerName.includes('subheading');
@@ -310,7 +351,7 @@ function generateField(name, schema, value, path = '', siblingData = {}) {
             ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
             ${schema.required ? 'required' : ''}
           >${escapeHtml(content)}</textarea>
-          <button type="button" class="textarea-expand-btn" data-expand-textarea="${id}" title="Expand editor">
+          <button type="button" class="textarea-expand-btn" data-expand-textarea title="Expand editor">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="15 3 21 3 21 9"></polyline>
               <polyline points="9 21 3 21 3 15"></polyline>
@@ -416,13 +457,8 @@ function generateBlockItem(arrayPath, blockTypes, block, index) {
  * Generate fields for a block based on its schema
  */
 function generateBlockFields(path, properties, data) {
-  if (!properties) return '';
-  const blockData = data || {};
-
-  return Object.entries(properties)
-    .filter(([key]) => key !== 'type') // Skip the type field (it's hidden)
-    .map(([key, schema]) => generateField(key, schema, blockData[key], path, blockData))
-    .join('\n');
+  // 'type' is the discriminator, carried in a hidden input by generateBlockItem
+  return generateFields(properties, data || {}, { path, skip: ['type'] });
 }
 
 /**
@@ -472,24 +508,26 @@ function generateArrayItem(arrayPath, itemSchema, value, index) {
   const itemData = value || {};
 
   if (itemSchema?.type === 'object') {
-    const properties = Object.entries(itemSchema.properties || {});
+    const properties = itemSchema.properties || {};
     // Use stacked layout for complex items (more than 2 fields)
-    const isComplex = properties.length > 2;
+    const isComplex = Object.keys(properties).length > 2;
     const layoutClass = isComplex ? 'array-item-fields array-item-stacked' : 'array-item-fields';
 
+    // An inline array row is a tight horizontal strip, so any picker in it renders
+    // as a 70px thumbnail rather than a full-width preview.
     return `
       <div class="${layoutClass}">
-        ${properties.map(([key, schema]) =>
-          generateField(key, schema, itemData[key], path, itemData)
-        ).join('\n')}
+        ${generateFields(properties, itemData, { path, pickerVariant: 'thumb' })}
       </div>
     `;
   }
 
-  // Simple array (strings, numbers, etc.)
+  // Simple array (strings, numbers, etc.). The input type has to carry the item's
+  // schema type: extractFields reads the element to decide whether a value parses
+  // as a number, so a number rendered into a text box would save as a string.
   return `
     <input
-      type="text"
+      type="${itemSchema?.type === 'number' ? 'number' : 'text'}"
       name="${path}"
       value="${escapeHtml(value ?? '')}"
       class="array-item-input form-input"
@@ -509,12 +547,12 @@ function parseLabelFieldHint(schema) {
 }
 
 /**
- * Generate an inline card for array items
+ * Work out the title and subtitle to show for an array item, in a card or a list row.
  * @param {object} item - The array item data
- * @param {number} index - The item index
- * @param {object} [itemSchema] - Optional schema for the array items
+ * @param {object} [itemSchema] - Schema for the array items (for the labelField hint)
+ * @param {number} [maxSubtitle] - Truncate the subtitle beyond this many characters
  */
-function generateArrayCard(item, index, itemSchema = null) {
+export function getItemPreview(item, itemSchema = null, maxSubtitle = 60) {
   const titleFields = ['title', 'name', 'heading', 'value', 'label', 'quote', 'author', 'summary', 'message', 'caption'];
   const subtitleFields = ['description', 'content', 'subtitle', 'text', 'label', 'author', 'source', 'quote'];
 
@@ -522,14 +560,14 @@ function generateArrayCard(item, index, itemSchema = null) {
   let subtitle = '';
   let titleField = '';
 
-  // Check for explicit labelField hint in schema description
+  // An explicit labelField hint in the schema description wins
   const labelFieldHint = parseLabelFieldHint(itemSchema);
   if (labelFieldHint && item[labelFieldHint]) {
     title = String(item[labelFieldHint]);
     titleField = labelFieldHint;
   }
 
-  // Try standard title fields if no hint or hint field was empty
+  // Then the standard title fields
   if (!title) {
     for (const field of titleFields) {
       if (item[field]) {
@@ -540,7 +578,7 @@ function generateArrayCard(item, index, itemSchema = null) {
     }
   }
 
-  // Fallback: use first string value from the item data
+  // Failing that, the first non-empty string on the item
   if (!title) {
     for (const [field, value] of Object.entries(item)) {
       if (typeof value === 'string' && value.trim()) {
@@ -556,10 +594,22 @@ function generateArrayCard(item, index, itemSchema = null) {
     if (field === titleField) continue;
     if (item[field]) {
       const text = String(item[field]);
-      subtitle = text.length > 60 ? text.substring(0, 60) + '...' : text;
+      subtitle = text.length > maxSubtitle ? text.substring(0, maxSubtitle) + '...' : text;
       break;
     }
   }
+
+  return { title, subtitle };
+}
+
+/**
+ * Generate an inline card for array items
+ * @param {object} item - The array item data
+ * @param {number} index - The item index
+ * @param {object} [itemSchema] - Optional schema for the array items
+ */
+function generateArrayCard(item, index, itemSchema = null) {
+  const { title, subtitle } = getItemPreview(item, itemSchema);
 
   return `
     <div class="array-card" data-index="${index}" draggable="true">
@@ -593,6 +643,22 @@ function generateArrayCard(item, index, itemSchema = null) {
 }
 
 /**
+ * Find the sibling property that holds this image field's alt text, if the schema
+ * declares one (e.g. `imageAlt` next to `image`, or `alt` next to `src`).
+ * Returns the property name, or null if the schema has no alt field of its own.
+ */
+function findAltProperty(name, siblingProps) {
+  if (!siblingProps) return null;
+
+  // Plain `alt` counts for any image field, not just `src`. An { image, alt } schema
+  // would otherwise render the declared alt field AND a built-in one named imageAlt —
+  // a property the schema never declared, which the content layer then strips.
+  const candidates = [`${name}Alt`, `${name}_alt`, 'alt'];
+
+  return candidates.find(candidate => candidate in siblingProps) || null;
+}
+
+/**
  * Check if a field is an image field based on name and schema
  */
 function isImageField(name, schema) {
@@ -614,39 +680,6 @@ function isImageField(name, schema) {
 }
 
 /**
- * Resolve an image path to a URL that can be displayed in the admin
- * Handles relative paths like ../assets/posts/... by converting to /assets/posts/...
- * @param {string} imagePath - The image path from content
- * @returns {string} - Resolved URL for display
- */
-function resolveImageUrl(imagePath) {
-  if (!imagePath || typeof imagePath !== 'string') return '';
-
-  // Already an absolute URL or root-relative path
-  if (imagePath.startsWith('http://') || imagePath.startsWith('https://') || imagePath.startsWith('/')) {
-    return imagePath;
-  }
-
-  // Handle relative paths like ../assets/posts/... or ./assets/...
-  // Convert to /assets/... for serving by AstroAdmin
-  if (imagePath.startsWith('../assets/') || imagePath.startsWith('./assets/')) {
-    // Remove leading ../ or ./ and keep from 'assets/' onwards
-    const assetsIndex = imagePath.indexOf('assets/');
-    if (assetsIndex !== -1) {
-      return '/' + imagePath.slice(assetsIndex);
-    }
-  }
-
-  // For other relative paths, try prepending /images/ (library images)
-  if (!imagePath.includes('/')) {
-    return `/images/${imagePath}`;
-  }
-
-  // Return as-is for unrecognized patterns
-  return imagePath;
-}
-
-/**
  * Get friendly label and help text for known image fields
  */
 function getImageFieldInfo(name) {
@@ -664,8 +697,10 @@ function getImageFieldInfo(name) {
 
 /**
  * Generate an image picker field
+ * @param {string} [variant] - Size variant: 'thumb', 'compact', or '' for full size.
+ *   The picker owns its own sizes; a container never reaches in to override them.
  */
-function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false) {
+function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false, variant = '') {
   const hasValue = value && value.trim();
   const previewClass = hasValue ? '' : 'hidden';
   const placeholderClass = hasValue ? 'hidden' : '';
@@ -694,7 +729,7 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
     <div class="form-group">
       <label for="${id}" class="form-label">${label} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
       ${helpHtml}
-      <div class="image-picker" data-field="${fullPath}">
+      <div class="image-picker${variant ? ` image-picker--${variant}` : ''}" data-field="${fullPath}">
         <div class="image-picker-preview ${previewClass}" data-preview>
           <img src="${escapeHtml(previewSrc)}" alt="Preview" class="image-picker-img" data-preview-img>
           <button type="button" class="image-picker-clear" data-clear title="Clear image">&times;</button>
@@ -759,7 +794,6 @@ function generateColorField(name, schema, value, fullPath, id) {
           id="${id}_picker"
           value="${colorToHex(colorValue) || '#ffffff'}"
           class="color-picker-input"
-          data-target="${id}"
         >
         <input
           type="text"
@@ -770,7 +804,7 @@ function generateColorField(name, schema, value, fullPath, id) {
           placeholder="#ffffff or color name"
           ${schema.required ? 'required' : ''}
         >
-        ${colorValue ? `<button type="button" class="color-picker-clear" data-clear-color="${id}" title="Clear color">&times;</button>` : ''}
+        ${colorValue ? `<button type="button" class="color-picker-clear" data-clear-color title="Clear color">&times;</button>` : ''}
       </div>
     </div>
   `;
@@ -965,6 +999,7 @@ function generateReferenceCard(itemId, index, fullPath) {
 function formatLabel(name) {
   return name
     .replace(/([A-Z])/g, ' $1')
+    .replace(/[_-]/g, ' ')
     .replace(/^./, str => str.toUpperCase())
     .trim();
 }
@@ -997,26 +1032,10 @@ function formatBlockType(type) {
 }
 
 /**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(str) {
-  if (typeof str !== 'string') return str;
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-/**
  * Extract form data into object matching schema structure
  * Returns an array directly for top-level array schemas
  */
 export function extractFormData(formElement) {
-  const formData = new FormData(formElement);
-  const data = {};
-
   // Check for top-level array schema
   const topLevelArrayInput = formElement.querySelector('input[data-top-level-array="true"]');
   if (topLevelArrayInput) {
@@ -1028,8 +1047,32 @@ export function extractFormData(formElement) {
     }
   }
 
-  // First, handle JSON hidden fields separately
-  formElement.querySelectorAll('input[type="hidden"][data-json="true"]').forEach(input => {
+  const data = extractFields(formElement);
+
+  // Clean up empty optional string values in blocks
+  cleanEmptyValues(data);
+
+  return data;
+}
+
+/**
+ * Read every field inside a container back into an object.
+ *
+ * The counterpart to generateFields: whatever that renders, this can read. Used
+ * by the main form and by the array item modal, so an item picks up the same
+ * gallery/array/checkbox/number handling the form has always had.
+ *
+ * Empty strings are preserved — the caller decides whether to strip them, since
+ * dropping the key entirely can fail a schema that requires the field.
+ *
+ * @param {HTMLFormElement} form - Must be a <form>; FormData throws on anything else
+ * @returns {object}
+ */
+export function extractFields(container) {
+  const data = {};
+
+  // Hidden fields carrying JSON
+  container.querySelectorAll('input[type="hidden"][data-json="true"]').forEach(input => {
     try {
       data[input.name] = JSON.parse(input.value);
     } catch (e) {
@@ -1038,51 +1081,49 @@ export function extractFormData(formElement) {
     }
   });
 
-  // Handle gallery fields (store images in base64-encoded data-gallery-value attribute)
-  formElement.querySelectorAll('.gallery-field[data-field]').forEach(field => {
-    const fieldPath = field.dataset.field;
-    const galleryValue = field.dataset.galleryValue;
+  // Gallery fields keep their images in a base64 data attribute
+  container.querySelectorAll('.gallery-field[data-field]').forEach(field => {
+    setNestedValue(data, field.dataset.field, decodeGalleryValue(field.dataset.galleryValue));
+  });
+
+  // Inline array cards keep their items as JSON in a hidden input
+  container.querySelectorAll('input[data-array-data]').forEach(input => {
     try {
-      // Decode from base64 + URI encoding
-      const decoded = JSON.parse(decodeURIComponent(atob(galleryValue || '')));
-      setNestedValue(data, fieldPath, decoded);
+      setNestedValue(data, input.name, JSON.parse(input.value || '[]'));
     } catch (e) {
-      console.error('Failed to parse gallery field:', fieldPath, e);
-      setNestedValue(data, fieldPath, []);
+      console.error('Failed to parse array field:', input.name, e);
+      setNestedValue(data, input.name, []);
     }
   });
 
-  // Handle inline array card fields (store as JSON in hidden input)
-  formElement.querySelectorAll('input[data-array-data]').forEach(input => {
-    const fieldPath = input.name;
-    try {
-      const arrayValue = JSON.parse(input.value || '[]');
-      setNestedValue(data, fieldPath, arrayValue);
-    } catch (e) {
-      console.error('Failed to parse array field:', fieldPath, e);
-      setNestedValue(data, fieldPath, []);
-    }
-  });
+  for (const [key, value] of new FormData(container).entries()) {
+    const input = container.querySelector(`[name="${CSS.escape(key)}"]`);
 
-  for (const [key, value] of formData.entries()) {
-    // Skip JSON fields already processed
-    const input = formElement.querySelector(`[name="${key}"]`);
+    // Both were handled above
     if (input?.dataset?.json === 'true') continue;
-    // Skip array data fields (already processed above)
     if (input?.dataset?.arrayData !== undefined) continue;
 
-    setNestedValue(data, key, value);
+    // Only coerce fields the schema actually declared as numbers. Sniffing the
+    // string instead would turn a title of "2024" into the number 2024, and a
+    // reference id of "123" into an integer.
+    setNestedValue(data, key, input?.type === 'number' ? toNumber(value) : value);
   }
 
-  // Convert checkbox values
-  formElement.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+  // FormData omits unchecked boxes entirely
+  container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
     setNestedValue(data, checkbox.name, checkbox.checked);
   });
 
-  // Clean up empty optional string values in blocks
-  cleanEmptyValues(data);
-
   return data;
+}
+
+/**
+ * Parse a number input's value, leaving it alone if it isn't a number
+ */
+function toNumber(value) {
+  if (value === '') return value;
+  const num = Number(value);
+  return Number.isNaN(num) ? value : num;
 }
 
 /**
@@ -1141,29 +1182,42 @@ function setNestedValue(obj, path, value) {
     }
   }
 
-  const lastKey = keys[keys.length - 1];
-
-  // Convert numeric strings to numbers for number fields
-  if (value !== '' && !isNaN(value) && !isNaN(parseFloat(value))) {
-    // Keep as string if it looks like a string (has leading zeros, etc.)
-    if (!/^0\d/.test(value)) {
-      const num = parseFloat(value);
-      if (Number.isInteger(num)) {
-        current[lastKey] = parseInt(value, 10);
-      } else {
-        current[lastKey] = num;
-      }
-      return;
-    }
-  }
-
-  current[lastKey] = value;
+  current[keys[keys.length - 1]] = value;
 }
 
 /**
- * Setup event listeners for dynamic form elements
+ * Wire up a container of generated fields.
+ *
+ * Everything here works wherever fields are rendered — the main editor form or
+ * the array item modal — so the two can't drift apart. Anything that only makes
+ * sense on the main form (blocks, references) lives outside this.
+ *
+ * @param {HTMLElement} container - Form or modal root
+ * @param {Function} [onChange] - Called after any field changes
+ */
+export function setupFieldHandlers(container, onChange) {
+  // Every listener below is delegated, so binding twice would double every action
+  // (one click on '+ Add' appending two items). Guard the whole set, not just part.
+  if (container.dataset.fieldHandlersBound === 'true') return;
+  container.dataset.fieldHandlersBound = 'true';
+
+  setupFieldWidgets(container, onChange);
+  setupArrayHandlers(container, onChange);
+}
+
+/**
+ * Setup event listeners for the main editor form: the shared field handlers,
+ * plus the block behaviour that only the form has.
  */
 export function setupFormHandlers(formElement, onBlockChange) {
+  setupFieldHandlers(formElement, onBlockChange);
+  setupBlockHandlers(formElement, onBlockChange);
+}
+
+/**
+ * Blocks: add, remove, collapse, reorder, and keep the preview text in sync
+ */
+function setupBlockHandlers(formElement, onBlockChange) {
   // Add block
   formElement.addEventListener('click', (e) => {
     if (e.target.classList.contains('add-block-btn')) {
@@ -1363,6 +1417,41 @@ export function setupFormHandlers(formElement, onBlockChange) {
     removeDropIndicator();
   });
 
+  // Update block preview text when preview fields change
+  const previewFields = ['heading', 'title', 'content', 'description', 'name'];
+  formElement.addEventListener('input', (e) => {
+    const blockItem = e.target.closest('.block-item');
+    if (!blockItem) return;
+
+    // Check if this input is a preview field
+    const inputName = e.target.name || '';
+    const fieldName = inputName.split('.').pop();
+    if (!previewFields.includes(fieldName)) return;
+
+    // Find the first non-empty preview field (by priority)
+    let previewText = '';
+    for (const field of previewFields) {
+      const input = blockItem.querySelector(`[name$=".${field}"]`);
+      if (input && input.value) {
+        previewText = input.value;
+        break;
+      }
+    }
+
+    // Update the preview text
+    const previewEl = blockItem.querySelector('.block-preview-text');
+    if (previewEl) {
+      previewEl.textContent = previewText.length > 50 ? previewText.substring(0, 50) + '...' : previewText;
+    }
+  });
+}
+
+/**
+ * Arrays: inline items, cards, and the item editor modal.
+ * Attached to any container that can hold an array field, so an array nested
+ * inside an array item works exactly like one on the form.
+ */
+function setupArrayHandlers(formElement, onBlockChange) {
   // Add array item (for non-block arrays) - card-style layout
   formElement.addEventListener('click', (e) => {
     if (e.target.classList.contains('add-array-item')) {
@@ -1409,53 +1498,6 @@ export function setupFormHandlers(formElement, onBlockChange) {
       item.remove();
       reindexArrayItems(e.target.closest('.array-field'));
       if (onBlockChange) onBlockChange();
-    }
-  });
-
-  // Update block preview text when preview fields change
-  const previewFields = ['heading', 'title', 'content', 'description', 'name'];
-  formElement.addEventListener('input', (e) => {
-    const blockItem = e.target.closest('.block-item');
-    if (!blockItem) return;
-
-    // Check if this input is a preview field
-    const inputName = e.target.name || '';
-    const fieldName = inputName.split('.').pop();
-    if (!previewFields.includes(fieldName)) return;
-
-    // Find the first non-empty preview field (by priority)
-    let previewText = '';
-    for (const field of previewFields) {
-      const input = blockItem.querySelector(`[name$=".${field}"]`);
-      if (input && input.value) {
-        previewText = input.value;
-        break;
-      }
-    }
-
-    // Update the preview text
-    const previewEl = blockItem.querySelector('.block-preview-text');
-    if (previewEl) {
-      previewEl.textContent = previewText.length > 50 ? previewText.substring(0, 50) + '...' : previewText;
-    }
-  });
-
-  // Auto-grow textareas as user types
-  formElement.addEventListener('input', (e) => {
-    if (e.target.classList.contains('textarea-autogrow')) {
-      autoGrowTextarea(e.target);
-    }
-  });
-
-  // Expand textarea to fullscreen modal
-  formElement.addEventListener('click', (e) => {
-    const expandBtn = e.target.closest('[data-expand-textarea]');
-    if (expandBtn) {
-      const textareaId = expandBtn.dataset.expandTextarea;
-      const textarea = document.getElementById(textareaId);
-      if (textarea) {
-        openTextareaModal(textarea, onBlockChange);
-      }
     }
   });
 
@@ -1759,7 +1801,7 @@ function initSortableCards(formElement, options) {
 /**
  * Create an empty item based on schema
  */
-function createEmptyArrayItem(schema) {
+export function createEmptyArrayItem(schema) {
   if (!schema || schema.type !== 'object') return {};
 
   const item = {};
@@ -1782,261 +1824,6 @@ function createEmptyArrayItem(schema) {
   }
 
   return item;
-}
-
-/**
- * Auto-grow textarea based on content
- */
-function autoGrowTextarea(textarea) {
-  // Reset height to auto to get the correct scrollHeight
-  textarea.style.height = 'auto';
-  // Set to scrollHeight but with min/max constraints
-  const minHeight = 100; // ~4 rows
-  const maxHeight = 400; // ~16 rows
-  const newHeight = Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight));
-  textarea.style.height = newHeight + 'px';
-}
-
-/**
- * Open fullscreen modal for textarea editing
- */
-function openTextareaModal(textarea, onBlockChange) {
-  // Get the label text
-  const formGroup = textarea.closest('.form-group');
-  const label = formGroup?.querySelector('.form-label')?.textContent?.replace('*', '').trim() || 'Edit Text';
-  const isMarkdown = textarea.dataset.markdown === 'true' || label.toLowerCase().includes('markdown') || label.toLowerCase().includes('content');
-
-  // Markdown toolbar HTML
-  const markdownToolbar = isMarkdown ? `
-    <div class="markdown-toolbar">
-      <button type="button" class="markdown-btn" data-md="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>
-      <button type="button" class="markdown-btn" data-md="italic" title="Italic (Ctrl+I)"><em>I</em></button>
-      <button type="button" class="markdown-btn" data-md="code" title="Inline Code">&lt;/&gt;</button>
-      <span class="markdown-separator"></span>
-      <button type="button" class="markdown-btn" data-md="h2" title="Heading 2">H2</button>
-      <button type="button" class="markdown-btn" data-md="h3" title="Heading 3">H3</button>
-      <span class="markdown-separator"></span>
-      <button type="button" class="markdown-btn" data-md="ul" title="Bullet List">• List</button>
-      <button type="button" class="markdown-btn" data-md="ol" title="Numbered List">1. List</button>
-      <button type="button" class="markdown-btn" data-md="quote" title="Blockquote">" Quote</button>
-      <span class="markdown-separator"></span>
-      <button type="button" class="markdown-btn" data-md="link" title="Link">[Link]</button>
-      <button type="button" class="markdown-btn" data-md="image" title="Image">🖼️</button>
-      <button type="button" class="markdown-btn" data-md="codeblock" title="Code Block">{ }</button>
-    </div>
-  ` : '';
-
-  // Create modal
-  let modal = document.getElementById('textareaModal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'textareaModal';
-    document.body.appendChild(modal);
-  }
-
-  modal.className = 'textarea-modal-overlay';
-  modal.innerHTML = `
-    <div class="textarea-modal ${isMarkdown ? 'textarea-modal-markdown' : ''}">
-      <div class="textarea-modal-header">
-        <h3>${label}</h3>
-        <button type="button" class="textarea-modal-close" data-close-textarea-modal>&times;</button>
-      </div>
-      ${markdownToolbar}
-      <div class="textarea-modal-body">
-        <textarea id="textareaModalInput" class="textarea-modal-input ${isMarkdown ? 'markdown-input' : ''}" placeholder="Enter your text...">${textarea.value}</textarea>
-      </div>
-      <div class="textarea-modal-footer">
-        <span class="textarea-char-count">${textarea.value.length} characters</span>
-        <div class="textarea-modal-actions">
-          <button type="button" class="btn btn-sm btn-secondary" data-close-textarea-modal>Cancel</button>
-          <button type="button" class="btn btn-sm btn-primary" data-save-textarea-modal>Done</button>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const modalInput = modal.querySelector('#textareaModalInput');
-  const charCount = modal.querySelector('.textarea-char-count');
-
-  // Update character count on input
-  modalInput.addEventListener('input', () => {
-    charCount.textContent = `${modalInput.value.length} characters`;
-  });
-
-  // Close modal
-  const closeModal = () => {
-    modal.remove();
-  };
-
-  // Save and close
-  const saveAndClose = () => {
-    textarea.value = modalInput.value;
-    // Trigger input event for auto-save
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    autoGrowTextarea(textarea);
-    closeModal();
-    if (onBlockChange) onBlockChange();
-  };
-
-  // Event listeners
-  modal.querySelectorAll('[data-close-textarea-modal]').forEach(btn => {
-    btn.addEventListener('click', closeModal);
-  });
-  modal.querySelector('[data-save-textarea-modal]').addEventListener('click', saveAndClose);
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) closeModal();
-  });
-
-  // Keyboard shortcuts
-  modalInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      closeModal();
-    }
-    // Cmd/Ctrl + Enter to save
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      saveAndClose();
-    }
-    // Markdown shortcuts
-    if (isMarkdown && (e.metaKey || e.ctrlKey)) {
-      if (e.key === 'b') {
-        e.preventDefault();
-        insertMarkdown(modalInput, 'bold');
-      } else if (e.key === 'i') {
-        e.preventDefault();
-        insertMarkdown(modalInput, 'italic');
-      } else if (e.key === 'k') {
-        e.preventDefault();
-        insertMarkdown(modalInput, 'link');
-      }
-    }
-  });
-
-  // Markdown toolbar button handlers
-  if (isMarkdown) {
-    modal.querySelectorAll('[data-md]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const action = btn.dataset.md;
-        insertMarkdown(modalInput, action);
-        modalInput.focus();
-      });
-    });
-  }
-
-  // Focus the modal input and move cursor to end
-  setTimeout(() => {
-    modalInput.focus();
-    modalInput.setSelectionRange(modalInput.value.length, modalInput.value.length);
-  }, 100);
-}
-
-/**
- * Insert markdown formatting at cursor position
- */
-function insertMarkdown(textarea, action) {
-  const start = textarea.selectionStart;
-  const end = textarea.selectionEnd;
-  const text = textarea.value;
-  const selected = text.substring(start, end);
-
-  let before = '';
-  let after = '';
-  let placeholder = '';
-  let cursorOffset = 0;
-
-  switch (action) {
-    case 'bold':
-      before = '**';
-      after = '**';
-      placeholder = 'bold text';
-      cursorOffset = 2;
-      break;
-    case 'italic':
-      before = '_';
-      after = '_';
-      placeholder = 'italic text';
-      cursorOffset = 1;
-      break;
-    case 'code':
-      before = '`';
-      after = '`';
-      placeholder = 'code';
-      cursorOffset = 1;
-      break;
-    case 'h2':
-      // Insert at beginning of line
-      const lineStart2 = text.lastIndexOf('\n', start - 1) + 1;
-      textarea.setSelectionRange(lineStart2, lineStart2);
-      before = '## ';
-      after = '';
-      placeholder = '';
-      cursorOffset = 3;
-      break;
-    case 'h3':
-      const lineStart3 = text.lastIndexOf('\n', start - 1) + 1;
-      textarea.setSelectionRange(lineStart3, lineStart3);
-      before = '### ';
-      after = '';
-      placeholder = '';
-      cursorOffset = 4;
-      break;
-    case 'ul':
-      before = '- ';
-      after = '';
-      placeholder = 'list item';
-      cursorOffset = 2;
-      break;
-    case 'ol':
-      before = '1. ';
-      after = '';
-      placeholder = 'list item';
-      cursorOffset = 3;
-      break;
-    case 'quote':
-      before = '> ';
-      after = '';
-      placeholder = 'quote';
-      cursorOffset = 2;
-      break;
-    case 'link':
-      before = '[';
-      after = '](url)';
-      placeholder = 'link text';
-      cursorOffset = 1;
-      break;
-    case 'image':
-      before = '![';
-      after = '](image-url)';
-      placeholder = 'alt text';
-      cursorOffset = 2;
-      break;
-    case 'codeblock':
-      before = '\n```\n';
-      after = '\n```\n';
-      placeholder = 'code';
-      cursorOffset = 5;
-      break;
-  }
-
-  const actualStart = textarea.selectionStart;
-  const actualEnd = textarea.selectionEnd;
-  const actualSelected = textarea.value.substring(actualStart, actualEnd);
-  const insert = actualSelected || placeholder;
-  const newText = textarea.value.substring(0, actualStart) + before + insert + after + textarea.value.substring(actualEnd);
-
-  textarea.value = newText;
-
-  // Position cursor appropriately
-  if (actualSelected) {
-    // If text was selected, select it again
-    textarea.setSelectionRange(actualStart + before.length, actualStart + before.length + insert.length);
-  } else {
-    // Position cursor inside the markdown markers
-    textarea.setSelectionRange(actualStart + cursorOffset, actualStart + cursorOffset + placeholder.length);
-  }
-
-  // Trigger input event for character count update
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /**

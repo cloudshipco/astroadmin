@@ -5,6 +5,8 @@
 
 import { openImageLibrary } from './image-library.js';
 
+import { escapeHtml } from './escape-html.js';
+
 let currentCallback = null;
 let currentImages = []; // Array of { src, alt } objects
 let draggedItem = null;
@@ -295,11 +297,3 @@ function handleDrop(e) {
   dropPosition = null;
 }
 
-/**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}

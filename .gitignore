@@ -27,3 +27,8 @@ docker/certs/
 
 # Local Claude Code permissions (machine-specific, may reference private paths)
 .claude/settings.local.json
+.gstack/
+
+# Design source files (Affinity docs + their lock files). This repo is public —
+# brand/design working files stay out of it.
+assets/

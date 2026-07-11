@@ -3,6 +3,8 @@
  * Shows git status, diffs, and allows reverting changes
  */
 
+import { escapeHtml } from './escape-html.js';
+
 let panelOpen = false;
 let currentStatus = null;
 
@@ -517,15 +519,6 @@ function formatRelativeDate(dateStr) {
 function truncate(str, len) {
   if (str.length <= len) return str;
   return str.substring(0, len) + '...';
-}
-
-/**
- * Escape HTML
- */
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
 }
 
 /**

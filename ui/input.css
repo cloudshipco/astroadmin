@@ -608,8 +608,15 @@
     @apply not-sr-only text-xs font-medium text-gray-600 mb-1;
   }
 
-  /* Compact image picker in array items */
-  .array-item .image-picker {
+  /* Compact variant: a shorter preview, so the picker's buttons and the fields under
+     it stay above the fold in a narrow scrolling container (the item modal). */
+  .image-picker--compact .image-picker-img {
+    @apply max-h-32;
+  }
+
+  /* Thumbnail variant: the picker collapses to a 70px square with hover-reveal
+     actions. generateImageField applies this for inline array rows. */
+  .image-picker--thumb {
     position: relative !important;
     padding: 0 !important;
     border: none !important;
@@ -621,7 +628,7 @@
     border-radius: 6px;
   }
 
-  .array-item .image-picker-preview {
+  .image-picker--thumb .image-picker-preview {
     width: 70px !important;
     height: 70px !important;
     margin: 0 !important;
@@ -629,18 +636,18 @@
     overflow: hidden;
   }
 
-  .array-item .image-picker-img {
+  .image-picker--thumb .image-picker-img {
     width: 100% !important;
     height: 100% !important;
     max-height: none !important;
     object-fit: cover !important;
   }
 
-  .array-item .image-picker-clear {
+  .image-picker--thumb .image-picker-clear {
     display: none !important;
   }
 
-  .array-item .image-picker-placeholder {
+  .image-picker--thumb .image-picker-placeholder {
     width: 70px !important;
     height: 70px !important;
     padding: 0 !important;
@@ -648,16 +655,16 @@
     @apply flex items-center justify-center bg-gray-100 rounded cursor-pointer;
   }
 
-  .array-item .image-picker-placeholder span {
+  .image-picker--thumb .image-picker-placeholder span {
     display: none !important;
   }
 
-  .array-item .image-picker-icon {
+  .image-picker--thumb .image-picker-icon {
     @apply text-xl text-gray-400;
     margin: 0 !important;
   }
 
-  .array-item .image-picker-actions {
+  .image-picker--thumb .image-picker-actions {
     position: absolute !important;
     inset: 0 !important;
     display: flex !important;
@@ -672,16 +679,16 @@
     margin: 0 !important;
   }
 
-  .array-item .image-picker:hover .image-picker-actions {
+  .image-picker--thumb:hover .image-picker-actions {
     opacity: 1;
   }
 
-  .array-item .image-picker-actions .btn {
+  .image-picker--thumb .image-picker-actions .btn {
     @apply text-xs py-0.5 px-2 bg-white text-gray-800;
     font-size: 11px !important;
   }
 
-  .array-item .image-picker-url {
+  .image-picker--thumb .image-picker-url {
     display: none !important;
   }
 
@@ -696,9 +703,16 @@
     min-height: 48px;
   }
 
+  /* Modal stacking, lowest to highest. A modal must sit above anything that can
+     open it, or it renders behind its own opener and can't be clicked.
+       50  primary modals (array list, diff, commit, new item)
+       60  array item editor      — opens from the array list
+       70  gallery editor, expanded textarea — open from a field, incl. a field in an item
+       80  image library          — opens from a field or from the gallery editor */
+
   /* Image Library Modal */
   .image-modal-overlay {
-    @apply fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4;
+    @apply fixed inset-0 bg-black/50 z-[80] flex items-center justify-center p-4;
   }
 
   .image-modal {
@@ -828,7 +842,7 @@
 
   /* Gallery Editor Modal */
   .gallery-editor-overlay {
-    @apply fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4;
+    @apply fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4;
   }
 
   .gallery-editor-overlay.hidden {
@@ -1024,8 +1038,13 @@
   }
 
   /* Array Item Edit Modal (nested) */
+  /* Item editors stack: an item can hold an array of objects, and editing one of
+     those opens a second editor on top of the first. --stack-depth is set on each
+     overlay as it opens, keeping every one above the array list (50) and below the
+     gallery / expanded textarea (70) and the image library (80). */
   .array-item-edit-overlay {
-    @apply fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4;
+    @apply fixed inset-0 bg-black/50 flex items-center justify-center p-4;
+    z-index: calc(60 + var(--stack-depth, 0));
   }
 
   .array-item-edit-modal {
@@ -1398,7 +1417,7 @@
 
   /* Textarea Modal */
   .textarea-modal-overlay {
-    @apply fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4;
+    @apply fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4;
   }
 
   .textarea-modal {

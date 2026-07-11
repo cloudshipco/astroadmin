@@ -3,10 +3,16 @@
  */
 
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
-import { openImageLibrary, uploadNewImage } from './image-library.js';
+import { registerReferenceFieldHandlers } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
-import { openGalleryEditor } from './gallery-editor.js';
+
+import { escapeHtml } from './escape-html.js';
+
+// Reference fields can appear anywhere a field can — including inside the array item
+// modal — so hand their wiring to the shared field layer rather than binding it to
+// the main form here. setupFieldWidgets applies it to every container it sets up.
+registerReferenceFieldHandlers(setupReferencePickers);
 
 let currentCollection = null;
 let currentSlug = null;
@@ -857,7 +863,7 @@ async function renderEditor(entryData) {
           placeholder="Enter markdown content..."
           data-markdown="true"
         >${bodyContent}</textarea>
-        <button type="button" class="textarea-expand-btn" data-expand-textarea="markdown-body" title="Expand editor">
+        <button type="button" class="textarea-expand-btn" data-expand-textarea title="Expand editor">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="15 3 21 3 21 9"></polyline>
             <polyline points="9 21 3 21 3 15"></polyline>
@@ -894,175 +900,8 @@ async function renderEditor(entryData) {
   // Setup block focus handler (click to scroll in preview)
   setupBlockFocus();
 
-  // Setup image picker handlers
-  setupImagePickers(form, debouncedSave);
-
-  // Setup color picker handlers
-  setupColorPickers(form, debouncedSave);
-
-  // Setup reference picker handlers
-  setupReferencePickers(form, debouncedSave);
-}
-
-/**
- * Setup image picker event handlers
- */
-function setupImagePickers(form, onChangeCallback) {
-  // Use event delegation on the form for better performance
-  form.addEventListener('click', (e) => {
-    // Browse library button
-    if (e.target.matches('[data-browse]')) {
-      const picker = e.target.closest('.image-picker');
-      const hiddenInput = picker.querySelector('.image-picker-input');
-      const currentValue = hiddenInput.value;
-
-      openImageLibrary((url) => {
-        updateImagePicker(picker, url);
-        if (onChangeCallback) onChangeCallback();
-      }, currentValue);
-      return;
-    }
-
-    // Upload new button
-    if (e.target.matches('[data-upload]')) {
-      const picker = e.target.closest('.image-picker');
-
-      uploadNewImage((url) => {
-        updateImagePicker(picker, url);
-        if (onChangeCallback) onChangeCallback();
-      });
-      return;
-    }
-
-    // Clear button
-    if (e.target.matches('[data-clear]')) {
-      const picker = e.target.closest('.image-picker');
-      updateImagePicker(picker, '');
-      if (onChangeCallback) onChangeCallback();
-      return;
-    }
-
-    // Gallery edit button
-    if (e.target.matches('[data-edit-gallery]')) {
-      const fieldPath = e.target.dataset.editGallery;
-      const galleryField = e.target.closest('.gallery-field');
-      const currentValue = decodeGalleryValue(galleryField.dataset.galleryValue);
-
-      openGalleryEditor(currentValue, (newImages) => {
-        // Update the stored value (encoded)
-        galleryField.dataset.galleryValue = btoa(encodeURIComponent(JSON.stringify(newImages)));
-
-        // Update the preview
-        updateGalleryFieldPreview(galleryField, newImages);
-
-        if (onChangeCallback) onChangeCallback();
-      });
-      return;
-    }
-  });
-
-}
-
-/**
- * Decode gallery value from base64-encoded JSON
- */
-function decodeGalleryValue(encoded) {
-  if (!encoded) return [];
-  try {
-    return JSON.parse(decodeURIComponent(atob(encoded)));
-  } catch (e) {
-    console.error('Failed to decode gallery value:', e);
-    return [];
-  }
-}
-
-/**
- * Update gallery field preview after editing
- */
-function updateGalleryFieldPreview(galleryField, images) {
-  const preview = galleryField.querySelector('.gallery-field-preview');
-  const editBtn = galleryField.querySelector('.gallery-field-edit');
-  const previewImages = images.slice(0, 6);
-  const moreCount = images.length - 6;
-
-  preview.innerHTML = previewImages.length > 0
-    ? previewImages.map(img => `
-        <div class="gallery-field-thumb">
-          <img src="${img.src || ''}" alt="">
-        </div>
-      `).join('') + (moreCount > 0 ? `<div class="gallery-field-more">+${moreCount}</div>` : '')
-    : '<span class="gallery-field-empty">No images</span>';
-
-  editBtn.textContent = images.length > 0 ? `Edit ${images.length} images` : 'Add images';
-}
-
-/**
- * Update image picker with new URL
- */
-function updateImagePicker(picker, url) {
-  const hiddenInput = picker.querySelector('.image-picker-input');
-  const altInput = picker.querySelector('[data-alt-input]');
-  const preview = picker.querySelector('[data-preview]');
-  const previewImg = picker.querySelector('[data-preview-img]');
-  const placeholder = picker.querySelector('[data-placeholder]');
-
-  // Update hidden input value
-  hiddenInput.value = url;
-
-  // Update preview visibility
-  if (url && url.trim()) {
-    previewImg.src = url;
-    preview.classList.remove('hidden');
-    placeholder.classList.add('hidden');
-  } else {
-    preview.classList.add('hidden');
-    placeholder.classList.remove('hidden');
-    // Clear alt text when image is cleared
-    if (altInput) altInput.value = '';
-  }
-}
-
-/**
- * Setup color picker event handlers
- */
-function setupColorPickers(form, onChangeCallback) {
-  // Color picker change -> update text input
-  form.addEventListener('input', (e) => {
-    if (e.target.matches('.color-picker-input')) {
-      const targetId = e.target.dataset.target;
-      const textInput = document.getElementById(targetId);
-      if (textInput) {
-        textInput.value = e.target.value;
-        if (onChangeCallback) onChangeCallback();
-      }
-    }
-
-    // Text input change -> update color picker
-    if (e.target.matches('.color-picker-text')) {
-      const pickerId = e.target.id + '_picker';
-      const picker = document.getElementById(pickerId);
-      if (picker && e.target.value.match(/^#[0-9a-fA-F]{6}$/)) {
-        picker.value = e.target.value;
-      }
-    }
-  });
-
-  // Clear button
-  form.addEventListener('click', (e) => {
-    if (e.target.matches('[data-clear-color]')) {
-      const targetId = e.target.dataset.clearColor;
-      const textInput = document.getElementById(targetId);
-      const picker = document.getElementById(targetId + '_picker');
-
-      if (textInput) textInput.value = '';
-      if (picker) picker.value = '#ffffff';
-
-      // Remove the clear button
-      e.target.remove();
-
-      if (onChangeCallback) onChangeCallback();
-    }
-  });
+  // Image, gallery, colour, textarea and reference widgets all come from
+  // setupFormHandlers, which applies them to every container that holds fields.
 }
 
 /**
@@ -1290,19 +1129,6 @@ function reindexReferenceItems(referenceField) {
       input.name = `${fieldPath}[${newIndex}]`;
     }
   });
-}
-
-/**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(str) {
-  if (typeof str !== 'string') return str;
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 
 // Collapse all blocks by default
