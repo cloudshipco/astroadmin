@@ -13,6 +13,21 @@ import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl } from './field-
 import { escapeHtml } from './escape-html.js';
 
 /**
+ * Serialise a value into an HTML attribute as JSON.
+ *
+ * Must be used for EVERY JSON-in-an-attribute site. Interpolating raw
+ * JSON.stringify output into an attribute is a data-loss bug, not a style one:
+ * an apostrophe in the content ("O'Brien", "we'll") ends a single-quoted
+ * attribute early, so the value the browser hands back is truncated, JSON.parse
+ * throws, and extractFields falls back to [] — silently wiping the whole array
+ * on the next save. Escaping & first also keeps a literal &quot; in the content
+ * from being decoded into a real quote on the way back out.
+ */
+function jsonAttr(value) {
+  return escapeHtml(JSON.stringify(value));
+}
+
+/**
  * Generate a form from schema
  * Handles both object schemas (most common) and top-level array schemas
  */
@@ -34,8 +49,7 @@ export function generateForm(schema, data = {}) {
     // plain-string encoding would return a number or boolean as "4" / "true".
     if (fieldSchema.hidden) {
       if (value !== undefined && value !== null) {
-        const escapedValue = JSON.stringify(value).replace(/"/g, '&quot;');
-        hiddenHtml.push(`<input type="hidden" name="${fieldName}" value="${escapedValue}" data-json="true">`);
+        hiddenHtml.push(`<input type="hidden" name="${fieldName}" value="${jsonAttr(value)}" data-json="true">`);
       }
       continue;
     }
@@ -97,14 +111,14 @@ function generateTopLevelArrayForm(schema, data) {
            data-array-cards
            data-field="_root"
            data-field-name="Items"
-           data-schema='${JSON.stringify(itemSchema)}'
+           data-schema="${jsonAttr(itemSchema)}"
            data-top-level-array="true">
         ${items.map((item, index) => generateArrayCard(item, index, itemSchema)).join('')}
       </div>
       <button type="button" class="btn btn-secondary btn-sm array-cards-add" data-add-array-card>
         + Add Item
       </button>
-      <input type="hidden" name="_root" data-array-data data-top-level-array="true" value='${JSON.stringify(items)}'>
+      <input type="hidden" name="_root" data-array-data data-top-level-array="true" value="${jsonAttr(items)}">
     </div>
   `;
 }
@@ -170,13 +184,13 @@ function generateField(name, schema, value, path = '', ctx = {}) {
                data-array-cards
                data-field="${fullPath}"
                data-field-name="${formatLabel(name)}"
-               data-schema='${JSON.stringify(schema.items || {})}'>
+               data-schema="${jsonAttr(schema.items || {})}">
             ${items.map((item, index) => generateArrayCard(item, index, schema.items)).join('')}
           </div>
           <button type="button" class="btn btn-secondary btn-sm array-cards-add" data-add-array-card>
             + Add ${formatLabel(name).replace(/s$/, '')}
           </button>
-          <input type="hidden" name="${fullPath}" data-array-data value='${JSON.stringify(items)}'>
+          <input type="hidden" name="${fullPath}" data-array-data value="${jsonAttr(items)}">
         </div>
       `;
     }
@@ -187,7 +201,7 @@ function generateField(name, schema, value, path = '', ctx = {}) {
     return `
       <div class="form-group">
         <label class="form-label">${formatLabel(name)}</label>
-        <div class="array-field" data-field="${fullPath}" data-schema='${JSON.stringify(schema.items || {})}'>
+        <div class="array-field" data-field="${fullPath}" data-schema="${jsonAttr(schema.items || {})}">
           ${items.map((item, index) => `
             <div class="array-item" data-index="${index}" draggable="true">
               <div class="array-item-handle" title="Drag to reorder">
@@ -260,7 +274,7 @@ function generateField(name, schema, value, path = '', ctx = {}) {
         <label for="${id}" class="form-label">${getFieldLabel(name, schema)}</label>
         <select name="${fullPath}" id="${id}" class="form-input">
           ${schema.enum.map(opt => `
-            <option value="${opt}" ${value === opt ? 'selected' : ''}>${formatLabel(opt)}</option>
+            <option value="${escapeHtml(opt)}" ${value === opt ? 'selected' : ''}>${escapeHtml(formatLabel(opt))}</option>
           `).join('')}
         </select>
       </div>
@@ -397,7 +411,7 @@ function generateBlocksField(name, schema, value, fullPath) {
           <select id="add-block-type" class="form-input form-input-sm">
             <option value="">Add block...</option>
             ${availableTypes.map(type => `
-              <option value="${type}">${formatBlockType(type)}</option>
+              <option value="${escapeHtml(type)}">${escapeHtml(formatBlockType(type))}</option>
             `).join('')}
           </select>
           <button type="button" class="btn btn-primary btn-sm add-block-btn" data-field="${fullPath}">
@@ -406,7 +420,7 @@ function generateBlocksField(name, schema, value, fullPath) {
         </div>
       </div>
 
-      <div class="blocks-list" data-field="${fullPath}" data-block-types='${JSON.stringify(blockTypes)}'>
+      <div class="blocks-list" data-field="${fullPath}" data-block-types="${jsonAttr(blockTypes)}">
         ${blocks.map((block, index) => generateBlockItem(fullPath, blockTypes, block, index)).join('\n')}
       </div>
     </div>
@@ -423,9 +437,9 @@ function generateBlockItem(arrayPath, blockTypes, block, index) {
 
   if (!blockSchema) {
     return `
-      <div class="block-item block-item-error" data-index="${index}" data-type="${blockType || 'unknown'}">
+      <div class="block-item block-item-error" data-index="${index}" data-type="${escapeHtml(blockType || 'unknown')}">
         <div class="block-header">
-          <span class="block-type-badge">Unknown: ${blockType}</span>
+          <span class="block-type-badge">Unknown: ${escapeHtml(blockType)}</span>
         </div>
         <p class="text-red-500">Unknown block type</p>
       </div>
@@ -435,15 +449,15 @@ function generateBlockItem(arrayPath, blockTypes, block, index) {
   const blockFields = generateBlockFields(path, blockSchema.properties, block);
 
   return `
-    <div class="block-item" data-index="${index}" data-type="${blockType}" draggable="true">
+    <div class="block-item" data-index="${index}" data-type="${escapeHtml(blockType)}" draggable="true">
       <div class="block-header toggle-block-header">
         <span class="block-drag-handle" title="Drag to reorder">⋮⋮</span>
-        <span class="block-type-badge block-type-${blockType}">${formatBlockType(blockType)}</span>
-        <span class="block-preview-text">${getBlockPreview(block)}</span>
+        <span class="block-type-badge block-type-${escapeHtml(blockType)}">${escapeHtml(formatBlockType(blockType))}</span>
+        <span class="block-preview-text">${escapeHtml(getBlockPreview(block))}</span>
         <span class="block-expand-icon">▶</span>
       </div>
       <div class="block-body">
-        <input type="hidden" name="${path}.type" value="${blockType}">
+        <input type="hidden" name="${path}.type" value="${escapeHtml(blockType)}">
         ${blockFields}
         <div class="block-footer">
           <button type="button" class="btn btn-sm btn-danger remove-block">Delete Block</button>
@@ -522,9 +536,19 @@ function generateArrayItem(arrayPath, itemSchema, value, index) {
     `;
   }
 
-  // Simple array (strings, numbers, etc.). The input type has to carry the item's
-  // schema type: extractFields reads the element to decide whether a value parses
-  // as a number, so a number rendered into a text box would save as a string.
+  // Simple array of primitives. The element has to carry the item's schema type:
+  // extractFields reads the DOM, not the schema, to decide what a value parses back
+  // as — so a number or boolean rendered into a text box saves as the string "4" or
+  // "true" and fails validation.
+  if (itemSchema?.type === 'boolean') {
+    return `
+      <label class="checkbox-label array-item-input">
+        <input type="checkbox" name="${path}" ${value ? 'checked' : ''}>
+        <span>${value ? 'True' : 'False'}</span>
+      </label>
+    `;
+  }
+
   return `
     <input
       type="${itemSchema?.type === 'number' ? 'number' : 'text'}"
@@ -650,12 +674,26 @@ function generateArrayCard(item, index, itemSchema = null) {
 function findAltProperty(name, siblingProps) {
   if (!siblingProps) return null;
 
-  // Plain `alt` counts for any image field, not just `src`. An { image, alt } schema
-  // would otherwise render the declared alt field AND a built-in one named imageAlt —
-  // a property the schema never declared, which the content layer then strips.
-  const candidates = [`${name}Alt`, `${name}_alt`, 'alt'];
+  // A field-specific alt always wins.
+  const specific = [`${name}Alt`, `${name}_alt`].find(candidate => candidate in siblingProps);
+  if (specific) return specific;
 
-  return candidates.find(candidate => candidate in siblingProps) || null;
+  // A plain `alt` only belongs to this image if it is the ONLY image here — as in a
+  // gallery item's { src, alt }. With two images and one `alt` ({ heroImage, cardImage,
+  // alt }) the alt cannot describe both, so neither claims it and each keeps its own
+  // built-in input instead.
+  if ('alt' in siblingProps && countImageFields(siblingProps) === 1) return 'alt';
+
+  return null;
+}
+
+/**
+ * How many of these sibling properties are image fields
+ */
+function countImageFields(siblingProps) {
+  return Object.entries(siblingProps)
+    .filter(([key, schema]) => isImageField(key, schema || {}))
+    .length;
 }
 
 /**
@@ -792,7 +830,7 @@ function generateColorField(name, schema, value, fullPath, id) {
         <input
           type="color"
           id="${id}_picker"
-          value="${colorToHex(colorValue) || '#ffffff'}"
+          value="${escapeHtml(colorToHex(colorValue) || '#ffffff')}"
           class="color-picker-input"
         >
         <input
@@ -1218,6 +1256,11 @@ export function setupFormHandlers(formElement, onBlockChange) {
  * Blocks: add, remove, collapse, reorder, and keep the preview text in sync
  */
 function setupBlockHandlers(formElement, onBlockChange) {
+  // Delegated like the field handlers, and needs its own guard for the same reason:
+  // bound twice, deleting one block prompts twice and fires the save callback twice.
+  if (formElement.dataset.blockHandlersBound === 'true') return;
+  formElement.dataset.blockHandlersBound = 'true';
+
   // Add block
   formElement.addEventListener('click', (e) => {
     if (e.target.classList.contains('add-block-btn')) {

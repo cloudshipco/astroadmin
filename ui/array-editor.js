@@ -22,6 +22,11 @@ import {
 // a <label for> to whichever came first, which is never the one you clicked.
 const ITEM_ID_PREFIX = 'item_';
 
+// Item editors occupy the z-index band 60-69 (see the modal stacking scale in
+// input.css). Nesting deeper than this is not a real content shape, and letting the
+// band grow without limit would put an item editor above the pickers it opens.
+const MAX_STACK_DEPTH = 9;
+
 let currentCallback = null;
 let currentItems = [];
 let currentSchema = null;
@@ -232,7 +237,10 @@ export function openSingleItemEditor(item, schema, onSave) {
   // array of objects, and editing one of those opens a second item editor on top of
   // this one — reusing a single element would overwrite the parent mid-edit and
   // throw its unsaved changes away.
-  const depth = document.querySelectorAll('.array-item-edit-overlay').length;
+  // Clamped: the item-editor band is 60-69, and beyond that a deeper editor would
+  // climb over the gallery (70) and image library (80) that it can itself open.
+  // Past depth 9 the modals share a z-index and DOM order keeps the newest on top.
+  const depth = Math.min(document.querySelectorAll('.array-item-edit-overlay').length, MAX_STACK_DEPTH);
   const editModal = document.createElement('div');
   document.body.appendChild(editModal);
 

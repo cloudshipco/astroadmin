@@ -704,11 +704,14 @@
   }
 
   /* Modal stacking, lowest to highest. A modal must sit above anything that can
-     open it, or it renders behind its own opener and can't be clicked.
-       50  primary modals (array list, diff, commit, new item)
-       60  array item editor      — opens from the array list
-       70  gallery editor, expanded textarea — open from a field, incl. a field in an item
-       80  image library          — opens from a field or from the gallery editor */
+     open it, or it renders behind its own opener and cannot be clicked.
+       50     primary modals (array list, diff, commit, new item)
+       60-69  array item editors — one per nesting level, bounded by MAX_STACK_DEPTH
+              in array-editor.js so they can never climb over the pickers below
+       70     leaf pickers opened FROM a field, including a field inside an item editor:
+              gallery editor, expanded textarea, reference picker
+       80     image library — opens from a field OR from the gallery editor, so it has
+              to sit above both */
 
   /* Image Library Modal */
   .image-modal-overlay {
@@ -1586,7 +1589,7 @@
 
   /* Reference Picker Modal */
   .reference-modal-overlay {
-    @apply fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4;
+    @apply fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4;
   }
 
   .reference-modal-overlay.hidden {
