@@ -1605,6 +1605,22 @@ async function updatePreview() {
 
   const pageUrl = getPreviewPageUrl();
   if (!pageUrl) {
+    // No route to preview this collection at — say so instead of leaving a
+    // blank pane (routeless collections on e.g. single-page sites hit this
+    // until `preview.routes` maps them somewhere).
+    iframe.style.display = 'none';
+    previewControls.style.display = 'none';
+    placeholder.style.display = 'flex';
+    placeholder.innerHTML = `
+      <div class="preview-placeholder-message">
+        <p>No preview route for the <code>${escapeHtml(currentCollection ?? '')}</code> collection.</p>
+        <p class="preview-placeholder-hint">
+          If this content appears on an existing page, map it there in
+          <code>astroadmin.config.js</code> — e.g.
+          <code>preview: { routes: { ${escapeHtml(currentCollection ?? 'collection')}: '/' } }</code>.
+        </p>
+      </div>
+    `;
     return;
   }
 

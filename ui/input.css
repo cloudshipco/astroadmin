@@ -199,6 +199,18 @@
     @apply flex items-center justify-center h-full text-gray-400;
   }
 
+  .preview-placeholder-message {
+    @apply max-w-md px-6 text-center text-sm text-gray-500;
+  }
+
+  .preview-placeholder-message code {
+    @apply rounded bg-gray-100 px-1 py-0.5 text-xs text-gray-700;
+  }
+
+  .preview-placeholder-hint {
+    @apply mt-2 text-xs text-gray-400;
+  }
+
   .preview-iframe {
     @apply w-full h-full border-0 bg-white;
     transition: opacity 0.2s ease-in-out, filter 0.2s ease-in-out;

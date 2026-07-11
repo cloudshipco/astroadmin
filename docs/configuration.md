@@ -35,6 +35,28 @@ export default {
 
 The preview panel loads your Astro site in an iframe. Make sure your Astro dev server is running.
 
+#### Preview routes per collection
+
+AstroAdmin auto-detects which page renders each collection where it can. For
+collections without a detectable route — common on single-page sites, where
+several collections all render on the homepage — map them explicitly:
+
+```javascript
+export default {
+  preview: {
+    routes: {
+      // collection name -> path to preview it at ({slug} is substituted)
+      site: '/',
+      services: '/',
+      posts: '/blog/{slug}',
+    },
+  },
+};
+```
+
+Without a route (and with no block-component usage to fall back on), the
+preview panel explains what to configure instead of rendering anything.
+
 ### Public site URL (live-status)
 
 Optionally set your production site's origin. When set, the editor shows a
