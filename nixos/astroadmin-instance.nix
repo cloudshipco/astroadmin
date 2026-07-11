@@ -255,12 +255,13 @@ let
       User = inst.user;
       Group = inst.group;
       StateDirectory = "astroadmin/${name}";
-      # 0750 (not systemd's 0755 default) so a sibling instance's user can't
-      # traverse in and read this instance's sessions.db (0644, in the home).
-      # systemd enforces this on the existing leaf dir at every start, so it
-      # takes effect on the already-provisioned live boxes too — unlike
+      # 0700 (not systemd's 0755 default): owner-only, so a sibling instance's
+      # user can't traverse in and read this instance's sessions.db (0644, in
+      # the home) — and, unlike 0750, a shared/overridden group grants nothing
+      # either. systemd enforces this on the existing leaf dir at every start,
+      # so it takes effect on already-provisioned live boxes too — unlike
       # `homeMode`, which only applies when createHome first makes the dir.
-      StateDirectoryMode = "0750";
+      StateDirectoryMode = "0700";
       ExecStart = checkoutScript name inst;
     };
   };
@@ -311,12 +312,13 @@ let
       # systemd creates + chowns this (under /var/lib) before the unit runs and
       # grants it read-write under ProtectSystem=strict.
       StateDirectory = "astroadmin/${name}";
-      # 0750 (not systemd's 0755 default) so a sibling instance's user can't
-      # traverse in and read this instance's sessions.db (0644, in the home).
-      # systemd enforces this on the existing leaf dir at every start, so it
-      # takes effect on the already-provisioned live boxes too — unlike
+      # 0700 (not systemd's 0755 default): owner-only, so a sibling instance's
+      # user can't traverse in and read this instance's sessions.db (0644, in
+      # the home) — and, unlike 0750, a shared/overridden group grants nothing
+      # either. systemd enforces this on the existing leaf dir at every start,
+      # so it takes effect on already-provisioned live boxes too — unlike
       # `homeMode`, which only applies when createHome first makes the dir.
-      StateDirectoryMode = "0750";
+      StateDirectoryMode = "0700";
       # --no-astro: the dedicated preview unit owns `astro dev`; the admin must
       # NOT spawn a second one (it did, and a failed spawn killed the admin).
       ExecStart = "${pkgs.bun}/bin/bun ${inst.projectRoot}/node_modules/astroadmin/bin/cli.js start --no-astro";
@@ -344,12 +346,13 @@ let
       Group = inst.group;
       WorkingDirectory = inst.projectRoot;
       StateDirectory = "astroadmin/${name}";
-      # 0750 (not systemd's 0755 default) so a sibling instance's user can't
-      # traverse in and read this instance's sessions.db (0644, in the home).
-      # systemd enforces this on the existing leaf dir at every start, so it
-      # takes effect on the already-provisioned live boxes too — unlike
+      # 0700 (not systemd's 0755 default): owner-only, so a sibling instance's
+      # user can't traverse in and read this instance's sessions.db (0644, in
+      # the home) — and, unlike 0750, a shared/overridden group grants nothing
+      # either. systemd enforces this on the existing leaf dir at every start,
+      # so it takes effect on already-provisioned live boxes too — unlike
       # `homeMode`, which only applies when createHome first makes the dir.
-      StateDirectoryMode = "0750";
+      StateDirectoryMode = "0700";
       # Bind to localhost ONLY — never given an nginx vhost of its own.
       ExecStart = "${pkgs.bun}/bin/bunx --bun astro dev --host 127.0.0.1 --port ${toString inst.previewPort}";
       Restart = "on-failure";
@@ -483,7 +486,7 @@ in {
         group        = inst.group;
         home         = inst.stateDir;
         createHome   = true;
-        homeMode     = "0750";
+        homeMode     = "0700";
       }));
     users.groups = lib.listToAttrs (eachInstance (name: inst:
       lib.nameValuePair inst.group {}));
@@ -525,14 +528,21 @@ in {
         fi
       '' + lib.concatStringsSep "\n" (eachInstance (name: inst: ''
         # Per-instance state used to be owned by the shared `astroadmin` user;
-        # re-own to the per-instance user. The guard uses find (not a top-dir
-        # owner check) so an interrupted chown -R still converges — a top-only
-        # check would see the top already re-owned and skip, orphaning
-        # descendants under the deleted uid forever.
-        if [ -e ${inst.stateDir} ] \
-           && [ -n "$(${pkgs.findutils}/bin/find ${inst.stateDir} \! -user ${inst.user} -print -quit 2>/dev/null)" ]; then
-          echo "astroadmin: migrating ${inst.stateDir} ownership -> ${inst.user}:${inst.group}"
-          ${pkgs.coreutils}/bin/chown -R ${inst.user}:${inst.group} ${inst.stateDir}
+        # re-own to the per-instance user. A root-owned completion marker (in
+        # the 0755 root base dir, so a tenant can't forge it to skip a real
+        # migration) makes this genuinely one-time: once set, we never scan
+        # again. Until then the guard uses find (not a top-dir owner check) so
+        # an interrupted chown -R still converges — a top-only check would see
+        # the top already re-owned and skip, orphaning descendants under the
+        # deleted uid forever. The marker is written only AFTER chown succeeds
+        # (or when there was nothing to migrate), never mid-run.
+        if [ ! -e ${cfg.stateDir}/.migrated-${name} ]; then
+          if [ -e ${inst.stateDir} ] \
+             && [ -n "$(${pkgs.findutils}/bin/find ${inst.stateDir} \! -user ${inst.user} -print -quit 2>/dev/null)" ]; then
+            echo "astroadmin: migrating ${inst.stateDir} ownership -> ${inst.user}:${inst.group}"
+            ${pkgs.coreutils}/bin/chown -R ${inst.user}:${inst.group} ${inst.stateDir}
+          fi
+          ${pkgs.coreutils}/bin/touch ${cfg.stateDir}/.migrated-${name}
         fi
       ''));
     };
