@@ -19,6 +19,16 @@
 # `astro dev`. Per-user identity is what makes the 0400 mode on each instance's
 # deploy key / session secret actually isolate one tenant from another.
 #
+# RESIDUAL RISK (filesystem plane only): per-user isolation covers secrets and
+# state, NOT the shared host network namespace. The admin + `astro dev` servers
+# bind 127.0.0.1:<port> with no auth of their own (auth lives at nginx), so a
+# process running as one tenant can still connect to a sibling's localhost port
+# (reading draft/preview content) or, during a sibling's restart window, bind
+# that port first and receive nginx-forwarded requests + cookies. Fully closing
+# this needs per-tenant network isolation (network namespaces / microVMs), which
+# is tracked as the microVM-per-editor migration — not solvable with Unix users
+# alone. Exploiting it requires code execution as a tenant in the first place.
+#
 # Secrets never enter the Nix store. Per instance, the host's sops file holds:
 #   astroadmin/<name>/admin_password_hash   (from `astroadmin hash-password`)
 #   astroadmin/<name>/session_secret        (a long random string)
