@@ -407,6 +407,19 @@ let
       proxyPass = "http://127.0.0.1:${toString inst.adminPort}";
       proxyWebsockets = true;     # admin live-reload / ws
     };
+    # Brute-force guard on the only credential-accepting endpoint. The app's
+    # own limiter is a shared 100/15min budget across all of /api/*, so a
+    # login-specific ceiling belongs here. Exact-match wins over "/" for this
+    # URI only; everything else keeps the plain proxy. The zone is declared
+    # once in appendHttpConfig below. 429 (not the 503 default) so the client
+    # sees a retryable rate-limit, matching the app limiter's semantics.
+    locations."= /api/login" = {
+      proxyPass = "http://127.0.0.1:${toString inst.adminPort}";
+      extraConfig = ''
+        limit_req zone=astroadmin_login burst=10 nodelay;
+        limit_req_status 429;
+      '';
+    };
   };
 
   # Authenticated preview vhost on the nested preview subdomain: reverse-proxy
@@ -586,6 +599,16 @@ in {
       # to start ("could not build server_names_hash"). Bump it so multi-instance
       # hosts work out of the box. (A host may raise it further if needed.)
       serverNamesHashBucketSize = lib.mkDefault 128;
+      # One shared per-IP zone for every instance's /api/login (declared once
+      # at http scope; the per-vhost locations consume it). 5 req/min steady
+      # with burst 10 permits a fumbled human login but caps a brute force at
+      # ~10 quick tries then one per 12s — argon2id + 32-char generated
+      # passwords make that hopeless. Deliberately NOT applied to /__authz
+      # (session-cookie check, no password) — the preview vhost fires it once
+      # per asset via auth_request, where a 429 becomes a 500.
+      appendHttpConfig = ''
+        limit_req_zone $binary_remote_addr zone=astroadmin_login:1m rate=5r/m;
+      '';
       virtualHosts = lib.listToAttrs (
         (eachInstance mkVhost) ++ (eachInstance mkPreviewVhost)
       );
