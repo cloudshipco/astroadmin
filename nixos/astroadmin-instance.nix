@@ -409,11 +409,19 @@ let
     };
     # Brute-force guard on the only credential-accepting endpoint. The app's
     # own limiter is a shared 100/15min budget across all of /api/*, so a
-    # login-specific ceiling belongs here. Exact-match wins over "/" for this
-    # URI only; everything else keeps the plain proxy. The zone is declared
-    # once in appendHttpConfig below. 429 (not the 503 default) so the client
-    # sees a retryable rate-limit, matching the app limiter's semantics.
-    locations."= /api/login" = {
+    # login-specific ceiling belongs here. The zone is declared once in
+    # appendHttpConfig below. 429 (not the 503 default) so the client sees a
+    # retryable rate-limit, matching the app limiter's semantics.
+    #
+    # Regex, NOT `= /api/login`: an exact match is trivially bypassed because
+    # Express routes with case-insensitive, non-strict defaults, so
+    # `/api/login/` and `/API/login` reach the same handler while an exact
+    # location misses them and they fall through to "/" unlimited. `~*` with an
+    # optional trailing slash covers every variant Express actually routes
+    # (nginx merges duplicate slashes + decodes %XX before matching, so those
+    # need no special-casing; `/api/login/extra` is a 404 at Express, so it
+    # need not be covered). A regex location wins over the "/" prefix.
+    locations."~* ^/api/login/?$" = {
       proxyPass = "http://127.0.0.1:${toString inst.adminPort}";
       extraConfig = ''
         limit_req zone=astroadmin_login burst=10 nodelay;
