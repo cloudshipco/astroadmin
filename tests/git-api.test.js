@@ -16,6 +16,13 @@ try {
   process.env.ASTROADMIN_PROJECT_ROOT = tmpRoot;
   process.env.ASTROADMIN_DB = path.join(tmpRoot, 'content.db');
   process.env.GIT_ENABLED = 'true';
+  // db store mode: content lives in the DB, so src/content is NOT a configured
+  // git path (see defaultGitPathsForStore). That is the whole point of this
+  // test — a pre-staged file OUTSIDE the configured paths (src/content/page.md)
+  // must be left alone by a publish commit. Under the default 'files' mode
+  // src/content IS a configured path, so page.md would be swept into the commit
+  // and the "only configured paths" guarantee couldn't be tested.
+  process.env.ASTROADMIN_CONTENT_STORE = 'db';
 
   fs.mkdirSync(path.join(tmpRoot, 'src/styles'), { recursive: true });
   fs.mkdirSync(path.join(tmpRoot, 'src/content'), { recursive: true });

@@ -6,6 +6,7 @@ import { generateForm, extractFormData, setupFormHandlers } from './form-generat
 import { registerReferenceFieldHandlers } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
+import { initEntryPicker, syncEntryPickerLabel } from './entry-picker.js';
 
 import { escapeHtml } from './escape-html.js';
 
@@ -26,6 +27,18 @@ let isNewEntry = false; // Track if current entry is new (unsaved)
 let isVirtualPage = false; // Track if current view is a virtual page
 let selectedPreviewBlock = null; // For component preview: which block to render with
 let gitEnabled = true; // Whether git integration is enabled (from /api/config)
+
+// Monotonic id for the in-flight entry load. A slower earlier load must not
+// overwrite a newer selection when its response arrives out of order.
+let loadSeq = 0;
+// The save function and its debounced wrapper for the form currently on screen.
+// Each is bound to ITS form + immutable target, so a navigation can flush the
+// pending edit (it saves that entry, not the next one), and saves for a target
+// are serialized so an older POST can't overwrite a newer one.
+let activeSaver = null;
+let activeDebouncedSave = null;
+// Guards the delete handler against a double-click firing two DELETEs.
+let deleteInProgress = false;
 
 // i18n state
 let i18nConfig = {
@@ -112,20 +125,11 @@ function populatePageSelector(collections, i18nInfo = null, staticPages = []) {
   selector.innerHTML = '<option value="">Select page...</option>';
   allPages = []; // Reset
 
-  // Add "Pages" optgroup for virtual/static pages if any exist
-  if (staticPages.length > 0) {
-    const pagesOptgroup = document.createElement('optgroup');
-    pagesOptgroup.label = 'Pages';
-
-    staticPages.forEach(page => {
-      const option = document.createElement('option');
-      option.value = `__page__:${page.slug}`;
-      option.textContent = page.name;
-      pagesOptgroup.appendChild(option);
-    });
-
-    selector.appendChild(pagesOptgroup);
-  }
+  // Read-only "virtual page" routes are deliberately NOT surfaced in the picker.
+  // A page a user can reach should be editable; the fix for a route with a
+  // hardcoded heading is to back it with a content entry, not to offer a
+  // read-only dead-end. (`allStaticPages` is still kept for preview-URL
+  // resolution and any legacy /dashboard/__page__/ deep link.)
 
   // Sort collections: pages first, then testimonials, then metadata last
   const collectionOrder = ['pages', 'testimonials', 'metadata'];
@@ -154,7 +158,9 @@ function populatePageSelector(collections, i18nInfo = null, staticPages = []) {
     collection.entries.forEach(slug => {
       const option = document.createElement('option');
       option.value = `${collection.name}/${slug}`;
-      option.textContent = slug;
+      // Show the entry's title (e.g. "Journal") rather than its slug ("blog").
+      // The slug is kept as the option value and in `allPages` for URL matching.
+      option.textContent = collection.entryTitles?.[slug] || slug;
       optgroup.appendChild(option);
 
       // Store for reference
@@ -167,7 +173,41 @@ function populatePageSelector(collections, i18nInfo = null, staticPages = []) {
   // Restore previous selection if it still exists
   if (previousValue && !previousValue.startsWith('new:') && !previousValue.startsWith('__page__:')) {
     selector.value = previousValue;
+    syncEntryPickerLabel(document.getElementById('pageSelector'));
   }
+}
+
+/**
+ * Display title for an entry, matching what the page selector shows (e.g.
+ * "Journal" for the entry whose slug is "blog"). Falls back to the slug when no
+ * title is known, so the editor header and the selector never disagree.
+ */
+function entryDisplayTitle(collection, slug) {
+  const entryTitles = allCollections.find(c => c.name === collection)?.entryTitles;
+  return entryTitles?.[slug] || slug;
+}
+
+/**
+ * After a save, keep the cached display title in step with the saved data, so an
+ * edited title shows in the picker/header immediately rather than after a reload.
+ * Mirrors the server's title extraction (title/name/heading).
+ */
+function updateEntryTitleCache(collection, slug, data) {
+  const coll = allCollections.find(c => c.name === collection);
+  if (!coll || !coll.entryTitles) return;
+  // Mirror the server's fallback (title/name/heading, else a humanised slug) so
+  // clearing every title field doesn't leave the old label until a reload.
+  const title = data?.title || data?.name || data?.heading || humaniseSlug(slug);
+  coll.entryTitles[slug] = title;
+  const selector = document.getElementById('pageSelector');
+  const option = [...selector.options].find(o => o.value === `${collection}/${slug}`);
+  if (option) option.textContent = title;
+}
+
+/** Humanise a slug for display, matching the server's title fallback. */
+function humaniseSlug(slug) {
+  const s = String(slug).replace(/[-_]+/g, ' ').trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // Simple singularize function
@@ -216,37 +256,33 @@ function renderLocaleTabs() {
  * Load which locales exist for an entry
  */
 async function loadEntryLocales(collection, slug) {
-  if (!i18nConfig.enabled) {
-    entryLocales = [];
-    return;
-  }
+  if (!i18nConfig.enabled) return [];
 
   try {
     const response = await fetch(`/api/collections/${collection}/entries-with-locales`);
     const data = await response.json();
-
     if (data.success) {
       const entry = data.entries.find(e => e.slug === slug);
-      entryLocales = entry?.locales || [];
-    } else {
-      entryLocales = [];
+      return entry?.locales || [];
     }
+    return [];
   } catch (error) {
     console.error('Failed to load entry locales:', error);
-    entryLocales = [];
+    return [];
   }
 }
 
 /**
  * Create a new translation for an existing entry
  */
-async function createTranslation(collection, slug) {
+async function createTranslation(collection, slug, ctx) {
   document.getElementById('editorTitle').textContent = `New Translation: ${slug} (${currentLocale.toUpperCase()})`;
   updateSaveStatus('New translation - unsaved');
 
   try {
     const schemaResponse = await fetch(`/api/collections/${collection}`);
     const schemaData = await schemaResponse.json();
+    if (ctx && ctx.myLoad !== loadSeq) return; // superseded during the schema fetch
 
     if (!schemaData.success) {
       throw new Error('Failed to load collection schema');
@@ -262,10 +298,13 @@ async function createTranslation(collection, slug) {
       locale: currentLocale,
     };
 
-    renderEditorForNewEntry(schemaData.collection.schema, contentType);
+    renderEditorForNewEntry(schemaData.collection.schema, contentType, {
+      collection, slug, locale: currentLocale,
+    });
 
   } catch (error) {
     console.error('Failed to create translation:', error);
+    if (ctx && ctx.myLoad !== loadSeq) return;
     document.getElementById('editorForm').innerHTML = `
       <p class="text-red-500">Failed to initialize: ${error.message}</p>
     `;
@@ -367,6 +406,11 @@ document.getElementById('pageSelector').addEventListener('change', (e) => {
     loadEntry(collection, slug);
   }
 });
+
+// Replace the long native selector with a searchable modal picker. The <select>
+// stays as the hidden source of truth; the picker drives it. Registered after
+// the change handler above so a picked row's dispatched `change` is handled.
+initEntryPicker(document.getElementById('pageSelector'));
 
 // ============================================
 // New Item Modal
@@ -490,6 +534,8 @@ document.getElementById('newItemSlug').addEventListener('keydown', (e) => {
 // ============================================
 
 async function createNewEntry(collection, slug) {
+  flushPendingSave();
+  const myLoad = ++loadSeq; // claim, so a pending entry load can't overwrite this form
   currentCollection = collection;
   currentSlug = slug;
   isNewEntry = true;
@@ -501,6 +547,7 @@ async function createNewEntry(collection, slug) {
   // Update dropdown (won't find the new item yet, that's OK)
   const selector = document.getElementById('pageSelector');
   selector.value = '';
+  syncEntryPickerLabel(document.getElementById('pageSelector'));
 
   document.getElementById('editorTitle').textContent = `New: ${slug}`;
   document.getElementById('editorForm').innerHTML = '<p class="placeholder-text">Loading...</p>';
@@ -516,6 +563,8 @@ async function createNewEntry(collection, slug) {
       throw new Error('Failed to load collection schema');
     }
 
+    if (myLoad !== loadSeq) return; // superseded by a newer selection
+
     // Determine content type based on collection
     const contentType = schemaData.collection.type === 'data' ? 'data' : 'content';
 
@@ -527,11 +576,14 @@ async function createNewEntry(collection, slug) {
       schema: schemaData.collection.schema
     };
 
-    // Render empty editor
-    renderEditorForNewEntry(schemaData.collection.schema, contentType);
+    // Render empty editor, bound to this new entry.
+    renderEditorForNewEntry(schemaData.collection.schema, contentType, {
+      collection, slug, locale: currentLocale,
+    });
 
   } catch (error) {
     console.error('Failed to create new entry:', error);
+    if (myLoad !== loadSeq) return;
     document.getElementById('editorForm').innerHTML = `
       <p class="text-red-500">Failed to initialize: ${error.message}</p>
     `;
@@ -539,24 +591,37 @@ async function createNewEntry(collection, slug) {
 }
 
 // Render editor for a new entry (with empty data)
-function renderEditorForNewEntry(schema, contentType) {
+function renderEditorForNewEntry(schema, contentType, ctx) {
   const editorForm = document.getElementById('editorForm');
 
   // Generate form from schema with empty data
   const formHtml = generateForm(schema, {});
 
-  // Only show markdown body editor for content types that DON'T use blocks
+  // Only show markdown body editor for content types that DON'T use blocks.
+  // Markup matches the edit view (wrapper + data-markdown) so the formatting
+  // toolbar (setupFieldWidgets → enhanceMarkdownEditor) attaches here too.
   const hasBlocks = schema?.properties?.blocks;
   const bodyEditor = (contentType === 'content' && !hasBlocks) ? `
     <div class="form-group">
       <label for="markdown-body" class="form-label">Content (Markdown)</label>
-      <textarea
-        id="markdown-body"
-        name="body"
-        rows="6"
-        class="form-input"
-        placeholder="Enter markdown content..."
-      ></textarea>
+      <div class="textarea-wrapper">
+        <textarea
+          id="markdown-body"
+          data-content-field="body"
+          rows="8"
+          class="form-input textarea-autogrow"
+          placeholder="Enter markdown content..."
+          data-markdown="true"
+        ></textarea>
+        <button type="button" class="textarea-expand-btn" data-expand-textarea title="Expand editor">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <polyline points="9 21 3 21 3 15"></polyline>
+            <line x1="21" y1="3" x2="14" y2="10"></line>
+            <line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
+        </button>
+      </div>
     </div>
   ` : '';
 
@@ -567,20 +632,29 @@ function renderEditorForNewEntry(schema, contentType) {
     </form>
   `;
 
-  // Setup form handlers
+  // Setup form handlers, bound to a saver for this NEW entry.
   const form = document.getElementById('contentForm');
-  const debouncedSave = debounce(async () => {
-    updateSaveStatus('Saving...');
-    await saveContent(true);
-  }, 1000);
-
-  setupFormHandlers(form, debouncedSave);
-  setupAutoSave(form, debouncedSave);
+  installSaver(form, {
+    form,
+    collection: ctx.collection,
+    slug: ctx.slug,
+    locale: ctx.locale,
+    type: contentType,
+    schema,
+    isNew: true,
+  });
   collapseAllBlocks();
 }
 
 // Load an entry for editing
 async function loadEntry(collection, slug, updateUrl = true) {
+  // A queued autosave belongs to the form we're leaving — flush it before its
+  // form is replaced, so it saves that entry rather than firing against this one.
+  flushPendingSave();
+
+  // Claim this load. A response that arrives after a newer load must not render.
+  const myLoad = ++loadSeq;
+
   // Reset preview block selection when switching collections
   if (collection !== currentCollection) {
     selectedPreviewBlock = null;
@@ -600,17 +674,23 @@ async function loadEntry(collection, slug, updateUrl = true) {
   // Update dropdown to match
   const selector = document.getElementById('pageSelector');
   selector.value = `${collection}/${slug}`;
+  syncEntryPickerLabel(document.getElementById('pageSelector'));
 
   // Fetch available locales for this entry (if i18n enabled)
   if (i18nConfig.enabled) {
-    await loadEntryLocales(collection, slug);
+    const locales = await loadEntryLocales(collection, slug);
+    if (myLoad !== loadSeq) return; // superseded by a newer load
+    entryLocales = locales;
     renderLocaleTabs();
   }
 
   const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
-  document.getElementById('editorTitle').textContent = `Editing: ${slug}${localeLabel}`;
+  document.getElementById('editorTitle').textContent = `Editing: ${entryDisplayTitle(collection, slug)}${localeLabel}`;
   document.getElementById('editorForm').innerHTML = '<p class="placeholder-text">Loading...</p>';
   document.getElementById('deleteEntryBtn').style.display = 'inline-block';
+
+  // The load context threaded through the async render so a stale response bails.
+  const ctx = { collection, slug, locale: currentLocale, myLoad };
 
   try {
     // Build URL with locale query param if i18n enabled
@@ -622,18 +702,31 @@ async function loadEntry(collection, slug, updateUrl = true) {
     const response = await fetch(apiUrl);
     const data = await response.json();
 
+    // A newer load started while this request was in flight — drop this result
+    // rather than render entry A's data under entry B's identity.
+    if (myLoad !== loadSeq) return;
+
     if (data.success) {
       currentData = data;
-      renderEditor(data);
+      await renderEditor(data, ctx);
+      if (myLoad !== loadSeq) return; // renderEditor awaited a schema; recheck
       renderBlockSelector(); // Show block selector for component preview
       updatePreview();
     } else if (response.status === 404 && i18nConfig.enabled) {
       // Entry doesn't exist for this locale - show empty form for new translation
       isNewEntry = true;
-      await createTranslation(collection, slug);
+      await createTranslation(collection, slug, ctx);
+    } else {
+      // Anything else (e.g. a 404 for a non-existent entry) must not leave the
+      // panel stuck on "Loading…" — say what happened.
+      document.getElementById('editorTitle').textContent = 'Not found';
+      document.getElementById('deleteEntryBtn').style.display = 'none';
+      document.getElementById('editorForm').innerHTML =
+        `<p class="placeholder-text">No entry found for <code>${escapeHtml(collection)}/${escapeHtml(slug)}</code>.</p>`;
     }
   } catch (error) {
     console.error('Failed to load entry:', error);
+    if (myLoad !== loadSeq) return; // a newer load owns the panel now
     document.getElementById('editorForm').innerHTML = `
       <p class="text-red-500">Failed to load entry: ${error.message}</p>
     `;
@@ -649,6 +742,11 @@ async function loadEntry(collection, slug, updateUrl = true) {
  * Shows a navigation hub instead of an editor form
  */
 function loadVirtualPage(pageSlug) {
+  // Leaving an entry: flush its pending save and invalidate any in-flight load,
+  // so a late content/schema response can't repopulate this virtual-page view.
+  flushPendingSave();
+  ++loadSeq;
+
   const page = allStaticPages.find(p => p.slug === pageSlug);
   if (!page) {
     console.error('Virtual page not found:', pageSlug);
@@ -763,6 +861,7 @@ function navigateToCollection(collectionName) {
     // Load first entry
     const firstEntry = collection.entries[0];
     document.getElementById('pageSelector').value = `${collectionName}/${firstEntry}`;
+    syncEntryPickerLabel(document.getElementById('pageSelector'));
     loadEntry(collectionName, firstEntry);
   } else {
     // No entries - open new entry modal
@@ -833,13 +932,17 @@ window.addEventListener('popstate', (e) => {
   }
 });
 
-// Render editor for an entry
-async function renderEditor(entryData) {
+// Render editor for an entry. `ctx` identifies the load {collection, slug,
+// locale, myLoad} so a schema fetch that finishes after a newer load is dropped
+// instead of installing the wrong form/saver.
+async function renderEditor(entryData, ctx) {
   const editorForm = document.getElementById('editorForm');
 
-  // Get schema for this collection
-  const schemaResponse = await fetch(`/api/collections/${currentCollection}`);
+  // Get schema for this collection (from the load's collection, not a global
+  // that a newer navigation may already have changed).
+  const schemaResponse = await fetch(`/api/collections/${ctx.collection}`);
   const schemaData = await schemaResponse.json();
+  if (ctx.myLoad !== loadSeq) return; // superseded during the schema fetch
 
   // Generate form from schema (title/description will be in an SEO block)
   const formHtml = generateForm(schemaData.collection.schema, entryData.data);
@@ -857,7 +960,7 @@ async function renderEditor(entryData) {
       <div class="textarea-wrapper">
         <textarea
           id="markdown-body"
-          name="body"
+          data-content-field="body"
           rows="${bodyRows}"
           class="form-input textarea-autogrow"
           placeholder="Enter markdown content..."
@@ -882,17 +985,18 @@ async function renderEditor(entryData) {
     </form>
   `;
 
-  // Setup form handlers for dynamic fields (blocks, arrays)
+  // Setup form handlers for dynamic fields (blocks, arrays), bound to a saver
+  // that always writes THIS form to THIS entry.
   const form = document.getElementById('contentForm');
-  const debouncedSave = debounce(async () => {
-    updateSaveStatus('Saving...');
-    await saveContent(true);
-  }, 1000);
-
-  setupFormHandlers(form, debouncedSave);
-
-  // Add auto-save on input change
-  setupAutoSave(form, debouncedSave);
+  installSaver(form, {
+    form,
+    collection: ctx.collection,
+    slug: ctx.slug,
+    locale: ctx.locale,
+    type: entryData.type,
+    schema: schemaData.collection.schema,
+    isNew: false,
+  });
 
   // Collapse all blocks by default
   collapseAllBlocks();
@@ -1180,19 +1284,55 @@ function setupBlockFocus() {
 
 // Debounce helper
 function debounce(func, wait) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
+  let timeout = null;
+  let lastArgs = null;
+  const debounced = function (...args) {
+    lastArgs = args;
     clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
+    timeout = setTimeout(() => {
+      timeout = null;
+      const args2 = lastArgs;
+      lastArgs = null;
+      func(...args2);
+    }, wait);
   };
+  // Is a call queued but not yet fired?
+  debounced.pending = () => timeout !== null;
+  // Drop a queued call without running it.
+  debounced.cancel = () => {
+    clearTimeout(timeout);
+    timeout = null;
+    lastArgs = null;
+  };
+  // Run a queued call NOW (used before navigating away, so a pending autosave
+  // lands on its own entry rather than the next one).
+  debounced.flush = () => {
+    if (timeout === null) return undefined;
+    clearTimeout(timeout);
+    timeout = null;
+    const args2 = lastArgs;
+    lastArgs = null;
+    return func(...(args2 || []));
+  };
+  return debounced;
+}
+
+// Flush the on-screen form's pending autosave before its form is replaced, then
+// abandon that saver so nothing (reorder, Cmd+S) can fire it against the new
+// form. An already-in-flight save keeps running against its own bound target.
+function flushPendingSave() {
+  const saver = activeSaver;
+  const deb = activeDebouncedSave;
+  activeSaver = null;
+  activeDebouncedSave = null;
+  // Flush the final save while the saver is still enabled, THEN disable it so
+  // the old form's listeners can't queue another save against the new entry.
+  if (deb && deb.pending()) deb.flush();
+  if (saver) saver.disable();
 }
 
 // Setup auto-save on form changes
-function setupAutoSave(form, debouncedSave) {
+function setupAutoSave(form, saver, debouncedSave) {
   // Show loading overlay early (500ms) for immediate visual feedback
   const showLoadingEarly = debounce(() => {
     const iframe = document.getElementById('previewFrame');
@@ -1206,10 +1346,12 @@ function setupAutoSave(form, debouncedSave) {
     debouncedSave();
   });
 
-  // Immediate save for structural changes (reordering cards)
-  form.addEventListener('cards-reordered', async () => {
-    updateSaveStatus('Saving...');
-    await saveContent(true);
+  // Immediate save for structural changes (reordering cards). Cancel the pending
+  // debounce first so this doesn't stack a second save behind the reorder — the
+  // saver coalesces, so only the latest form state is written.
+  form.addEventListener('cards-reordered', () => {
+    debouncedSave.cancel();
+    saver(true);
   });
 }
 
@@ -1226,95 +1368,159 @@ function updateSaveStatus(message) {
 }
 
 // Save content
-async function saveContent(silent = false) {
-  const form = document.getElementById('contentForm');
+/**
+ * Build a save function bound to ONE form and an immutable target
+ * `{form, collection, slug, locale, type, isNew}`. It always reads from its own
+ * form and POSTs to its own entry — never the globals — so a flush during
+ * navigation saves the entry being left, not the one arrived at. Saves are
+ * serialized per target and coalesced (one trailing save), so two POSTs for the
+ * same entry never overlap and an older snapshot can't overwrite a newer one.
+ * UI side effects tied to the on-screen entry are gated on `isTargetCurrent()`.
+ */
+function makeSaver(target) {
+  const isTargetCurrent = () =>
+    currentCollection === target.collection &&
+    currentSlug === target.slug &&
+    currentLocale === target.locale;
 
-  // Extract form data
-  const formData = extractFormData(form);
-  const body = document.getElementById('markdown-body')?.value || '';
+  const runOnce = async (silent) => {
+    const formData = extractFormData(target.form, target.schema);
+    // The markdown body is the entry's CONTENT, sent separately as `body`. Its
+    // textarea carries no form `name` (only #markdown-body + data-content-field)
+    // precisely so extractFormData/FormData don't sweep it into the frontmatter
+    // `data` — otherwise the file gets a duplicate `body:` key on top of its
+    // real body. A collection that legitimately declares a `body` frontmatter
+    // field keeps it, because that field's own control IS named `body`.
+    const body = target.form.querySelector('#markdown-body')?.value || '';
+    const current = isTargetCurrent();
 
-  // Capture current preview HTML hash BEFORE save (for change detection)
-  let originalHash = null;
-  const previewPageUrl = getPreviewPageUrl();
-  if (previewPageUrl) {
-    try {
-      const response = await fetch(previewPageUrl + '?t=' + Date.now(), { cache: 'no-store' });
-      const html = await response.text();
-      originalHash = quickHash(html);
-    } catch (err) { /* proceed without hash */ }
-  }
+    if (current) updateSaveStatus('Saving...');
 
-  try {
-    // Build URL with locale query param if i18n enabled
-    let apiUrl = `/api/content/${currentCollection}/${currentSlug}`;
-    if (i18nConfig.enabled && currentLocale) {
-      apiUrl += `?locale=${currentLocale}`;
+    // Preview change-detection only matters if this entry is on screen.
+    let originalHash = null;
+    if (current) {
+      const previewPageUrl = getPreviewPageUrl();
+      if (previewPageUrl) {
+        try {
+          const res = await fetch(previewPageUrl + '?t=' + Date.now(), { cache: 'no-store' });
+          originalHash = quickHash(await res.text());
+        } catch { /* proceed without hash */ }
+      }
     }
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        data: formData,
-        body: body,
-        type: currentData.type,
-      }),
-    });
+    try {
+      let apiUrl = `/api/content/${target.collection}/${target.slug}`;
+      if (i18nConfig.enabled && target.locale) apiUrl += `?locale=${target.locale}`;
 
-    const result = await response.json();
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: formData, body, type: target.type }),
+      });
+      const result = await response.json();
 
-    if (result.success) {
-      updateSaveStatus('Saved');
-      if (!silent) {
-        showNotification('Changes saved!', 'success');
-      }
-
-      // Handle first save of new entry/translation
-      if (isNewEntry) {
-        isNewEntry = false;
-        const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
-        document.getElementById('editorTitle').textContent = `Editing: ${currentSlug}${localeLabel}`;
-        // Refresh dropdown to include the new entry
-        await loadPages();
-        // Select the new entry in dropdown
-        document.getElementById('pageSelector').value = `${currentCollection}/${currentSlug}`;
-
-        // Refresh entry locales after save (new locale now exists)
-        if (i18nConfig.enabled) {
-          await loadEntryLocales(currentCollection, currentSlug);
-          renderLocaleTabs();
+      if (!result.success) {
+        if (isTargetCurrent()) {
+          updateSaveStatus('Error');
+          if (!silent) showNotification('Failed to save: ' + result.error, 'error');
         }
+        return;
       }
 
-      // Update changes badge
+      if (isTargetCurrent()) {
+        updateSaveStatus('Saved');
+        if (!silent) showNotification('Changes saved!', 'success');
+      }
+
+      // Keep the cached display title in step with the saved data — entry-scoped
+      // and safe to run whether or not this entry is still on screen.
+      updateEntryTitleCache(target.collection, target.slug, formData);
+
+      if (target.isNew) {
+        target.isNew = false; // subsequent saves of this target are edits
+        if (isTargetCurrent()) isNewEntry = false;
+        // Refresh the picker so it includes the new entry (populatePageSelector
+        // preserves the current selection, so this is safe off-screen too).
+        await loadPages();
+        if (isTargetCurrent()) {
+          const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
+          document.getElementById('editorTitle').textContent =
+            `Editing: ${entryDisplayTitle(target.collection, target.slug)}${localeLabel}`;
+          document.getElementById('pageSelector').value = `${target.collection}/${target.slug}`;
+          syncEntryPickerLabel(document.getElementById('pageSelector'));
+          if (i18nConfig.enabled) {
+            const locales = await loadEntryLocales(target.collection, target.slug);
+            if (isTargetCurrent()) { entryLocales = locales; renderLocaleTabs(); }
+          }
+        }
+      } else if (isTargetCurrent()) {
+        // Reflect any title change in the header + picker button.
+        const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
+        document.getElementById('editorTitle').textContent =
+          `Editing: ${entryDisplayTitle(target.collection, target.slug)}${localeLabel}`;
+        syncEntryPickerLabel(document.getElementById('pageSelector'));
+      }
+
       updateChangesBadge();
 
-      // Wait for Astro to rebuild, then refresh preview
-      // Note: HMR causes 2-3 white flashes due to Vite parallel environments bug
-      // See: https://github.com/withastro/astro/issues/13138
-      if (originalHash) {
-        await waitForContentChange(originalHash);
+      // Preview refresh only if this entry is still on screen; otherwise a newer
+      // load already drove the preview to the right page.
+      if (isTargetCurrent()) {
+        if (originalHash) await waitForContentChange(originalHash);
+        // WORKAROUND: Astro/Vite HMR needs a beat after the change is detected.
+        // See https://github.com/withastro/astro/issues/13138
+        await new Promise((r) => setTimeout(r, 2000));
+        if (isTargetCurrent()) updatePreview();
       }
-      // WORKAROUND: Additional delay for Astro/Vite rebuild reliability
-      // Astro's dev server sometimes needs extra time after content change is detected.
-      // This may be fixed in future Astro versions. See: https://github.com/withastro/astro/issues/13138
-      await new Promise(r => setTimeout(r, 2000));
-      updatePreview();
-    } else {
-      updateSaveStatus('Error');
-      if (!silent) {
-        showNotification('Failed to save: ' + result.error, 'error');
+    } catch (error) {
+      console.error('Save failed:', error);
+      if (isTargetCurrent()) {
+        updateSaveStatus('Error');
+        if (!silent) showNotification('Failed to save changes', 'error');
       }
     }
-  } catch (error) {
-    console.error('Save failed:', error);
-    updateSaveStatus('Error');
-    if (!silent) {
-      showNotification('Failed to save changes', 'error');
-    }
-  }
+  };
+
+  // Serialize + coalesce: while a save runs, a further request sets `again` so
+  // exactly one more save runs afterward with the latest form state. Once
+  // disabled (the form is being left/deleted), the saver is inert — this closes
+  // the window where the leaving form's own input/reorder listeners, which still
+  // reference this saver, could queue a POST after navigation or a DELETE.
+  let inFlight = null;
+  let again = false;
+  let disabled = false;
+  const saver = (silent = true) => {
+    if (disabled) return Promise.resolve();
+    if (inFlight) { again = true; return inFlight; }
+    inFlight = (async () => {
+      // Drain `again` unconditionally: once disabled, no new call can set it
+      // (they no-op above), so this only replays edits queued BEFORE disable —
+      // e.g. the final flush-on-navigate must not be dropped.
+      do { again = false; await runOnce(silent); } while (again);
+    })().finally(() => { inFlight = null; });
+    return inFlight;
+  };
+  // Resolves once no save is in flight — used before a destructive op (delete).
+  saver.whenIdle = () => inFlight || Promise.resolve();
+  // Make the saver inert for good (future calls no-op; an in-flight save still
+  // finishes its current run against its own bound target).
+  saver.disable = () => { disabled = true; };
+  return saver;
+}
+
+/**
+ * Wire a freshly rendered form to a bound saver: input debounces a save,
+ * reordering coalesces one immediate save, and the form's pending edit can be
+ * flushed on navigation. Sets the module-level active saver/debounce.
+ */
+function installSaver(form, target) {
+  const saver = makeSaver(target);
+  const debouncedSave = debounce(() => saver(true), 1000);
+  activeSaver = saver;
+  activeDebouncedSave = debouncedSave;
+  setupFormHandlers(form, debouncedSave);
+  setupAutoSave(form, saver, debouncedSave);
+  return { saver, debouncedSave };
 }
 
 // Store scroll position (received from iframe via postMessage)
@@ -1328,6 +1534,22 @@ function quickHash(str) {
     hash |= 0;
   }
   return hash.toString(36);
+}
+
+// Escape a string for literal use inside a RegExp (the fixed parts of a preview
+// route like "/blog/" around its {slug} placeholder).
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// The origin of the preview iframe (e.g. "http://localhost:4321"), used to
+// authenticate postMessages from it. Null if previewUrl isn't set/parseable.
+function previewOrigin() {
+  try {
+    return previewUrl ? new URL(previewUrl, location.href).origin : null;
+  } catch {
+    return null;
+  }
 }
 
 // Get current preview page URL
@@ -1401,26 +1623,144 @@ async function waitForContentChange(originalHash, maxWaitMs = 2500) {
 
 // Listen for messages from preview iframe
 window.addEventListener('message', (event) => {
+  // Only trust messages from the preview iframe showing OUR preview origin.
+  // `event.source` (set by the browser to the real sender) stops an unrelated
+  // window forging a pageNavigation; the origin check stops a page the iframe
+  // was navigated to on a DIFFERENT origin from doing the same, since the
+  // iframe's WindowProxy identity is stable across such navigations.
+  const previewFrame = document.getElementById('previewFrame');
+  if (!previewFrame || event.source !== previewFrame.contentWindow) return;
+  if (previewOrigin() && event.origin !== previewOrigin()) return;
+
   if (event.data?.type === 'scrollPosition') {
     lastPreviewScrollY = event.data.scrollY;
   }
+
+  // Click-to-edit: an element tagged data-aa-field was clicked in the preview →
+  // focus, scroll to and briefly highlight its editor control.
+  if (event.data?.type === 'fieldFocus') {
+    focusEditorField(event.data.field);
+    return;
+  }
+
   // Handle page navigation in preview - sync admin to show that page
   if (event.data?.type === 'pageNavigation') {
     const pathname = event.data.pathname;
+    // A malformed message without a string pathname would throw below.
+    if (typeof pathname !== 'string') return;
 
     // Ignore component-preview URLs - these are for non-page collections
     if (pathname.startsWith('/component-preview/')) {
       return;
     }
 
-    // Map pathname to collection/slug (only for pages collection)
-    // e.g., "/" -> pages/home, "/teaching" -> pages/teaching
-    let slug = pathname === '/' ? 'home' : pathname.replace(/^\/|\/$/g, '');
-    // Only switch if it's a different page and we're in pages collection
-    if (slug && slug !== currentSlug && currentCollection === 'pages') {
-      loadEntry('pages', slug, true);
+    // Resolve the previewed route to an editor target. A route can be BOTH a
+    // rendered `.astro` file (read-only "site page") and an editable pages
+    // entry — prefer the editable entry.
+    //   1. an editable `pages` entry at /<slug>  -> load it
+    //   2. otherwise a discovered route (blog/faq index, etc.) -> read-only view
+    //   3. otherwise leave the sidebar as-is (never fire a load that 404s and
+    //      hangs the panel on "Loading…").
+    const norm = pathname.replace(/\/+$/, '') || '/';
+
+    // Ignore the echo of our OWN preview update. Loading any entry points the
+    // preview at that entry's route, which fires a pageNavigation back here; if
+    // that route also happens to be an editable `pages` entry (e.g. an faqs
+    // entry previews at /faq, which is also the pages/faq entry), resolving it
+    // below would yank the editor off the entry the user just picked. The
+    // current entry's own preview path is never a user navigation. Only compare
+    // when the current entry HAS a real page path — a component-only collection
+    // returns null, which must not be coerced to '/' (that would swallow a
+    // genuine Home navigation).
+    const currentPath = getCurrentPagePath();
+    if (currentPath !== null && norm === ((currentPath.replace(/\/+$/, '')) || '/')) return;
+
+    const slug = norm === '/' ? 'home' : norm.replace(/^\/+/, '');
+    const pagesEntry = allPages.find((p) => p.collection === 'pages' && p.slug === slug);
+    if (pagesEntry) {
+      if (!(currentCollection === 'pages' && slug === currentSlug)) loadEntry('pages', slug, true);
+      return;
     }
+
+    // Otherwise map the URL to a collection entry via that collection's preview
+    // route — e.g. blog posts render at /blog/{slug}, so clicking a post in the
+    // preview loads that post for editing. Routes without a {slug} placeholder
+    // (a whole-collection page like /faq) have no per-entry URL and are skipped.
+    for (const coll of allCollections) {
+      const route = coll.previewRoute;
+      if (!route || !route.includes('{slug}')) continue;
+      // Normalise the route's trailing slash the same way `norm` is, so a
+      // configured `/blog/{slug}/` still matches the normalised `/blog/x`.
+      const pattern = '^' + route.replace(/\/+$/, '').split('{slug}').map(escapeRegExp).join('(.+)') + '$';
+      const match = norm.match(new RegExp(pattern));
+      if (!match) continue;
+      const entrySlug = match[1];
+      if (allPages.some((p) => p.collection === coll.name && p.slug === entrySlug)) {
+        if (!(currentCollection === coll.name && entrySlug === currentSlug)) {
+          loadEntry(coll.name, entrySlug, true);
+        }
+        return;
+      }
+    }
+    // Unresolved (a route with no matching content entry) — leave the editor
+    // as it is rather than opening a read-only view.
   }
+});
+
+/**
+ * Click-to-edit (preview → editor): focus, scroll to and briefly flash the
+ * editor control for `field`, expanding a collapsed block if it lives in one.
+ */
+function focusEditorField(field) {
+  if (typeof field !== 'string' || !field) return;
+  const form = document.getElementById('contentForm');
+  if (!form) return;
+  // Match a named control, or the markdown body textarea (which has no form
+  // name — see makeSaver — so it's found via data-content-field instead).
+  const esc = CSS.escape(field);
+  const el = form.querySelector(`[name="${esc}"], [data-content-field="${esc}"]`);
+  if (!el) return;
+  const block = el.closest('.block-item.collapsed');
+  if (block) block.querySelector('.block-header')?.click(); // expand it
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (typeof el.focus === 'function') el.focus({ preventScroll: true });
+  flashFieldGroup(el.closest('.form-group') || el);
+}
+
+// Briefly flash a field group. Tracks one timer + the ORIGINAL inline style per
+// element, so re-clicking within the flash window resets the timer without ever
+// snapshotting (and then restoring) the flash colour itself.
+const flashState = new WeakMap();
+function flashFieldGroup(group) {
+  let state = flashState.get(group);
+  if (state) {
+    clearTimeout(state.timer);
+  } else {
+    state = { prevShadow: group.style.boxShadow, prevTransition: group.style.transition };
+    flashState.set(group, state);
+  }
+  group.style.transition = 'box-shadow .15s';
+  group.style.boxShadow = '0 0 0 2px #3b82f6';
+  state.timer = setTimeout(() => {
+    group.style.boxShadow = state.prevShadow;
+    group.style.transition = state.prevTransition;
+    flashState.delete(group);
+  }, 1200);
+}
+
+// Click-to-edit (editor → preview): clicking a field in the editor highlights
+// its element in the preview (no-op if the site hasn't tagged that element).
+document.addEventListener('click', (event) => {
+  const form = document.getElementById('contentForm');
+  if (!form || !form.contains(event.target)) return;
+  // Match a named control OR the markdown body (which has data-content-field, not
+  // a form name — see makeSaver), so clicking the body control also highlights.
+  const sel = '[name], [data-content-field]';
+  const control = event.target.closest(sel) || event.target.closest('.form-group')?.querySelector(sel);
+  const field = control?.getAttribute('name') || control?.getAttribute('data-content-field');
+  if (!field) return;
+  const iframe = document.getElementById('previewFrame');
+  iframe?.contentWindow?.postMessage({ type: 'highlightField', field }, previewOrigin() || '*');
 });
 
 // Update preview
@@ -1562,8 +1902,11 @@ function showNotification(message, type = 'info') {
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 's') {
     e.preventDefault();
-    if (currentCollection && currentSlug) {
-      saveContent();
+    // Save the on-screen form now (its bound saver coalesces with any pending
+    // autosave). No form / new-unsaved-with-no-saver → nothing to do.
+    if (activeSaver) {
+      activeDebouncedSave?.cancel();
+      activeSaver(false);
     }
   }
 });
@@ -1571,33 +1914,56 @@ document.addEventListener('keydown', (e) => {
 // Delete entry handler
 document.getElementById('deleteEntryBtn').addEventListener('click', async () => {
   if (!currentCollection || !currentSlug || isNewEntry) return;
+  if (deleteInProgress) return; // a DELETE is already running — ignore a re-click
 
-  const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
-  const deleteMessage = i18nConfig.enabled && currentLocale
-    ? `Are you sure you want to delete the ${currentLocale.toUpperCase()} translation of "${currentSlug}"?\n\nThis cannot be undone.`
-    : `Are you sure you want to delete "${currentSlug}" from ${currentCollection}?\n\nThis cannot be undone.`;
+  // Snapshot the delete target BEFORE any await, so navigating mid-delete can't
+  // redirect the DELETE (or the editor-clearing) to a different entry.
+  const target = { collection: currentCollection, slug: currentSlug, locale: currentLocale };
+  const localeLabel = i18nConfig.enabled && target.locale ? ` (${target.locale.toUpperCase()})` : '';
+  const deleteMessage = i18nConfig.enabled && target.locale
+    ? `Are you sure you want to delete the ${target.locale.toUpperCase()} translation of "${target.slug}"?\n\nThis cannot be undone.`
+    : `Are you sure you want to delete "${target.slug}" from ${target.collection}?\n\nThis cannot be undone.`;
 
   const confirmed = confirm(deleteMessage);
   if (!confirmed) return;
 
+  deleteInProgress = true;
+  const deleteBtn = document.getElementById('deleteEntryBtn');
+  deleteBtn.disabled = true;
+
+  // Declared outside the try so the catch can read it; assigned before the await.
+  let delGen = 0;
+
+  // Everything below is inside the try so the finally ALWAYS runs — even if the
+  // awaited pending save rejects — leaving deleteInProgress/button restored.
   try {
-    // Build URL with locale query param if i18n enabled
-    let apiUrl = `/api/content/${currentCollection}/${currentSlug}`;
-    if (i18nConfig.enabled && currentLocale) {
-      apiUrl += `?locale=${currentLocale}`;
+    // Disable the on-screen saver (so its form listeners can't queue a POST),
+    // cancel any queued autosave, and let an in-flight one finish BEFORE
+    // deleting, so a POST can't land after the DELETE and resurrect the entry.
+    // Invalidate loads (capturing this op's generation NOW, before the await) so
+    // a load that starts during the wait can't be mistaken for this delete's.
+    const saver = activeSaver;
+    activeDebouncedSave?.cancel();
+    saver?.disable?.();
+    activeSaver = null;
+    activeDebouncedSave = null;
+    const pendingSave = saver?.whenIdle?.();
+    delGen = ++loadSeq;
+    // A failed save must not stop the delete (they're independent) — swallow it.
+    if (pendingSave) await pendingSave.catch(() => {});
+
+    let apiUrl = `/api/content/${target.collection}/${target.slug}`;
+    if (i18nConfig.enabled && target.locale) {
+      apiUrl += `?locale=${target.locale}`;
     }
 
-    const response = await fetch(apiUrl, {
-      method: 'DELETE',
-    });
-
+    const response = await fetch(apiUrl, { method: 'DELETE' });
     const result = await response.json();
 
     if (result.success) {
-      showNotification(`Deleted "${currentSlug}"${localeLabel}`, 'success');
-
-      // Refresh the page list
+      showNotification(`Deleted "${target.slug}"${localeLabel}`, 'success');
       await loadPages();
+      if (loadSeq !== delGen) return; // user moved on — leave their editor alone
 
       // Clear the editor
       currentCollection = null;
@@ -1607,6 +1973,7 @@ document.getElementById('deleteEntryBtn').addEventListener('click', async () => 
       document.getElementById('editorForm').innerHTML = '<p class="placeholder-text">Choose a page from the dropdown above to start editing.</p>';
       document.getElementById('deleteEntryBtn').style.display = 'none';
       document.getElementById('pageSelector').value = '';
+      syncEntryPickerLabel(document.getElementById('pageSelector'));
 
       // Update URL
       history.pushState({}, '', '/dashboard');
@@ -1620,10 +1987,19 @@ document.getElementById('deleteEntryBtn').addEventListener('click', async () => 
       updateChangesBadge();
     } else {
       showNotification('Failed to delete: ' + result.error, 'error');
+      // The delete didn't happen — reinstate a working editor (fresh saver)
+      // rather than leaving the disabled one stranded.
+      if (loadSeq === delGen) loadEntry(target.collection, target.slug, false);
     }
   } catch (error) {
     console.error('Delete failed:', error);
     showNotification('Failed to delete entry', 'error');
+    if (loadSeq === delGen) loadEntry(target.collection, target.slug, false);
+  } finally {
+    deleteInProgress = false;
+    // Harmless when the button is hidden (successful delete); re-enables it for
+    // the visible editor after a failed delete or a mid-delete navigation.
+    document.getElementById('deleteEntryBtn').disabled = false;
   }
 });
 

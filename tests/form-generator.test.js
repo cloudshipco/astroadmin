@@ -12,7 +12,7 @@
  */
 
 import assert from 'node:assert';
-import { generateForm, generateFields } from '../ui/form-generator.js';
+import { generateForm, generateFields, cleanEmptyValues } from '../ui/form-generator.js';
 
 let passed = 0;
 function check(name, fn) {
@@ -107,6 +107,31 @@ check('an image field renders a picker, not a raw text input', () => {
   assert.ok(/class="image-picker"/.test(html), 'image field must render the picker');
   assert.ok(/data-browse/.test(html) && /data-upload/.test(html), 'picker must offer browse + upload');
   assert.ok(!/<input\s+type="text"\s+name="image"/s.test(html), 'image must not be a raw text input');
+});
+
+// --- Image preview visibility -----------------------------------------------
+// The preview shows a thumbnail for a real image and the "No image selected"
+// state for a placeholder marker. A bare filename IS a real image (the library
+// stores them, resolveImageUrl serves them from /images/), so it must preview.
+
+/** The class list on the preview / placeholder divs, so we can assert visibility. */
+function previewHidden(html) {
+  return /class="image-picker-preview hidden"/.test(html);
+}
+
+check('a bare-filename value previews (library image), not the empty state', () => {
+  const html = generateFields({ image: { type: 'string' } }, { image: 'hero.jpg' });
+  assert.ok(!previewHidden(html), 'bare-filename image must show its thumbnail');
+});
+
+check('a placeholder marker shows the empty state, not a broken thumbnail', () => {
+  const html = generateFields({ image: { type: 'string' } }, { image: 'placeholder:banner' });
+  assert.ok(previewHidden(html), 'a placeholder: value must not load as an <img>');
+});
+
+check('an uppercase PLACEHOLDER marker is also treated as empty', () => {
+  const html = generateFields({ image: { type: 'string' } }, { image: 'PLACEHOLDER:banner' });
+  assert.ok(previewHidden(html), 'placeholder detection must be case-insensitive');
 });
 
 // --- Modal ids --------------------------------------------------------------
@@ -209,6 +234,109 @@ check('a colour value cannot break out of the swatch attribute', () => {
   // is what turns the rest of the value into live markup.
   assert.ok(!/value="[^"]*" onfocus=/.test(html), 'the colour value must not close its attribute and inject a handler');
   assert.ok(/&quot;/.test(html), 'the quote in the value must be escaped, not dropped');
+});
+
+// --- cleanEmptyValues (issue #32: don't delete required fields) -------------
+// An empty REQUIRED field must survive a save. Deleting it is silent data loss:
+// it breaks the schema/build, and if the whole form is momentarily empty it
+// wipes the entry's metadata entirely (observed corrupting a page's title/slug).
+
+// The schema node: `properties` marks fields known, `required` lists required keys.
+const pageSchema = {
+  properties: { title: {}, slug: {}, blocks: {}, navLabel: {}, standfirst: {} },
+  required: ['title', 'slug', 'blocks'],
+};
+
+check('cleanEmptyValues drops empty OPTIONAL top-level fields', () => {
+  const data = { title: 'Home', navLabel: '', standfirst: '' };
+  cleanEmptyValues(data, pageSchema);
+  assert.deepEqual(data, { title: 'Home' }, 'empty optionals are omitted');
+});
+
+check('cleanEmptyValues KEEPS empty REQUIRED top-level fields (as "")', () => {
+  const data = { title: '', slug: '', blocks: [], navLabel: '' };
+  cleanEmptyValues(data, pageSchema);
+  assert.ok('title' in data && data.title === '', 'required title kept as ""');
+  assert.ok('slug' in data && data.slug === '', 'required slug kept as ""');
+  assert.ok(!('navLabel' in data), 'optional navLabel dropped');
+});
+
+check('cleanEmptyValues KEEPS a required field inside a NESTED object', () => {
+  const schema = {
+    properties: { seo: { properties: { title: {}, description: {} }, required: ['title'] } },
+    required: ['seo'],
+  };
+  const data = { seo: { title: '', description: '' } };
+  cleanEmptyValues(data, schema);
+  assert.ok(data.seo && data.seo.title === '', 'required nested title kept');
+  assert.ok(!('description' in data.seo), 'optional nested description dropped');
+  assert.ok('seo' in data, 'a required object is not deleted when emptied of optionals');
+});
+
+check('cleanEmptyValues keeps required fields in a non-block object-array item', () => {
+  const schema = {
+    properties: {
+      authors: { items: { properties: { name: {}, bio: {} }, required: ['name'] } },
+    },
+    required: ['authors'],
+  };
+  const data = { authors: [{ name: '', bio: '' }] };
+  cleanEmptyValues(data, schema);
+  assert.strictEqual(data.authors[0].name, '', 'required array-item field kept');
+  assert.ok(!('bio' in data.authors[0]), 'optional array-item field dropped');
+});
+
+check('cleanEmptyValues fails SAFE without a schema (keeps empties, never data loss)', () => {
+  const data = { a: '', b: 'x' };
+  cleanEmptyValues(data); // no schema
+  assert.deepEqual(data, { a: '', b: 'x' }, 'no schema -> nothing deleted');
+});
+
+check('cleanEmptyValues keeps block-item empties BECAUSE of blockTypes', () => {
+  // The items schema WOULD clean `kicker` (optional) if the item weren't a block,
+  // so this proves `blockTypes` — not fail-safe — is what preserves the empty.
+  const schema = {
+    properties: {
+      blocks: {
+        blockTypes: {},
+        items: { properties: { type: {}, text: {}, kicker: {} }, required: ['type', 'text'] },
+      },
+    },
+    required: ['blocks'],
+  };
+  const data = { blocks: [{ type: 'heading', text: 'Hi', kicker: '' }] };
+  cleanEmptyValues(data, schema);
+  assert.strictEqual(data.blocks[0].kicker, '', 'block item empties are preserved');
+  // Sanity: the SAME item, in a non-block array (no blockTypes), IS cleaned.
+  const plain = { rows: [{ type: 'heading', text: 'Hi', kicker: '' }] };
+  cleanEmptyValues(plain, {
+    properties: { rows: { items: { properties: { type: {}, text: {}, kicker: {} }, required: ['type', 'text'] } } },
+    required: ['rows'],
+  });
+  assert.ok(!('kicker' in plain.rows[0]), 'without blockTypes, the optional empty is dropped');
+});
+
+check('cleanEmptyValues does NOT treat a typed non-block record as a block', () => {
+  // A plain object-array whose items happen to have a `type` field must still get
+  // schema-aware cleanup (drop optional empties) rather than being read as blocks.
+  const schema = {
+    properties: {
+      links: { items: { properties: { type: {}, label: {} }, required: ['type'] } },
+    },
+    required: ['links'],
+  };
+  const data = { links: [{ type: 'external', label: '' }] };
+  cleanEmptyValues(data, schema);
+  assert.strictEqual(data.links[0].type, 'external', 'required kept');
+  assert.ok(!('label' in data.links[0]), 'optional empty dropped (not treated as a block)');
+});
+
+check('cleanEmptyValues cleans a TOP-LEVEL array against its schema', () => {
+  const schema = { items: { properties: { name: {}, note: {} }, required: ['name'] } };
+  const data = [{ name: '', note: '' }];
+  cleanEmptyValues(data, schema);
+  assert.strictEqual(data[0].name, '', 'required kept');
+  assert.ok(!('note' in data[0]), 'optional empty dropped');
 });
 
 console.log('\n========================================\n');

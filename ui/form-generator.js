@@ -8,7 +8,7 @@
  * widget added here shows up on all three.
  */
 
-import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl } from './field-widgets.js';
+import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage } from './field-widgets.js';
 
 import { escapeHtml } from './escape-html.js';
 
@@ -345,8 +345,12 @@ function generateField(name, schema, value, path = '', ctx = {}) {
   const isShortByName = shortFieldNames.some(short => lowerName === short || lowerName.endsWith(short));
   const isShortByLength = schema.maxLength && schema.maxLength < 100;
   const isLongByName = lowerName.includes('description') || lowerName.includes('content') || lowerName.includes('subheading');
+  // An explicit `.describe('textarea')` forces a textarea even for a normally
+  // short-named field (e.g. a long `title`). This only ever adds a textarea, so
+  // it can't shrink a field that was one before.
+  const wantsTextarea = /\btextarea\b/i.test(schema.description || '');
 
-  if (!isShortByLength && !isShortByName || isLongByName) {
+  if (wantsTextarea || (!isShortByLength && !isShortByName) || isLongByName) {
     // Calculate initial rows based on content length
     const content = value ?? '';
     const lineCount = (content.match(/\n/g) || []).length + 1;
@@ -739,9 +743,15 @@ function getImageFieldInfo(name) {
  *   The picker owns its own sizes; a container never reaches in to override them.
  */
 function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false, variant = '') {
-  const hasValue = value && value.trim();
-  const previewClass = hasValue ? '' : 'hidden';
-  const placeholderClass = hasValue ? 'hidden' : '';
+  // Only show the image preview for a value that is actually an image path.
+  // A non-path value (e.g. a `placeholder:banner` marker a site uses to render
+  // an outline) would otherwise load as a broken <img>. The value is still kept
+  // in the hidden input, so it round-trips on save; the field just shows the
+  // clean "No image selected" state instead of a broken thumbnail.
+  const trimmed = (value || '').trim();
+  const isRealImage = isPreviewableImage(trimmed);
+  const previewClass = isRealImage ? '' : 'hidden';
+  const placeholderClass = isRealImage ? 'hidden' : '';
 
   // Special labels and help text for known fields
   const fieldInfo = getImageFieldInfo(name);
@@ -760,8 +770,9 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
           data-alt-input
         >`;
 
-  // Resolve the image URL for preview (handles relative paths)
-  const previewSrc = resolveImageUrl(value || '');
+  // Resolve the image URL for preview (handles relative paths). Empty for a
+  // non-path value so a hidden preview never holds a broken src.
+  const previewSrc = isRealImage ? resolveImageUrl(trimmed) : '';
 
   return `
     <div class="form-group">
@@ -1073,12 +1084,16 @@ function formatBlockType(type) {
  * Extract form data into object matching schema structure
  * Returns an array directly for top-level array schemas
  */
-export function extractFormData(formElement) {
+export function extractFormData(formElement, schema) {
   // Check for top-level array schema
   const topLevelArrayInput = formElement.querySelector('input[data-top-level-array="true"]');
   if (topLevelArrayInput) {
     try {
-      return JSON.parse(topLevelArrayInput.value || '[]');
+      const arr = JSON.parse(topLevelArrayInput.value || '[]');
+      // Run the same schema-aware cleanup as object entries (this path used to
+      // return raw, leaving empty optionals to fail a consumer's validation).
+      cleanEmptyValues(arr, schema);
+      return arr;
     } catch (e) {
       console.error('Failed to parse top-level array:', e);
       return [];
@@ -1087,8 +1102,9 @@ export function extractFormData(formElement) {
 
   const data = extractFields(formElement);
 
-  // Clean up empty optional string values in blocks
-  cleanEmptyValues(data);
+  // Strip empty optional fields, but keep required ones (see cleanEmptyValues) —
+  // walking the schema so this holds at every level, not just the top.
+  cleanEmptyValues(data, schema, false);
 
   return data;
 }
@@ -1165,30 +1181,58 @@ function toNumber(value) {
 }
 
 /**
- * Remove empty string values from objects (they clutter the YAML)
- * But preserve empty strings in block items (array elements with 'type' field)
- * since those fields may be required by the schema
+ * Strip empty OPTIONAL string fields (an unset optional must serialise as absent,
+ * since "" would fail an `.optional().min(1)`), walking the schema so REQUIRED
+ * fields are never deleted at ANY level — deleting a required key is silent data
+ * loss that breaks the build (and, if a whole object is momentarily empty, wipes
+ * its metadata). Fail-safe: a field is deleted ONLY when the schema PROVES it
+ * optional; without a schema at this level (or block items, which keep their
+ * required-field placeholders) nothing is removed.
+ *
+ * @param {*} obj - The data to clean (mutated in place).
+ * @param {object} [schemaNode] - The JSON schema for `obj` (properties/required,
+ *   or `items` for arrays). Omit at a level to fail safe (keep empties).
+ * @param {boolean} [isBlockItem] - True inside a discriminated-union block item.
  */
-function cleanEmptyValues(obj, isBlockItem = false) {
+export function cleanEmptyValues(obj, schemaNode, isBlockItem = false) {
   if (Array.isArray(obj)) {
+    const itemSchema = schemaNode && schemaNode.items;
+    // Prefer the schema to decide block-ness: a discriminated-union block array
+    // is marked with `blockTypes` (see enrichSchemaWithBlockTypes). Only fall
+    // back to the `'type' in item` heuristic when we have NO schema — otherwise
+    // an ordinary record that merely has a `type` field (e.g. {type:'external'})
+    // would be misread as a block and keep its empty optionals.
+    const schemaSaysBlock = !!(schemaNode && schemaNode.blockTypes);
     obj.forEach(item => {
-      // Check if this is a block item (has a 'type' discriminator field)
-      const itemIsBlock = item && typeof item === 'object' && 'type' in item;
-      cleanEmptyValues(item, itemIsBlock);
+      const itemIsBlock = schemaNode
+        ? schemaSaysBlock
+        : (item && typeof item === 'object' && 'type' in item);
+      cleanEmptyValues(item, itemSchema, itemIsBlock);
     });
-  } else if (obj && typeof obj === 'object') {
-    for (const key of Object.keys(obj)) {
-      const value = obj[key];
-      if (value === '' && !isBlockItem) {
-        // Only remove empty strings if NOT inside a block item
-        // Block items may have required fields that need empty string placeholders
+    return;
+  }
+  if (!obj || typeof obj !== 'object') return;
+
+  const props = (schemaNode && schemaNode.properties) || null;
+  const schemaKnown = !!props;
+  const required = new Set(
+    schemaNode && Array.isArray(schemaNode.required) ? schemaNode.required : []
+  );
+
+  for (const key of Object.keys(obj)) {
+    const value = obj[key];
+    const isRequired = required.has(key);
+    if (value === '') {
+      // Only ever drop a value the schema proves optional.
+      if (!isBlockItem && schemaKnown && !isRequired) delete obj[key];
+    } else if (value && typeof value === 'object') {
+      cleanEmptyValues(value, props ? props[key] : undefined, isBlockItem);
+      // Drop a now-empty object only when we can prove that key is optional.
+      if (
+        !isBlockItem && schemaKnown && !isRequired &&
+        !Array.isArray(value) && Object.keys(value).length === 0
+      ) {
         delete obj[key];
-      } else if (typeof value === 'object') {
-        cleanEmptyValues(value, isBlockItem);
-        // Remove empty objects (but not in block items)
-        if (!isBlockItem && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
-          delete obj[key];
-        }
       }
     }
   }
@@ -1831,13 +1875,10 @@ function initSortableCards(formElement, options) {
       onReorder(container, fromIndex, toIndex);
     }
 
-    // Dispatch event for immediate save (bypasses debounce)
+    // Dispatch event for the immediate save (the dashboard's cards-reordered
+    // handler persists the reorder). Do NOT also call onChange() — that would
+    // schedule a second debounced save behind the immediate one.
     formElement.dispatchEvent(new CustomEvent('cards-reordered', { bubbles: true }));
-
-    // Also trigger normal change callback
-    if (onChange) {
-      onChange();
-    }
   });
 }
 

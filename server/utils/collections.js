@@ -263,6 +263,48 @@ export async function getCollectionUsedByBlocks(collectionName) {
 }
 
 /**
+ * Humanise a slug into a display label. Used as the last-resort title when an
+ * entry has no title/name/heading field, so the page selector reads "Agencies"
+ * rather than "agencies".
+ */
+function humaniseSlug(slug) {
+  const s = String(slug).replace(/[-_]+/g, ' ').trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * A display title for each entry in a collection, keyed by slug.
+ *
+ * Lets the page selector show "Journal" for an entry whose slug is "blog"
+ * (its slug matches the URL it is served at, which the preview navigation
+ * relies on, but is a poor label). Falls back to a humanised slug when the
+ * entry has no title-like field, and to the raw slug if the file can't be read.
+ *
+ * @param {string} collectionName
+ * @param {string[]} [slugs] - Pre-fetched slugs; omit to list them here. Passing
+ *   them in avoids a second listing pass when the caller already has them.
+ * @returns {Promise<Record<string, string>>}
+ */
+export async function getCollectionEntryTitles(collectionName, slugs) {
+  if (!slugs) slugs = await getCollectionEntries(collectionName);
+
+  const pairs = await Promise.all(
+    slugs.map(async (slug) => {
+      try {
+        const content = await readContent(collectionName, slug);
+        const data = content.data || {};
+        const title = data.title || data.name || data.heading || humaniseSlug(slug);
+        return [slug, title];
+      } catch {
+        return [slug, slug];
+      }
+    })
+  );
+
+  return Object.fromEntries(pairs);
+}
+
+/**
  * Get all collections with their metadata
  */
 export async function getAllCollections() {
@@ -282,12 +324,17 @@ export async function getAllCollections() {
   const collections = await Promise.all(
     collectionNames.map(async (name) => {
       const entries = await getCollectionEntries(name);
+      // Reuse the slugs we just listed instead of listing them again.
+      const entryTitles = await getCollectionEntryTitles(name, entries);
       const schemaInfo = schemas[name] || {};
 
       return {
         name,
         type: schemaInfo.type || await getCollectionType(name),
         entries,
+        // Display label per entry (slug -> title); the selector shows this
+        // instead of the raw slug. Slugs stay in `entries` for value/URL use.
+        entryTitles,
         entryCount: entries.length,
         schema: schemaInfo.schema || { type: 'object', properties: {} },
         discriminatedUnions: schemaInfo.discriminatedUnions || [],

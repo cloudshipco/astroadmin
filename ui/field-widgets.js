@@ -10,6 +10,7 @@
 
 import { openImageLibrary, uploadNewImage } from './image-library.js';
 import { openGalleryEditor } from './gallery-editor.js';
+import { enhanceMarkdownEditor } from './markdown-toolbar.js';
 
 import { escapeHtml } from './escape-html.js';
 
@@ -37,6 +38,9 @@ export function setupFieldWidgets(container, onChange) {
   setupColorPickers(container, onChange);
   setupTextareas(container, onChange);
   setupReferenceFields?.(container, onChange);
+  // Markdown body fields get a formatting toolbar. enhanceMarkdownEditor is
+  // idempotent, so a re-render or a second widget pass won't stack toolbars.
+  container.querySelectorAll('textarea[data-markdown]').forEach(enhanceMarkdownEditor);
 }
 
 /**
@@ -122,6 +126,20 @@ export function resolveImageUrl(imagePath) {
 }
 
 /**
+ * Whether a stored value should show a thumbnail rather than the "No image
+ * selected" state. Anything non-empty is a real image EXCEPT a `placeholder:`
+ * marker (which a site renders as an outline) — resolveImageUrl already turns a
+ * bare filename, a relative path or a URL into something displayable, so gating
+ * on path *shape* would wrongly hide a valid bare-filename library image. The
+ * single source of truth for both first render and post-pick updates.
+ */
+export function isPreviewableImage(value) {
+  const trimmed = (value || '').trim();
+  // Case-insensitive: `PLACEHOLDER:banner` must not resolve to a broken <img>.
+  return trimmed !== '' && !/^placeholder:/i.test(trimmed);
+}
+
+/**
  * Update an image picker's hidden input and preview.
  * The stored value stays exactly as chosen; only the preview src is resolved —
  * the same rule generateImageField uses on first render, so a relative path
@@ -136,7 +154,7 @@ export function updateImagePicker(picker, url) {
 
   hiddenInput.value = url;
 
-  if (url && url.trim()) {
+  if (isPreviewableImage(url)) {
     previewImg.src = resolveImageUrl(url);
     preview.classList.remove('hidden');
     placeholder.classList.add('hidden');
@@ -264,25 +282,9 @@ function openTextareaModal(textarea, onChange) {
                      label.toLowerCase().includes('markdown') ||
                      label.toLowerCase().includes('content');
 
-  const markdownToolbar = isMarkdown ? `
-    <div class="markdown-toolbar">
-      <button type="button" class="markdown-btn" data-md="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>
-      <button type="button" class="markdown-btn" data-md="italic" title="Italic (Ctrl+I)"><em>I</em></button>
-      <button type="button" class="markdown-btn" data-md="code" title="Inline Code">&lt;/&gt;</button>
-      <span class="markdown-separator"></span>
-      <button type="button" class="markdown-btn" data-md="h2" title="Heading 2">H2</button>
-      <button type="button" class="markdown-btn" data-md="h3" title="Heading 3">H3</button>
-      <span class="markdown-separator"></span>
-      <button type="button" class="markdown-btn" data-md="ul" title="Bullet List">• List</button>
-      <button type="button" class="markdown-btn" data-md="ol" title="Numbered List">1. List</button>
-      <button type="button" class="markdown-btn" data-md="quote" title="Blockquote">" Quote</button>
-      <span class="markdown-separator"></span>
-      <button type="button" class="markdown-btn" data-md="link" title="Link">[Link]</button>
-      <button type="button" class="markdown-btn" data-md="image" title="Image">🖼️</button>
-      <button type="button" class="markdown-btn" data-md="codeblock" title="Code Block">{ }</button>
-    </div>
-  ` : '';
-
+  // The toolbar is injected by enhanceMarkdownEditor after mount, so the
+  // fullscreen editor and the inline body editor share one toolbar (same
+  // controls, same image-library picker).
   let modal = document.getElementById('textareaModal');
   if (!modal) {
     modal = document.createElement('div');
@@ -297,7 +299,6 @@ function openTextareaModal(textarea, onChange) {
         <h3>${escapeHtml(label)}</h3>
         <button type="button" class="textarea-modal-close" data-close-textarea-modal>&times;</button>
       </div>
-      ${markdownToolbar}
       <div class="textarea-modal-body">
         <textarea id="textareaModalInput" class="textarea-modal-input ${isMarkdown ? 'markdown-input' : ''}" placeholder="Enter your text...">${escapeHtml(textarea.value)}</textarea>
       </div>
@@ -349,28 +350,12 @@ function openTextareaModal(textarea, onChange) {
       saveAndClose();
       return;
     }
-    if (isMarkdown && (e.metaKey || e.ctrlKey)) {
-      if (e.key === 'b') {
-        e.preventDefault();
-        insertMarkdown(modalInput, 'bold');
-      } else if (e.key === 'i') {
-        e.preventDefault();
-        insertMarkdown(modalInput, 'italic');
-      } else if (e.key === 'k') {
-        e.preventDefault();
-        insertMarkdown(modalInput, 'link');
-      }
-    }
+    // Formatting shortcuts (Cmd/Ctrl+B/I/K) are handled by enhanceMarkdownEditor.
   });
 
-  if (isMarkdown) {
-    modal.querySelectorAll('[data-md]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        insertMarkdown(modalInput, btn.dataset.md);
-        modalInput.focus();
-      });
-    });
-  }
+  // Prose fields get the shared markdown toolbar (same controls + image-library
+  // picker as the inline body editor).
+  if (isMarkdown) enhanceMarkdownEditor(modalInput);
 
   setTimeout(() => {
     modalInput.focus();
@@ -378,74 +363,4 @@ function openTextareaModal(textarea, onChange) {
   }, 100);
 }
 
-/**
- * Insert markdown formatting at the cursor
- */
-function insertMarkdown(textarea, action) {
-  const text = textarea.value;
-  const start = textarea.selectionStart;
-
-  let before = '';
-  let after = '';
-  let placeholder = '';
-  let cursorOffset = 0;
-
-  switch (action) {
-    case 'bold':
-      before = '**'; after = '**'; placeholder = 'bold text'; cursorOffset = 2;
-      break;
-    case 'italic':
-      before = '_'; after = '_'; placeholder = 'italic text'; cursorOffset = 1;
-      break;
-    case 'code':
-      before = '`'; after = '`'; placeholder = 'code'; cursorOffset = 1;
-      break;
-    case 'h2': {
-      const lineStart = text.lastIndexOf('\n', start - 1) + 1;
-      textarea.setSelectionRange(lineStart, lineStart);
-      before = '## '; cursorOffset = 3;
-      break;
-    }
-    case 'h3': {
-      const lineStart = text.lastIndexOf('\n', start - 1) + 1;
-      textarea.setSelectionRange(lineStart, lineStart);
-      before = '### '; cursorOffset = 4;
-      break;
-    }
-    case 'ul':
-      before = '- '; placeholder = 'list item'; cursorOffset = 2;
-      break;
-    case 'ol':
-      before = '1. '; placeholder = 'list item'; cursorOffset = 3;
-      break;
-    case 'quote':
-      before = '> '; placeholder = 'quote'; cursorOffset = 2;
-      break;
-    case 'link':
-      before = '['; after = '](url)'; placeholder = 'link text'; cursorOffset = 1;
-      break;
-    case 'image':
-      before = '!['; after = '](image-url)'; placeholder = 'alt text'; cursorOffset = 2;
-      break;
-    case 'codeblock':
-      before = '\n```\n'; after = '\n```\n'; placeholder = 'code'; cursorOffset = 5;
-      break;
-  }
-
-  const actualStart = textarea.selectionStart;
-  const actualEnd = textarea.selectionEnd;
-  const selected = textarea.value.substring(actualStart, actualEnd);
-  const insert = selected || placeholder;
-
-  textarea.value =
-    textarea.value.substring(0, actualStart) + before + insert + after + textarea.value.substring(actualEnd);
-
-  if (selected) {
-    textarea.setSelectionRange(actualStart + before.length, actualStart + before.length + insert.length);
-  } else {
-    textarea.setSelectionRange(actualStart + cursorOffset, actualStart + cursorOffset + placeholder.length);
-  }
-
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
-}
 

@@ -99,3 +99,16 @@ Version semantics: npm `0.2.0 → 1.1.0` is the files-first line; git tag
 `v1.0.0` is the shelved SQLite store and was **never published to npm** — don't
 reuse 1.0.0. Pre-publish sanity: `npm pack --dry-run` (the `files` allowlist
 must keep plans/, docs/, tests/ out of the tarball).
+
+## Testing the Astro integration / injected preview script
+
+`integration/index.js` (the script injected into preview pages, e.g. block
+focus and click-to-edit `data-aa-field` handling) is resolved by a consuming
+site from **its own `node_modules/astroadmin`**, NOT from your source checkout —
+even when you run the admin from source (`bun bin/cli.js dev --project <site>`,
+which starts the *site's* `astro dev`). So edits to `integration/index.js` do
+not reach the preview iframe until published. To test end-to-end, temporarily
+copy it over the site's `node_modules/astroadmin/integration/index.js` and
+restart, then restore (it's gitignored; any reinstall wipes it silently). By
+contrast the admin UI (`ui/*.js`) IS served from your source, so dashboard.js /
+form-generator.js changes are live on browser reload.

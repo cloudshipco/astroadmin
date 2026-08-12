@@ -73,6 +73,72 @@
     @apply ring-2 ring-primary-500 outline-none;
   }
 
+  /* Searchable entry picker (replaces the native selector) */
+  .entry-picker-native-hidden {
+    @apply hidden;
+  }
+
+  .entry-picker-button {
+    @apply flex items-center justify-between gap-3 bg-gray-800 text-white border border-gray-700 rounded-md px-3 py-1.5 text-sm min-w-[220px] max-w-[360px] cursor-pointer hover:bg-gray-700 transition-colors;
+  }
+  .entry-picker-button:focus {
+    @apply ring-2 ring-primary-500 outline-none;
+  }
+  .entry-picker-button-label {
+    @apply truncate text-left;
+  }
+  .entry-picker-button-caret {
+    @apply text-gray-400 text-xs shrink-0;
+  }
+
+  .entry-picker-overlay {
+    @apply fixed inset-0 bg-black/50 z-[75] flex items-start justify-center p-4 pt-[12vh];
+  }
+  .entry-picker-overlay.hidden {
+    display: none;
+  }
+  .entry-picker-modal {
+    @apply bg-white rounded-xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden max-h-[70vh];
+  }
+  .entry-picker-search-wrap {
+    @apply p-3 border-b border-gray-200;
+  }
+  .entry-picker-search {
+    @apply w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none;
+  }
+  .entry-picker-list {
+    @apply overflow-y-auto py-2;
+  }
+  .entry-picker-group {
+    @apply px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-400;
+  }
+  .entry-picker-row {
+    @apply flex items-center gap-2 w-full text-left px-4 py-2 text-sm text-gray-800 cursor-pointer;
+  }
+  .entry-picker-row:hover,
+  .entry-picker-row.active {
+    @apply bg-primary-50 text-primary-700;
+  }
+  .entry-picker-row.is-new {
+    @apply text-primary-600 font-medium;
+  }
+  .entry-picker-row-check {
+    @apply w-4 shrink-0 text-primary-600;
+  }
+  .entry-picker-row-label {
+    @apply truncate;
+  }
+  /* Muted slug shown only when two entries share a display title. */
+  .entry-picker-row-slug {
+    @apply ml-auto shrink-0 pl-3 text-xs text-gray-400;
+  }
+  .entry-picker-empty {
+    @apply px-4 py-6 text-center text-sm text-gray-400;
+  }
+  .entry-picker-empty.hidden {
+    display: none;
+  }
+
   .topbar-right {
     @apply flex items-center gap-3;
   }
@@ -543,6 +609,9 @@
 
   .image-picker-preview {
     @apply relative mb-3 rounded-lg overflow-hidden bg-gray-100;
+    /* Floor the height so a broken/short image can't collapse the box and clip
+       the round clear button that sits at top-right. */
+    min-height: 2.75rem;
   }
 
   .image-picker-preview.hidden {
@@ -1416,6 +1485,20 @@
   .textarea-autogrow {
     @apply resize-y;
     min-height: 100px;
+  }
+
+  /* Markdown body formatting toolbar */
+  .md-toolbar {
+    @apply flex flex-wrap items-center gap-0.5 mb-1.5 p-1 border border-gray-200 rounded-md bg-gray-50;
+  }
+
+  .md-toolbar-btn {
+    @apply flex items-center justify-center min-w-8 h-8 px-2 text-sm text-gray-600 rounded hover:bg-white hover:text-gray-900 border border-transparent hover:border-gray-200 transition-colors cursor-pointer;
+    line-height: 1;
+  }
+
+  .md-toolbar-btn:active {
+    @apply bg-gray-100;
   }
 
   /* Textarea Modal */

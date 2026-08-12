@@ -77,6 +77,43 @@ const adminPreviewScript = `
     pathname: window.location.pathname
   }, '*');
 
+  // Click-to-edit: a site marks an editable element with data-aa-field="<name>".
+  // Clicking it tells the editor to focus that control. A subtle hover
+  // affordance shows those elements are clickable in the preview.
+  // Style via a stylesheet + a toggle class (not inline styles), so we never
+  // clobber or fail to restore a consumer's own inline outline/transition. No
+  // transition shorthand either — that would override the tagged element's own.
+  const affordance = document.createElement('style');
+  affordance.textContent =
+    '[data-aa-field]{cursor:pointer}' +
+    '[data-aa-field]:hover{outline:2px dashed rgba(59,130,246,.7);outline-offset:3px}' +
+    '.aa-highlight{outline:2px solid #3b82f6;outline-offset:3px}';
+  document.head.appendChild(affordance);
+
+  document.addEventListener('click', (event) => {
+    const el = event.target.closest && event.target.closest('[data-aa-field]');
+    if (!el) return;
+    // Let genuine links still navigate; otherwise there's no default to block.
+    window.parent.postMessage({ type: 'fieldFocus', field: el.dataset.aaField }, '*');
+  });
+
+  // Briefly outline an element when its control is focused/clicked in the editor.
+  // One shared timer, cleared on every call, so re-highlighting (even a different
+  // element) can't let a stale timeout strip the newer highlight early.
+  let highlightTimer = null;
+  function highlightEl(el) {
+    if (currentHighlight) currentHighlight.classList.remove('aa-highlight');
+    if (highlightTimer) clearTimeout(highlightTimer);
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('aa-highlight');
+    currentHighlight = el;
+    highlightTimer = setTimeout(() => {
+      el.classList.remove('aa-highlight');
+      if (currentHighlight === el) currentHighlight = null;
+      highlightTimer = null;
+    }, 1500);
+  }
+
   // Listen for messages from AstroAdmin
   window.addEventListener('message', (event) => {
     // Handle scroll restoration
@@ -85,43 +122,36 @@ const adminPreviewScript = `
       return;
     }
 
-    // Handle block focus
+    // Highlight an editable element when its control is focused in the editor.
+    // Compare the attribute value directly rather than interpolating it into a
+    // selector — the field name is untrusted (it comes from the editor) and a
+    // value with quotes/brackets/newlines would inject or crash querySelector.
+    if (event.data?.type === 'highlightField') {
+      const field = event.data.field;
+      if (typeof field !== 'string') return;
+      const el = Array.prototype.find.call(
+        document.querySelectorAll('[data-aa-field]'),
+        (e) => e.getAttribute('data-aa-field') === field
+      );
+      if (el) highlightEl(el);
+      return;
+    }
+
+    // Handle block focus — reuse the SAME class-based highlight as field focus
+    // so the two share one cleanup path (previously block focus used inline
+    // styles while field focus used a class, leaving stale highlights when they
+    // interleaved).
     if (event.data?.type === 'focusBlock') {
       const { index, fieldName } = event.data;
-
-      // Remove previous highlight
-      if (currentHighlight) {
-        currentHighlight.style.outline = '';
-        currentHighlight.style.outlineOffset = '';
-        currentHighlight = null;
-      }
-
       const blocks = findBlocks();
       const block = blocks[index];
-
       if (block) {
         let targetElement = block;
-
-        // Try to find specific field element if provided
         if (fieldName && fieldSelectors[fieldName]) {
           const specificEl = block.querySelector(fieldSelectors[fieldName]);
           if (specificEl) targetElement = specificEl;
         }
-
-        // Scroll and highlight
-        targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        targetElement.style.outline = '2px dashed #3b82f6';
-        targetElement.style.outlineOffset = '4px';
-        currentHighlight = targetElement;
-
-        // Remove highlight after 2 seconds
-        setTimeout(() => {
-          if (currentHighlight === targetElement) {
-            targetElement.style.outline = '';
-            targetElement.style.outlineOffset = '';
-            currentHighlight = null;
-          }
-        }, 2000);
+        highlightEl(targetElement);
       }
     }
   });
