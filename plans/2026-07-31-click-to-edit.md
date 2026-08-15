@@ -61,10 +61,11 @@ also had `name="body"`, so extractFormData put it into `data`, and
 Pre-existing (on main) — would have corrupted every client blog-post edit. Fixed
 by stripping `body` from the extracted data when a markdown editor is present.
 
-**Not yet delivered:** the reusable plumbing lives in astroadmin source only; the
-site's live click-to-edit uses a TEMPORARY copy of `integration/index.js` in the
-site's `node_modules/astroadmin` that any reinstall wipes. Real delivery = publish
-astroadmin + bump the site's pin (same outstanding rollout as the rest of the branch).
+**Delivered in astroadmin 1.4.1 (2026-08-12).** Published to npm; the site's
+astroadmin pin bumped to `^1.4.1`, so the click-to-edit plumbing now installs
+from the registry and the temporary `integration/index.js` override is
+superseded by the published file (verified byte-identical). Note: 1.4.0 was
+withdrawn (built from a stale base) and re-cut cleanly as 1.4.1.
 
 ## Pre-release review (Codex, 2026-08-12) — fixed in e60667e
 

@@ -100,6 +100,15 @@ Version semantics: npm `0.2.0 → 1.1.0` is the files-first line; git tag
 reuse 1.0.0. Pre-publish sanity: `npm pack --dry-run` (the `files` allowlist
 must keep plans/, docs/, tests/ out of the tarball).
 
+**Before publishing, verify the release base is not stale.** `git fetch origin`,
+then confirm `git log origin/main --not main` is **empty** — i.e. every commit on
+`origin/main` is already contained in what you are about to release. A non-empty
+result means your local base is behind `origin/main` and a release (especially a
+squash-merge onto local `main`) would silently drop those upstream fixes. This is
+exactly how 1.4.0 shipped without the 1.3.x apostrophe/array data-loss guard and
+renderer unification, and had to be withdrawn and re-cut as 1.4.1. A withdrawn
+version number is burned on npm for 24h — bump to the next patch rather than wait.
+
 ## Testing the Astro integration / injected preview script
 
 `integration/index.js` (the script injected into preview pages, e.g. block
