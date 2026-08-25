@@ -1,7 +1,7 @@
 {
   "name": "astroadmin",
   "version": "1.4.5",
-  "description": "The git-native CMS for Astro \u2014 auto-generates an editing UI from your content collection Zod schemas; publish = git push",
+  "description": "The git-native CMS for Astro — auto-generates an editing UI from your content collection Zod schemas; publish = git push",
   "type": "module",
   "main": "server/index.js",
   "exports": {
@@ -43,6 +43,7 @@
   },
   "homepage": "https://astroadmin.dev",
   "dependencies": {
+    "@babel/parser": "^7.26.0",
     "alpinejs": "^3.15.2",
     "chokidar": "^4.0.3",
     "commander": "^12.1.0",
@@ -53,10 +54,9 @@
     "express-session": "^1.18.1",
     "gray-matter": "^4.0.3",
     "multer": "^2.0.2",
-    "simple-git": "^3.27.0",
+    "simple-git": "^3.36.0",
     "ws": "^8.18.0",
-    "zod-to-json-schema": "^3.24.0",
-    "@babel/parser": "^7.26.0"
+    "zod-to-json-schema": "^3.24.0"
   },
   "peerDependencies": {
     "astro": ">=6.0.0",
