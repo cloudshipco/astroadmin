@@ -1678,7 +1678,7 @@ window.addEventListener('message', (event) => {
     const currentPath = getCurrentPagePath();
     if (currentPath !== null && norm === ((currentPath.replace(/\/+$/, '')) || '/')) return;
 
-    const target = resolvePreviewTarget(norm, allPages, allCollections);
+    const target = resolvePreviewTarget(norm, allPages, allCollections, collectionOrder);
     if (target && !(currentCollection === target.collection && currentSlug === target.slug)) {
       loadEntry(target.collection, target.slug, true);
     }

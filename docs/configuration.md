@@ -94,6 +94,14 @@ edited. A site whose homepage is its own single-entry collection — because it
 has a hero rather than a standard page header — usually wants it listed first,
 since that is the entry an editor reaches for most.
 
+`collectionOrder` also breaks ties when the preview is read backwards. A preview
+route is a display hint — "show this URL while editing this entry" — so two
+collections can legitimately point at the same page: a site-settings entry
+previews at `/` because the header and footer it edits are visible there, and so
+does the homepage's own content. When someone navigates to `/` in the preview,
+the collection listed earlier wins. Without an order, the first matching
+collection wins, which is stable but arbitrary — so list the one you mean.
+
 ### Authentication
 
 Configure admin login credentials. For anything internet-facing, prefer an

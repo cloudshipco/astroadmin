@@ -36,19 +36,36 @@ function escapeRegExp(string) {
  * @param {Array<{name: string, previewRoute?: string|null}>} collections
  * @returns {{collection: string, slug: string}|null}
  */
-export function resolvePreviewTarget(norm, pages = [], collections = []) {
+export function resolvePreviewTarget(norm, pages = [], collections = [], collectionOrder = []) {
   const slug = norm === '/' ? 'home' : norm.replace(/^\/+/, '');
   if (pages.some((p) => p.collection === 'pages' && p.slug === slug)) {
     return { collection: 'pages', slug };
   }
 
-  for (const coll of collections) {
+  // Static-route candidates. A preview route is a DISPLAY hint — "show this URL
+  // while editing this entry" — so more than one collection can legitimately
+  // point at the same page: a site-settings entry previews at '/' because the
+  // header and footer it edits are visible there, and so does the homepage's own
+  // content. Read in reverse, that is ambiguous.
+  //
+  // `collectionOrder` breaks the tie, because it is the site already saying
+  // which collection it considers primary. Unlisted collections sort last, and
+  // a site that has expressed no preference keeps the natural order — so this is
+  // deterministic either way, never a coin flip that lands on site settings when
+  // the editor meant the page.
+  const candidates = collections.filter((coll) => {
     const route = coll.previewRoute;
-    if (!route || route.includes('{slug}')) continue;
-    if ((route.replace(/\/+$/, '') || '/') !== norm) continue;
-    const entries = pages.filter((p) => p.collection === coll.name);
-    if (entries.length !== 1) continue;
-    return { collection: coll.name, slug: entries[0].slug };
+    if (!route || route.includes('{slug}')) return false;
+    if ((route.replace(/\/+$/, '') || '/') !== norm) return false;
+    return pages.filter((p) => p.collection === coll.name).length === 1;
+  });
+  if (candidates.length) {
+    const rank = (name) => {
+      const i = collectionOrder.indexOf(name);
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    const best = candidates.reduce((a, b) => (rank(b.name) < rank(a.name) ? b : a));
+    return { collection: best.name, slug: pages.find((p) => p.collection === best.name).slug };
   }
 
   for (const coll of collections) {
