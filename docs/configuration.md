@@ -76,6 +76,24 @@ disable the live-status check (the editor falls back to a "live shortly"
 message). Backed by a server-side `GET /api/publish/live-status` endpoint, so
 there's no browser cross-origin issue.
 
+### Entry picker order
+
+The entry picker groups entries by collection. `collectionOrder` decides the
+order of those groups. Any collection you do not name keeps its natural order
+after the ones you do, so you only list what you want to move:
+
+```javascript
+export default {
+  // The homepage group first, then pages, then everything else.
+  collectionOrder: ['home', 'pages'],
+};
+```
+
+Defaults to `['pages']`, which suits a site whose pages are the main thing being
+edited. A site whose homepage is its own single-entry collection — because it
+has a hero rather than a standard page header — usually wants it listed first,
+since that is the entry an editor reaches for most.
+
 ### Authentication
 
 Configure admin login credentials. For anything internet-facing, prefer an
@@ -208,6 +226,9 @@ export default {
   preview: {
     url: process.env.PREVIEW_URL || 'http://localhost:4321',
   },
+
+  // Order of collection groups in the entry picker
+  collectionOrder: ['home', 'pages'],
 
   // Authentication
   auth: {

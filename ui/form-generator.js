@@ -139,6 +139,35 @@ function generateField(name, schema, value, path = '', ctx = {}) {
   const fullPath = path ? `${path}.${name}` : name;
   const id = idPrefix + fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
 
+  // A `const` (Zod's z.literal) is fixed by the schema — there is nothing for an
+  // editor to decide. Rendered editable it is worse than useless: a single-entry
+  // file() collection identifies its entry by `id`, so changing it makes the
+  // entry unfindable and the consuming site's next build fails on a missing
+  // entry. Render it read-only.
+  //
+  // Read-only rather than disabled, and still carrying its `name`: extractFields
+  // reads values through `new FormData(container)`, which includes readonly
+  // controls but drops disabled ones — disabling it would silently strip the
+  // key on every save.
+  if (schema.const !== undefined) {
+    return `
+      <div class="form-group">
+        <label for="${id}" class="form-label">${getFieldLabel(name, schema)}</label>
+        <input
+          type="text"
+          name="${fullPath}"
+          id="${id}"
+          value="${escapeHtml(String(schema.const))}"
+          class="form-input"
+          readonly
+          tabindex="-1"
+          aria-readonly="true"
+        >
+        <span class="form-help">Set by the site's schema — not editable.</span>
+      </div>
+    `;
+  }
+
   // Handle blocks array (discriminated union)
   if (schema.type === 'array' && schema.blockTypes) {
     return generateBlocksField(name, schema, value, fullPath);

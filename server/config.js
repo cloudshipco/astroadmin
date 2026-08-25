@@ -70,6 +70,17 @@ const defaultConfig = {
     method: IS_DEV ? 'hot-reload' : 'build',
   },
 
+  // Order of collection groups in the entry picker. Names not listed keep their
+  // natural order after the listed ones, so a site only names what it wants to
+  // move. Defaults to putting a site's pages first, which suits most sites; a
+  // site whose homepage is its own single-entry collection typically wants
+  // `['home', 'pages']`.
+  //
+  // This used to be a hardcoded list in the dashboard that named two
+  // collections from particular sites — the sort of site-specific assumption
+  // this project is supposed to avoid.
+  collectionOrder: ['pages'],
+
   // Public/production site origin (browser-facing), e.g. https://example.com.
   // Optional. When set, the editor offers a "View live site" link and, after a
   // Publish, polls this origin to detect when the change is actually live

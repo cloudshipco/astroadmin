@@ -27,6 +27,9 @@ let isNewEntry = false; // Track if current entry is new (unsaved)
 let isVirtualPage = false; // Track if current view is a virtual page
 let selectedPreviewBlock = null; // For component preview: which block to render with
 let gitEnabled = true; // Whether git integration is enabled (from /api/config)
+// Collection group order for the entry picker (from /api/config). Empty until
+// loadConfig() resolves, which init() awaits before loadPages() builds the list.
+let collectionOrder = [];
 
 // Monotonic id for the in-flight entry load. A slower earlier load must not
 // overwrite a newer selection when its response arrives out of order.
@@ -72,6 +75,7 @@ async function loadConfig() {
     previewUrl = data.previewUrl;
     publicUrl = data.publicUrl || '';
     gitEnabled = data.gitEnabled !== false;
+    if (Array.isArray(data.collectionOrder)) collectionOrder = data.collectionOrder;
 
     // Content lives in the database, so the git-history "Changes" panel only
     // makes sense when git is enabled. Hide it otherwise (publish still works
@@ -131,16 +135,14 @@ function populatePageSelector(collections, i18nInfo = null, staticPages = []) {
   // read-only dead-end. (`allStaticPages` is still kept for preview-URL
   // resolution and any legacy /dashboard/__page__/ deep link.)
 
-  // Sort collections: pages first, then testimonials, then metadata last
-  const collectionOrder = ['pages', 'testimonials', 'metadata'];
-  const sortedCollections = [...collections].sort((a, b) => {
-    const aIndex = collectionOrder.indexOf(a.name);
-    const bIndex = collectionOrder.indexOf(b.name);
-    // If not in order list, put at end
-    const aOrder = aIndex === -1 ? 999 : aIndex;
-    const bOrder = bIndex === -1 ? 999 : bIndex;
-    return aOrder - bOrder;
-  });
+  // Group order comes from config (`collectionOrder`). Anything unlisted sorts
+  // after the listed names, keeping its natural order — Array.sort is stable, so
+  // equal ranks are left alone.
+  const rank = (name) => {
+    const i = collectionOrder.indexOf(name);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  const sortedCollections = [...collections].sort((a, b) => rank(a.name) - rank(b.name));
 
   sortedCollections.forEach(collection => {
     // Create optgroup for each collection

@@ -98,6 +98,7 @@ export async function createServer() {
       previewMethod: fullConfig.preview.method,
       publicUrl: fullConfig.publicUrl || null,
       gitEnabled: fullConfig.git.enabled,
+      collectionOrder: fullConfig.collectionOrder || [],
     });
   });
 

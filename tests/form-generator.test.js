@@ -339,5 +339,46 @@ check('cleanEmptyValues cleans a TOP-LEVEL array against its schema', () => {
   assert.ok(!('note' in data[0]), 'optional empty dropped');
 });
 
+// --- const (z.literal) is fixed by the schema -------------------------------
+// A single-entry file() collection identifies its entry by `id`, so an editable
+// id lets someone rename it to something nothing can find — the site's next
+// build then fails on a missing entry.
+
+check('a const field renders read-only', () => {
+  const html = generateForm(
+    { type: 'object', properties: { id: { type: 'string', const: 'home' }, headline: { type: 'string' } } },
+    { id: 'home', headline: 'Hello' },
+  );
+  const idInput = html.match(/<input[^>]*name="id"[^>]*>/s);
+  assert.ok(idInput, 'const field should still render an input');
+  assert.ok(/\breadonly\b/.test(idInput[0]), 'const field must be readonly');
+  assert.ok(/value="home"/.test(idInput[0]), 'const field shows its fixed value');
+  // Disabled controls are omitted by FormData, which extractFields uses — a
+  // disabled id would be silently dropped from the entry on every save.
+  assert.ok(!/\bdisabled\b/.test(idInput[0]), 'must be readonly, never disabled');
+});
+
+check('a const field is not rendered as a textarea', () => {
+  const html = generateForm(
+    { type: 'object', properties: { id: { type: 'string', const: 'site' } } },
+    { id: 'site' },
+  );
+  assert.ok(!/<textarea[^>]*name="id"/s.test(html), 'a fixed one-word value must not get a textarea');
+});
+
+check('a non-const field of the same shape stays editable', () => {
+  // Negative control: without `const` the very same property must stay editable,
+  // otherwise the two checks above would pass no matter what this branch did.
+  // A plain string renders as an autogrow textarea, not an input — which is
+  // exactly why a const rendered through the default path was a large box.
+  const html = generateForm(
+    { type: 'object', properties: { id: { type: 'string' } } },
+    { id: 'home' },
+  );
+  const control = html.match(/<textarea[^>]*name="id"[^>]*>/s) || html.match(/<input[^>]*name="id"[^>]*>/s);
+  assert.ok(control, 'plain string field still renders an editable control');
+  assert.ok(!/\breadonly\b/.test(control[0]), 'a field without const must remain editable');
+});
+
 console.log('\n========================================\n');
 console.log(`📊 ${passed} checks passed.`);
