@@ -3,6 +3,7 @@
  */
 
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
+import { resolvePreviewTarget } from './preview-routes.js';
 import { registerReferenceFieldHandlers } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
@@ -1677,33 +1678,11 @@ window.addEventListener('message', (event) => {
     const currentPath = getCurrentPagePath();
     if (currentPath !== null && norm === ((currentPath.replace(/\/+$/, '')) || '/')) return;
 
-    const slug = norm === '/' ? 'home' : norm.replace(/^\/+/, '');
-    const pagesEntry = allPages.find((p) => p.collection === 'pages' && p.slug === slug);
-    if (pagesEntry) {
-      if (!(currentCollection === 'pages' && slug === currentSlug)) loadEntry('pages', slug, true);
-      return;
+    const target = resolvePreviewTarget(norm, allPages, allCollections);
+    if (target && !(currentCollection === target.collection && currentSlug === target.slug)) {
+      loadEntry(target.collection, target.slug, true);
     }
-
-    // Otherwise map the URL to a collection entry via that collection's preview
-    // route — e.g. blog posts render at /blog/{slug}, so clicking a post in the
-    // preview loads that post for editing. Routes without a {slug} placeholder
-    // (a whole-collection page like /faq) have no per-entry URL and are skipped.
-    for (const coll of allCollections) {
-      const route = coll.previewRoute;
-      if (!route || !route.includes('{slug}')) continue;
-      // Normalise the route's trailing slash the same way `norm` is, so a
-      // configured `/blog/{slug}/` still matches the normalised `/blog/x`.
-      const pattern = '^' + route.replace(/\/+$/, '').split('{slug}').map(escapeRegExp).join('(.+)') + '$';
-      const match = norm.match(new RegExp(pattern));
-      if (!match) continue;
-      const entrySlug = match[1];
-      if (allPages.some((p) => p.collection === coll.name && p.slug === entrySlug)) {
-        if (!(currentCollection === coll.name && entrySlug === currentSlug)) {
-          loadEntry(coll.name, entrySlug, true);
-        }
-        return;
-      }
-    }
+    if (target) return;
     // Unresolved (a route with no matching content entry) — leave the editor
     // as it is rather than opening a read-only view.
   }
