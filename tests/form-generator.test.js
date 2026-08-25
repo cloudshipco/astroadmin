@@ -344,26 +344,32 @@ check('cleanEmptyValues cleans a TOP-LEVEL array against its schema', () => {
 // id lets someone rename it to something nothing can find — the site's next
 // build then fails on a missing entry.
 
-check('a const field renders read-only', () => {
+check('a const field renders nothing visible', () => {
   const html = generateForm(
     { type: 'object', properties: { id: { type: 'string', const: 'home' }, headline: { type: 'string' } } },
     { id: 'home', headline: 'Hello' },
   );
   const idInput = html.match(/<input[^>]*name="id"[^>]*>/s);
-  assert.ok(idInput, 'const field should still render an input');
-  assert.ok(/\breadonly\b/.test(idInput[0]), 'const field must be readonly');
-  assert.ok(/value="home"/.test(idInput[0]), 'const field shows its fixed value');
-  // Disabled controls are omitted by FormData, which extractFields uses — a
-  // disabled id would be silently dropped from the entry on every save.
-  assert.ok(!/\bdisabled\b/.test(idInput[0]), 'must be readonly, never disabled');
+  assert.ok(idInput, 'the field must still exist in the DOM');
+  assert.ok(/type="hidden"/.test(idInput[0]), 'a const must be a hidden input');
+  assert.ok(/value="home"/.test(idInput[0]), 'it carries its fixed value');
+  // Nothing visible: no label, no help text, no form-group wrapper of its own.
+  assert.ok(!/<label[^>]*for="id"/s.test(html), 'a const must not render a label');
+  assert.ok(!/not editable/i.test(html), 'a const must not explain itself to the editor');
+  assert.ok(!/<textarea[^>]*name="id"/s.test(html), 'and certainly not a textarea');
 });
 
-check('a const field is not rendered as a textarea', () => {
+check('a const value survives a form round-trip', () => {
+  // The reason it stays in the DOM at all. extractFields reads submitted values
+  // via FormData, which includes hidden inputs but would simply not see a field
+  // that was omitted — dropping `id` and orphaning a single-entry collection.
   const html = generateForm(
-    { type: 'object', properties: { id: { type: 'string', const: 'site' } } },
-    { id: 'site' },
+    { type: 'object', properties: { id: { type: 'string', const: 'home' }, headline: { type: 'string' } } },
+    { id: 'home', headline: 'Hello' },
   );
-  assert.ok(!/<textarea[^>]*name="id"/s.test(html), 'a fixed one-word value must not get a textarea');
+  const idInput = html.match(/<input[^>]*name="id"[^>]*>/s)[0];
+  assert.ok(!/\bdisabled\b/.test(idInput),
+    'must not be disabled — FormData omits disabled controls, silently losing the key');
 });
 
 check('a non-const field of the same shape stays editable', () => {

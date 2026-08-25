@@ -139,33 +139,18 @@ function generateField(name, schema, value, path = '', ctx = {}) {
   const fullPath = path ? `${path}.${name}` : name;
   const id = idPrefix + fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
 
-  // A `const` (Zod's z.literal) is fixed by the schema — there is nothing for an
-  // editor to decide. Rendered editable it is worse than useless: a single-entry
-  // file() collection identifies its entry by `id`, so changing it makes the
-  // entry unfindable and the consuming site's next build fails on a missing
-  // entry. Render it read-only.
+  // A `const` (Zod's z.literal) is fixed by the schema, so it is not a decision
+  // an editor can make — and this UI is for non-technical people, who gain
+  // nothing from a box they are told they may not touch. Render nothing visible.
   //
-  // Read-only rather than disabled, and still carrying its `name`: extractFields
-  // reads values through `new FormData(container)`, which includes readonly
-  // controls but drops disabled ones — disabling it would silently strip the
-  // key on every save.
+  // It still has to exist in the DOM: extractFields reads the submitted values
+  // out of the form via `new FormData(container)`, so a field with no control at
+  // all would be dropped from the entry on the next save. A single-entry file()
+  // collection is found by its `id`, so losing it would orphan the entry and
+  // fail the consuming site's build. A hidden input carries the value through
+  // untouched while showing the editor nothing.
   if (schema.const !== undefined) {
-    return `
-      <div class="form-group">
-        <label for="${id}" class="form-label">${getFieldLabel(name, schema)}</label>
-        <input
-          type="text"
-          name="${fullPath}"
-          id="${id}"
-          value="${escapeHtml(String(schema.const))}"
-          class="form-input"
-          readonly
-          tabindex="-1"
-          aria-readonly="true"
-        >
-        <span class="form-help">Set by the site's schema — not editable.</span>
-      </div>
-    `;
+    return `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(String(schema.const))}">`;
   }
 
   // Handle blocks array (discriminated union)
