@@ -1703,9 +1703,16 @@ function focusEditorField(field) {
   if (!el) return;
   const block = el.closest('.block-item.collapsed');
   if (block) block.querySelector('.block-header')?.click(); // expand it
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  if (typeof el.focus === 'function') el.focus({ preventScroll: true });
-  flashFieldGroup(el.closest('.form-group') || el);
+  // Widgets whose named control is a hidden input (the image picker, array
+  // data, a block's type) have no box to scroll to and cannot take focus, so
+  // scrolling/focusing the input is a silent no-op and the editor never moves —
+  // from the preview side that reads as "clicking the image does nothing".
+  // Scroll to the visible group instead and skip the focus.
+  const group = el.closest('.form-group') || el;
+  const visible = el.type !== 'hidden';
+  (visible ? el : group).scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (visible && typeof el.focus === 'function') el.focus({ preventScroll: true });
+  flashFieldGroup(group);
 }
 
 // Briefly flash a field group. Tracks one timer + the ORIGINAL inline style per
