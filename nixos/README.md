@@ -11,13 +11,25 @@ for secrets.
 - a **git checkout** of the site repo at `projectRoot` (content + preview source);
 - the **AstroAdmin server** (`astroadmin start`) on `127.0.0.1:<adminPort>` — the
   editor + the content-commit/push path;
-- an **`astro dev` preview** on `127.0.0.1:<previewPort>` — localhost only
-  (see the preview caveat below);
+- an **`astro dev` preview** on `127.0.0.1:<previewPort>`, reached in the browser
+  through its own authenticated TLS vhost at `previewHost`;
 - an **nginx** TLS vhost at `domain` (per-host Let's Encrypt cert, HTTP-01) →
   the admin port.
 
-No untrusted code runs on the host: the site code is first-party, and the npm
-dependency tree builds on Netlify (build-on-push), not here.
+**Untrusted code does run on the host.** The site's own code is first-party, but
+its npm/bun dependency tree is not, and that tree executes here: the checkout
+one-shot runs `bun install` (postinstall scripts) and the preview runs
+`astro dev`. Netlify builds the *public* site, which is a separate thing.
+
+That is what the isolation is for. Each instance runs as its own
+`astroadmin-<name>` Unix user, which is what makes the 0400 mode on its deploy
+key, session secret and password hash actually separate one tenant from another
+— so a privilege escalation out of one of those users defeats the whole model.
+The long-running units and the checkout one-shot therefore set
+`RestrictNamespaces`, blocking `unshare()`/`clone()` with namespace flags:
+unprivileged user + network namespaces are a standing kernel local-privesc
+surface for exactly this kind of code, and a recurring CVE class rather than a
+single bug. Nothing here needs namespaces.
 
 ## Usage
 
@@ -84,12 +96,17 @@ one site).
 
 ## Notes / decisions
 
-- **⚠️ Preview routing is the one open item.** The editor iframe loads
-  `previewUrl` *in the browser*, so the localhost dev server isn't reachable
-  as-is. `previewUrl` is a per-instance option (defaulting to the localhost
-  server); exposing it safely — an authenticated admin preview-proxy route, or a
-  protected preview vhost — is to be finalized against a live instance. The admin
-  vhost itself is complete.
+- **Preview routing is done** (this note used to say it was the one open item;
+  it was finalized against live instances and the claim went stale). Each
+  instance gets a nested preview subdomain, `previewHost`, defaulting to
+  `preview.<domain>`: an nginx TLS vhost that reverse-proxies to the localhost
+  `astro dev`, gated by an `auth_request` to the admin's `/api/session`. The
+  admin session cookie is scoped to `domain`, so it reaches this child host but
+  never a sibling instance, and `previewUrl` defaults to `https://<previewHost>`
+  so the iframe loads a real HTTPS origin rather than the viewer's localhost.
+  An unauthenticated request gets a short "preview needs an active editor
+  session" page, not content. Point a DNS A-record at the host for `previewHost`
+  before rebuilding, or ACME cannot issue its certificate.
 - **Site code updates** are a deliberate redeploy, and the redeploy is one
   command: `systemctl restart astroadmin-<name>-checkout`. The checkout one-shot
   clones if absent, otherwise fast-forwards onto `origin/<branch>`, then

@@ -276,6 +276,22 @@ let
   # systemd hardening shared by the long-running units.
   hardening = {
     NoNewPrivileges = true;
+    # Blocks unshare()/clone() with namespace flags (seccomp). This host runs
+    # each site's npm/bun dependency tree as the instance user — `bun install`
+    # postinstall scripts and `astro dev` — and unprivileged user + network
+    # namespaces are a standing kernel local-privesc surface for exactly that
+    # code. It is a recurring CVE class, not one bug: CVE-2026-64581 (xfrm
+    # double-free, fixed 6.18.39) is reachable this way, and the box was
+    # demonstrably exposed to it while running 6.18.38.
+    #
+    # Per-instance Unix users are what make the 0400 mode on each site's deploy
+    # key / session secret / password hash actually isolate tenants, so a
+    # privesc out of one of those users defeats the whole model. Closing the
+    # namespace vector removes the class rather than waiting on each kernel bump.
+    #
+    # Nothing here needs namespaces — verified live that `bun install`,
+    # `astro dev` and `astro build` all run unaffected under it.
+    RestrictNamespaces = true;
     ProtectSystem = "strict";
     ProtectHome = true;
     PrivateTmp = true;
@@ -303,6 +319,13 @@ let
       # so it takes effect on already-provisioned live boxes too — unlike
       # `homeMode`, which only applies when createHome first makes the dir.
       StateDirectoryMode = "0700";
+      # This unit runs `bun install`, i.e. arbitrary postinstall scripts from
+      # the site's dependency tree — the least trusted code on the box. It
+      # deliberately does NOT take the shared `hardening` set (that is scoped to
+      # the long-running units and is not validated against a package install),
+      # but the namespace restriction applies cleanly and is the one that closes
+      # the kernel-privesc vector. See the note on `hardening` above.
+      RestrictNamespaces = true;
       ExecStart = checkoutScript name inst;
     };
   };
