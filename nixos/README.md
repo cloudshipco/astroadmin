@@ -16,8 +16,20 @@ for secrets.
 - an **nginx** TLS vhost at `domain` (per-host Let's Encrypt cert, HTTP-01) →
   the admin port.
 
-No untrusted code runs on the host: the site code is first-party, and the npm
-dependency tree builds on Netlify (build-on-push), not here.
+**Untrusted code does run on the host.** The site's own code is first-party, but
+its npm/bun dependency tree is not, and that tree executes here: the checkout
+one-shot runs `bun install` (postinstall scripts) and the preview runs
+`astro dev`. Netlify builds the *public* site, which is a separate thing.
+
+That is what the isolation is for. Each instance runs as its own
+`astroadmin-<name>` Unix user, which is what makes the 0400 mode on its deploy
+key, session secret and password hash actually separate one tenant from another
+— so a privilege escalation out of one of those users defeats the whole model.
+The long-running units and the checkout one-shot therefore set
+`RestrictNamespaces`, blocking `unshare()`/`clone()` with namespace flags:
+unprivileged user + network namespaces are a standing kernel local-privesc
+surface for exactly this kind of code, and a recurring CVE class rather than a
+single bug. Nothing here needs namespaces.
 
 ## Usage
 
