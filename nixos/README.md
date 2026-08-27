@@ -90,9 +90,19 @@ one site).
   server); exposing it safely — an authenticated admin preview-proxy route, or a
   protected preview vhost — is to be finalized against a live instance. The admin
   vhost itself is complete.
-- **Site code updates** are a deliberate redeploy: the checkout one-shot clones
-  if absent and `bun install`s, but does **not** auto-pull an existing checkout
-  (the editor owns local content commits/pushes).
+- **Site code updates** are a deliberate redeploy, and the redeploy is one
+  command: `systemctl restart astroadmin-<name>-checkout`. The checkout one-shot
+  clones if absent, otherwise fast-forwards onto `origin/<branch>`, then
+  `bun install`s; the admin and preview units are `partOf` it, so they restart
+  with it and pick up the new schema/templates. Nothing runs on a timer — a push
+  converges when an operator asks, not on its own.
+
+  The fast-forward is `--ff-only` and refuses to move if the checkout is dirty,
+  on another branch, or diverged from origin, so an editor commit that could not
+  be pushed is never discarded. Each refusal is a warning, not a unit failure:
+  the admin unit `requires` the checkout unit, so failing here would take a live
+  editor offline over a transient fetch error. Warnings land in
+  `journalctl -u astroadmin-<name>-checkout`.
 - **Resources**: each `astro dev` (Vite) preview is the memory cost — budget
   ~0.5 GB/instance; 2 vCPU / 4 GB comfortably hosts three.
 - **Secrets** never enter the Nix store (sops-nix).

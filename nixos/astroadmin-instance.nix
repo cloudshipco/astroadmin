@@ -229,14 +229,45 @@ let
     GIT_SSH_COMMAND = gitSshCommand name inst;
   };
 
-  # One-shot: clone the repo if absent, then `bun install`. Does NOT auto-pull
-  # an existing checkout (the editor owns local commits/pushes) — site CODE
-  # updates are a deliberate redeploy, not a restart side effect.
+  # One-shot: clone the repo if absent, otherwise fast-forward it onto
+  # origin/<branch>, then `bun install` (which picks up any lockfile change the
+  # fast-forward brought in). Restarting this unit restarts the admin + preview
+  # units with it (`partOf`), so `systemctl restart astroadmin-<name>-checkout`
+  # is the whole redeploy — see astroadmin#42, which this replaces.
+  #
+  # It is still a *deliberate* redeploy: nothing on a timer, so a push converges
+  # only when an operator (or a boot, or a `nixos-rebuild switch` that changes
+  # this script) asks it to. Nudge, don't auto-adopt.
   checkoutScript = name: inst: pkgs.writeShellScript "astroadmin-${name}-checkout" ''
     set -euo pipefail
     export GIT_SSH_COMMAND="${gitSshCommand name inst}"
     if [ ! -e ${inst.checkoutPath}/.git ]; then
+      # No checkout yet — a failure here is fatal, there is nothing to serve.
       ${pkgs.git}/bin/git clone --branch ${inst.branch} ${inst.repoUrl} ${inst.checkoutPath}
+    else
+      # Every refusal below WARNS and carries on rather than failing the unit:
+      # the admin and preview units `requires` this one, so exiting non-zero
+      # over a transient fetch error or an unpublished editor edit would take a
+      # live client editor offline. Serving slightly stale content is the
+      # better failure; only the clone above is fatal.
+      #
+      # `--ff-only` is what makes this safe to run unattended. It moves the
+      # checkout when the box is strictly behind origin and refuses the moment
+      # local history diverges, so a commit the editor made but could not push
+      # is never discarded. `reset --hard` would silently destroy it.
+      cd ${inst.checkoutPath}
+      head_branch="$(${pkgs.git}/bin/git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+      if [ "$head_branch" != "${inst.branch}" ]; then
+        echo "astroadmin: not pulling — checkout is on '$head_branch', expected '${inst.branch}'" >&2
+      elif [ -n "$(${pkgs.git}/bin/git status --porcelain)" ]; then
+        echo "astroadmin: not pulling — working tree is dirty (unpublished editor edits)" >&2
+      elif ! ${pkgs.git}/bin/git fetch origin ${inst.branch}; then
+        echo "astroadmin: not pulling — fetch from origin failed" >&2
+      elif ! ${pkgs.git}/bin/git merge --ff-only FETCH_HEAD; then
+        echo "astroadmin: not pulling — local '${inst.branch}' has diverged from origin (unpushed commits?)" >&2
+      else
+        echo "astroadmin: checkout at $(${pkgs.git}/bin/git rev-parse --short HEAD) (${inst.branch})"
+      fi
     fi
     cd ${inst.projectRoot}
     ${pkgs.bun}/bin/bun install --frozen-lockfile || ${pkgs.bun}/bin/bun install
@@ -281,6 +312,12 @@ let
     after = [ "network-online.target" "astroadmin-${name}-checkout.service" ];
     wants = [ "network-online.target" ];
     requires = [ "astroadmin-${name}-checkout.service" ];
+    # `partOf` on top of `requires`: restarting the checkout unit (which now
+    # fast-forwards the repo) restarts this one too, so one `systemctl restart
+    # astroadmin-<name>-checkout` is the whole redeploy. Without it the pull
+    # lands on disk while this process keeps serving the schema it read at
+    # startup — the half-fix astroadmin#42 warns about.
+    partOf = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
     # The admin shells out to bare `git` (simple-git, for Publish commit/push)
     # and `bunx` (astro build); systemd's minimal service PATH lacks both, so
@@ -341,6 +378,9 @@ let
     description = "AstroAdmin preview (astro dev) — ${inst.domain}";
     after = [ "astroadmin-${name}-checkout.service" ];
     requires = [ "astroadmin-${name}-checkout.service" ];
+    # See the admin unit: restarting the checkout unit restarts this one, so a
+    # fast-forwarded `astro dev` picks up new templates and config.
+    partOf = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
     # astro dev runs under Bun (`bunx --bun`), whose runtime file-watcher does NOT
     # fire for src/content edits — the preview would serve stale content until a
