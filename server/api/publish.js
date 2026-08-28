@@ -25,8 +25,22 @@ const router = express.Router();
 // (Helpers are exported for reuse by api/git.js — keep one definition.)
 const DEFAULT_GIT_PATHS = ['src/styles/', 'public/images/'];
 
+// Git config applied to EVERY git invocation from the admin: a content commit
+// must never execute repo code. Disables hooks (pre-commit/commit-msg/etc.),
+// the fsmonitor hook, and LFS smudge/clean/process filters — so staging,
+// committing, and checking out content can't run arbitrary scripts from a
+// crafted checkout. `--no-verify` on commit is belt-and-braces over hooksPath.
+const HARDENED_GIT_CONFIG = [
+  'core.hooksPath=/dev/null',
+  'core.fsmonitor=false',
+  'filter.lfs.smudge=cat',
+  'filter.lfs.clean=cat',
+  'filter.lfs.process=',
+  'filter.lfs.required=false',
+];
+
 export function createGitClient(fullConfig) {
-  return simpleGit(fullConfig.paths.projectRoot);
+  return simpleGit(fullConfig.paths.projectRoot, { config: HARDENED_GIT_CONFIG });
 }
 
 export function getGitPaths(fullConfig) {
@@ -38,6 +52,23 @@ export async function getStagedFilesForPaths(git, gitPaths) {
 
   const diffOutput = await git.diff(['--name-only', '--cached', '--', ...gitPaths]);
   return diffOutput.split(/\r?\n/).filter(Boolean);
+}
+
+/**
+ * Throw if any staged entry under the given paths is a symlink (git mode
+ * 120000). The editor only ever writes regular content files; a committed
+ * symlink could point outside the content allowlist or at host files, so a
+ * crafted one in the checkout must not be published.
+ */
+export async function assertNoStagedSymlinks(git, gitPaths) {
+  if (gitPaths.length === 0) return;
+  const staged = await git.raw(['ls-files', '--stage', '--', ...gitPaths]);
+  for (const line of staged.split(/\r?\n/)) {
+    if (line.startsWith('120000 ')) {
+      const filePath = line.split('\t')[1] || line;
+      throw new Error(`Refusing to commit symlink: ${filePath}`);
+    }
+  }
 }
 
 export async function stageGitPaths(git, gitPaths) {
@@ -97,7 +128,8 @@ async function runGitStep(fullConfig, commitMessage) {
 
   const stagedFiles = await getStagedFilesForPaths(git, commitPaths);
   if (stagedFiles.length > 0) {
-    commitResult = await git.commit(commitMessage, commitPaths);
+    await assertNoStagedSymlinks(git, commitPaths);
+    commitResult = await git.commit(commitMessage, commitPaths, { '--no-verify': null });
     committed = true;
     console.log(`✅ Committed: ${commitMessage}`);
   }
