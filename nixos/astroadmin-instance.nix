@@ -39,7 +39,8 @@
 # Browser-reachable preview: each instance gets a nested preview subdomain
 # (`previewHost`, default `preview.<domain>`) — an authenticated nginx TLS vhost
 # that reverse-proxies to the localhost `astro dev` at root. It's gated by an
-# `auth_request` to the admin's /api/session; the admin session cookie is scoped
+# `auth_request` to the admin's /__authz (NOT /api/session, which 200s when
+# logged out — auth_request would read that as allow); the admin session cookie is scoped
 # to `domain` (SESSION_COOKIE_DOMAIN) so it reaches this child host but never a
 # sibling instance. `previewUrl` (PREVIEW_URL) defaults to `https://<previewHost>`,
 # so the iframe loads a real HTTPS origin instead of the viewer's localhost.
@@ -129,7 +130,7 @@ let
         description = ''
           Nested preview subdomain (a CHILD of `domain`). nginx serves a TLS
           vhost here that reverse-proxies to the localhost `astro dev` at root,
-          gated by an auth_request to the admin's /api/session. Being a child of
+          gated by an auth_request to the admin's /__authz. Being a child of
           the admin host, the admin session cookie (scoped to `domain`) reaches
           it, but sibling instances never do. Needs its own DNS A-record.
         '';
@@ -280,9 +281,8 @@ let
     # each site's npm/bun dependency tree as the instance user — `bun install`
     # postinstall scripts and `astro dev` — and unprivileged user + network
     # namespaces are a standing kernel local-privesc surface for exactly that
-    # code. It is a recurring CVE class, not one bug: CVE-2026-64581 (xfrm
-    # double-free, fixed 6.18.39) is reachable this way, and the box was
-    # demonstrably exposed to it while running 6.18.38.
+    # code. It is a recurring CVE class, not one bug (e.g. CVE-2026-64581, an
+    # xfrm double-free reachable this way).
     #
     # Per-instance Unix users are what make the 0400 mode on each site's deploy
     # key / session secret / password hash actually isolate tenants, so a
@@ -324,7 +324,9 @@ let
       # deliberately does NOT take the shared `hardening` set (that is scoped to
       # the long-running units and is not validated against a package install),
       # but the namespace restriction applies cleanly and is the one that closes
-      # the kernel-privesc vector. See the note on `hardening` above.
+      # the kernel-privesc vector. See the note on `hardening` above. Note that
+      # with User= set, a seccomp option like this makes systemd imply
+      # NoNewPrivileges=yes too, so setuid helpers won't elevate in this unit.
       RestrictNamespaces = true;
       ExecStart = checkoutScript name inst;
     };
@@ -495,7 +497,7 @@ let
 
   # Authenticated preview vhost on the nested preview subdomain: reverse-proxy
   # to the localhost `astro dev` at ROOT (so Astro's absolute asset paths + HMR
-  # ws work), gated by an nginx auth_request to the admin's /api/session. The
+  # ws work), gated by an nginx auth_request to the admin's /__authz. The
   # admin session cookie (scoped to `domain`) reaches this child host; siblings
   # never do. The astro dev port itself is never given a public vhost.
   mkPreviewVhost = name: inst: lib.nameValuePair inst.previewHost {

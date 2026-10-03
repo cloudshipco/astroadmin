@@ -100,7 +100,9 @@ one site).
   it was finalized against live instances and the claim went stale). Each
   instance gets a nested preview subdomain, `previewHost`, defaulting to
   `preview.<domain>`: an nginx TLS vhost that reverse-proxies to the localhost
-  `astro dev`, gated by an `auth_request` to the admin's `/api/session`. The
+  `astro dev`, gated by an `auth_request` to the admin's `/__authz` (204 when
+  logged in, 401 otherwise). Not `/api/session`: that returns 200 even when
+  logged out, which `auth_request` would read as allow. The
   admin session cookie is scoped to `domain`, so it reaches this child host but
   never a sibling instance, and `previewUrl` defaults to `https://<previewHost>`
   so the iframe loads a real HTTPS origin rather than the viewer's localhost.
