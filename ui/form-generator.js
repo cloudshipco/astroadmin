@@ -1207,8 +1207,9 @@ function toNumber(value) {
 }
 
 /**
- * Strip empty OPTIONAL string fields (an unset optional must serialise as absent,
- * since "" would fail an `.optional().min(1)`), walking the schema so REQUIRED
+ * Strip empty OPTIONAL string fields and empty OPTIONAL arrays (an unset optional
+ * must serialise as absent, since "" or [] would fail an `.optional().min(1)`),
+ * walking the schema so REQUIRED
  * fields are never deleted at ANY level — deleting a required key is silent data
  * loss that breaks the build (and, if a whole object is momentarily empty, wipes
  * its metadata). Fail-safe: a field is deleted ONLY when the schema PROVES it
@@ -1233,7 +1234,15 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false) {
       const itemIsBlock = schemaNode
         ? schemaSaysBlock
         : (item && typeof item === 'object' && 'type' in item);
-      cleanEmptyValues(item, itemSchema, itemIsBlock);
+      // A block array's `items` is the whole union (anyOf/oneOf, no `properties`),
+      // so on its own it tells us nothing about any one block. Resolve the block's
+      // own schema through its `type` discriminator, so the empty-optional-array
+      // rule below holds inside blocks too. An unknown type falls back to `items`,
+      // which fails safe (no properties → nothing removed).
+      const blockSchema = schemaSaysBlock && item && typeof item === 'object'
+        ? schemaNode.blockTypes[item.type]
+        : undefined;
+      cleanEmptyValues(item, blockSchema || itemSchema, itemIsBlock);
     });
     return;
   }
@@ -1258,6 +1267,16 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false) {
         !isBlockItem && schemaKnown && !isRequired &&
         !Array.isArray(value) && Object.keys(value).length === 0
       ) {
+        delete obj[key];
+      }
+      // An empty array survives only when its key is REQUIRED. Absent is always
+      // valid for an optional key, but `[]` fails an `.optional().min(1)` — and
+      // extractFields fills `[]` for every rendered array with no items, so
+      // without this an optional array the entry never had would be saved as
+      // `[]` and break the build. Unlike the "" rule this also applies inside
+      // block items: their empty arrays are not placeholders anyone needs, and
+      // the block's own schema (resolved above) proves which are optional.
+      if (schemaKnown && !isRequired && Array.isArray(value) && value.length === 0) {
         delete obj[key];
       }
     }

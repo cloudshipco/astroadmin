@@ -81,6 +81,9 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/extract-fields.test.js` — the read-back half, in a happy-dom `<form>` rendered by
   the real `generateForm`. Covers zero-item arrays (blocks, references, inline arrays) saving
   as `[]` rather than vanishing, paths after a block/item is deleted, and a page round trip.
+  The rule it pins: an empty array survives `extractFormData` only when its key is REQUIRED;
+  an empty array the schema proves optional is dropped (`[]` fails `.optional().min(1)`),
+  inside block items too.
 
 **Known red:** `tests/git-api.test.js` fails on a clean tree ("only configured git path
 was committed"). Pre-existing and unrelated to the UI; don't read it as your breakage.

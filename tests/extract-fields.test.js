@@ -267,6 +267,111 @@ check('control: object-card array with zero items extracts []', () => {
   equal(extractFields(form).faqs, []);
 });
 
+// --- Empty OPTIONAL arrays -------------------------------------------------
+// The other half of the rule. An absent optional key is always valid, but `[]`
+// is not when the schema says `.min(1)` — so filling `[]` for every empty array
+// would break a site build in reverse. Through extractFormData (which applies
+// cleanEmptyValues) an empty array survives only when the schema says its key is
+// required. Shapes below are what z.toJSONSchema emits for
+// `bullets: z.array(z.string()).min(1).optional()` (not in `required`, minItems 1).
+
+const featureBlockTypes = {
+  ...blockTypes,
+  features: {
+    type: 'object',
+    properties: {
+      type: { type: 'string', const: 'features' },
+      heading: { type: 'string' },
+      tags: { type: 'array', items: { type: 'string' }, minItems: 1 },
+    },
+    required: ['type', 'heading'],
+  },
+};
+const pageSchema = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    bullets: { type: 'array', items: { type: 'string' }, minItems: 1 },
+    blocks: { type: 'array', blockTypes: featureBlockTypes, items: { anyOf: Object.values(featureBlockTypes) } },
+  },
+  required: ['title', 'blocks'],
+};
+
+check('optional min(1) array absent from the entry stays absent after save', () => {
+  const entry = { title: 'Articles page', blocks: [] };
+  const form = render(pageSchema, entry);
+  equal(extractFormData(form, pageSchema), entry);
+});
+
+check('optional min(1) array emptied by deleting its last item saves as absent, not []', () => {
+  const form = render(pageSchema, { title: 'Articles page', bullets: ['One'], blocks: [] });
+  setupFormHandlers(form, () => {});
+  form.querySelector('.array-field[data-field="bullets"] .remove-array-item').click();
+  equal(form.querySelectorAll('.array-field[data-field="bullets"] .array-item').length, 0, 'control: item removed');
+  equal(extractFormData(form, pageSchema), { title: 'Articles page', blocks: [] });
+});
+
+check('required blocks: [] still saves as blocks: []', () => {
+  const form = render(pageSchema, { title: 'Articles page', blocks: [] });
+  const saved = extractFormData(form, pageSchema);
+  assertions++;
+  assert.ok('blocks' in saved, 'required blocks key must survive cleanEmptyValues');
+  equal(saved.blocks, []);
+});
+
+check('optional array with items is unchanged', () => {
+  const entry = { title: 'Articles page', bullets: ['One', 'Two'], blocks: [] };
+  const form = render(pageSchema, entry);
+  equal(extractFormData(form, pageSchema), entry);
+});
+
+check('optional min(1) array inside a block item saves as absent, not []', () => {
+  const entry = { title: 'Articles page', blocks: [{ type: 'features', heading: 'Why', tags: [] }] };
+  const form = render(pageSchema, entry);
+  equal(extractFormData(form, pageSchema), { title: 'Articles page', blocks: [{ type: 'features', heading: 'Why' }] });
+});
+
+check('optional array inside a block item with items is unchanged', () => {
+  const entry = { title: 'Articles page', blocks: [{ type: 'features', heading: 'Why', tags: ['fast'] }] };
+  const form = render(pageSchema, entry);
+  equal(extractFormData(form, pageSchema), entry);
+});
+
+check('required array inside a block item still saves as []', () => {
+  const entry = { title: 'Articles page', blocks: [{ type: 'list', heading: 'Why', points: [] }] };
+  const form = render(pageSchema, entry);
+  equal(extractFormData(form, pageSchema), entry);
+});
+
+check('block items keep empty-string placeholders even for optional fields (unchanged exemption)', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      blocks: {
+        type: 'array',
+        blockTypes: {
+          note: {
+            type: 'object',
+            properties: { type: { type: 'string', const: 'note' }, caption: { type: 'string' } },
+            required: ['type'],
+          },
+        },
+      },
+    },
+    required: ['blocks'],
+  };
+  const entry = { blocks: [{ type: 'note', caption: '' }] };
+  const form = render(schema, entry);
+  equal(extractFormData(form, schema), entry);
+});
+
+check('with no schema at a level, an empty array is never dropped (fail safe)', () => {
+  const schema = { type: 'object', properties: { meta: { type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } } } };
+  const form = render(schema, { meta: { tags: [] } });
+  // No `properties` for the cleaner at the top level → nothing removed anywhere.
+  equal(extractFormData(form, {}), { meta: { tags: [] } });
+});
+
 // --- Realistic round trip --------------------------------------------------
 
 check('a realistic page with blocks: [] round-trips through extractFormData unchanged', () => {
