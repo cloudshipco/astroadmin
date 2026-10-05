@@ -215,7 +215,7 @@ function generateField(name, schema, value, path = '', ctx = {}) {
     return `
       <div class="form-group">
         <label class="form-label">${formatLabel(name)}</label>
-        <div class="array-field" data-field="${fullPath}" data-schema="${jsonAttr(schema.items || {})}">
+        <div class="array-field" data-field="${fullPath}" data-array-items data-schema="${jsonAttr(schema.items || {})}">
           ${items.map((item, index) => `
             <div class="array-item" data-index="${index}" draggable="true">
               <div class="array-item-handle" title="Drag to reorder">
@@ -438,7 +438,7 @@ function generateBlocksField(name, schema, value, fullPath) {
         </div>
       </div>
 
-      <div class="blocks-list" data-field="${fullPath}" data-block-types="${jsonAttr(blockTypes)}">
+      <div class="blocks-list" data-field="${fullPath}" data-array-items data-block-types="${jsonAttr(blockTypes)}">
         ${blocks.map((block, index) => generateBlockItem(fullPath, blockTypes, block, index)).join('\n')}
       </div>
     </div>
@@ -1007,7 +1007,7 @@ function generateReferenceField(name, schema, value, fullPath, id, collectionNam
   return `
     <div class="form-group">
       <label class="form-label">${label}</label>
-      <div class="reference-field" data-field="${fullPath}" data-collection="${collectionName}">
+      <div class="reference-field" data-field="${fullPath}" data-array-items data-collection="${collectionName}">
         <div class="reference-cards" data-reference-cards>
           ${items.length === 0 ? '<div class="reference-empty">No items selected. Click "Add" to select.</div>' : ''}
           ${items.map((itemId, index) => generateReferenceCard(itemId, index, fullPath)).join('')}
@@ -1182,6 +1182,18 @@ export function extractFields(container) {
     setNestedValue(data, checkbox.name, checkbox.checked);
   });
 
+  // An array rendered as one named input PER ITEM (blocks, references, inline
+  // arrays — every container marked data-array-items) submits nothing at all when
+  // it has zero items, so without this its key vanished from the saved entry. A
+  // page saved with `blocks: []` came back with no `blocks` key, and a schema that
+  // requires the array then failed every build. Only fill a path that is still
+  // unset: a populated array was already read from its inputs above.
+  container.querySelectorAll('[data-array-items][data-field]').forEach(field => {
+    if (getNestedValue(data, field.dataset.field) === undefined) {
+      setNestedValue(data, field.dataset.field, []);
+    }
+  });
+
   return data;
 }
 
@@ -1250,6 +1262,20 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false) {
       }
     }
   }
+}
+
+/**
+ * Read a nested value using the same dot/bracket paths setNestedValue writes.
+ * Returns undefined when any segment along the way is missing.
+ */
+function getNestedValue(obj, path) {
+  const keys = path.split(/\.|\[|\]/).filter(Boolean);
+  let current = obj;
+  for (const key of keys) {
+    if (current === undefined || current === null || typeof current !== 'object') return undefined;
+    current = current[key];
+  }
+  return current;
 }
 
 /**
@@ -1596,8 +1622,11 @@ function setupArrayHandlers(formElement, onBlockChange) {
     const removeBtn = e.target.closest('.remove-array-item');
     if (removeBtn) {
       const item = removeBtn.closest('.array-item');
+      // Find the list BEFORE removing the item: once it is detached, closest()
+      // from inside it finds nothing, the reindex threw, and the save never fired.
+      const arrayField = item.closest('.array-field');
       item.remove();
-      reindexArrayItems(e.target.closest('.array-field'));
+      reindexArrayItems(arrayField);
       if (onBlockChange) onBlockChange();
     }
   });
@@ -1925,36 +1954,74 @@ export function createEmptyArrayItem(schema) {
 }
 
 /**
- * Reindex blocks after reordering
+ * Point everything inside one array item at its new index.
+ *
+ * An item carries its own path in two places: the `name` of every input, and the
+ * `data-field` of any container inside it (a gallery, a nested inline array, a
+ * nested blocks list, a reference field). extractFields reads both, so updating
+ * only the names left a container writing to the item's OLD index — a block's
+ * empty nested array was read back as a phantom extra block, and a gallery saved
+ * its images onto whichever block used to sit there.
+ *
+ * Matching the full `<arrayPath>[<oldIndex>]` prefix, rather than the first `[n]`
+ * in the string, keeps this right for an array that is itself inside another
+ * array item (`blocks[0].points[2]`).
+ */
+function repointItemPaths(item, arrayPath, oldIndex, newIndex) {
+  const oldPrefix = `${arrayPath}[${oldIndex}]`;
+  const newPrefix = `${arrayPath}[${newIndex}]`;
+  if (oldPrefix === newPrefix) return;
+  const repoint = (path) => (
+    path === oldPrefix || path.startsWith(`${oldPrefix}.`) || path.startsWith(`${oldPrefix}[`)
+      ? newPrefix + path.slice(oldPrefix.length)
+      : path
+  );
+
+  item.querySelectorAll('input, textarea, select').forEach(input => {
+    if (!input.name) return;
+    const newName = repoint(input.name);
+    if (newName === input.name) return;
+    input.name = newName;
+    if (input.id) {
+      input.id = newName.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
+    }
+  });
+
+  item.querySelectorAll('[data-field]').forEach(element => {
+    element.dataset.field = repoint(element.dataset.field);
+  });
+  item.querySelectorAll('[data-edit-gallery]').forEach(element => {
+    element.dataset.editGallery = repoint(element.dataset.editGallery);
+  });
+}
+
+/**
+ * The items of a list itself — not the items of an array nested inside one of them.
+ */
+function directItems(list, className) {
+  return Array.from(list.children).filter(child => child.classList.contains(className));
+}
+
+/**
+ * Reindex blocks after reordering or removal.
+ * Walks every blocks list in the form (outer lists first, in document order), not
+ * only the first one: a form can hold more than one, e.g. `section.blocks`.
  */
 function reindexBlocks(formElement) {
-  const blocksList = formElement.querySelector('.blocks-list');
-  if (!blocksList) return;
+  formElement.querySelectorAll('.blocks-list').forEach(blocksList => {
+    const fieldPath = blocksList.dataset.field;
 
-  const fieldPath = blocksList.dataset.field;
-  const blocks = blocksList.querySelectorAll('.block-item');
+    directItems(blocksList, 'block-item').forEach((block, newIndex) => {
+      const oldIndex = Number(block.dataset.index);
+      block.dataset.index = newIndex;
+      repointItemPaths(block, fieldPath, oldIndex, newIndex);
 
-  blocks.forEach((block, newIndex) => {
-    block.dataset.index = newIndex;
-
-    // Update all input names within this block
-    block.querySelectorAll('input, textarea, select').forEach(input => {
-      const name = input.name;
-      // Replace the old index with new index
-      const newName = name.replace(/\[\d+\]/, `[${newIndex}]`);
-      input.name = newName;
-
-      // Update id as well
-      if (input.id) {
-        input.id = newName.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
-      }
-    });
-
-    // Update labels
-    block.querySelectorAll('label[for]').forEach(label => {
-      const forAttr = label.getAttribute('for');
-      const newFor = forAttr.replace(/_\d+_/, `_${newIndex}_`);
-      label.setAttribute('for', newFor);
+      // Update labels
+      block.querySelectorAll('label[for]').forEach(label => {
+        const forAttr = label.getAttribute('for');
+        const newFor = forAttr.replace(/_\d+_/, `_${newIndex}_`);
+        label.setAttribute('for', newFor);
+      });
     });
   });
 }
@@ -1964,20 +2031,11 @@ function reindexBlocks(formElement) {
  */
 function reindexArrayItems(arrayField) {
   const fieldPath = arrayField.dataset.field;
-  const items = arrayField.querySelectorAll('.array-item');
 
-  items.forEach((item, newIndex) => {
+  directItems(arrayField, 'array-item').forEach((item, newIndex) => {
+    const oldIndex = Number(item.dataset.index);
     item.dataset.index = newIndex;
-
-    item.querySelectorAll('input, textarea, select').forEach(input => {
-      const name = input.name;
-      const newName = name.replace(/\[\d+\]/, `[${newIndex}]`);
-      input.name = newName;
-
-      if (input.id) {
-        input.id = newName.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
-      }
-    });
+    repointItemPaths(item, fieldPath, oldIndex, newIndex);
   });
 }
 

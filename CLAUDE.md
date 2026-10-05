@@ -77,7 +77,10 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/form-generator.test.js` — the field renderer. No DOM needed: it asserts on the
   HTML string `generateForm`/`generateFields` return. Covers hostile content (apostrophes,
   quotes, markup), the input-type-carries-schema-type rule, and the alt-collision rules.
-  `extractFields` (the read-back half) has **no** coverage yet — it needs a DOM.
+  The read-back half (`extractFields`/`extractFormData`) is covered separately, below.
+- `bun tests/extract-fields.test.js` — the read-back half, in a happy-dom `<form>` rendered by
+  the real `generateForm`. Covers zero-item arrays (blocks, references, inline arrays) saving
+  as `[]` rather than vanishing, paths after a block/item is deleted, and a page round trip.
 
 **Known red:** `tests/git-api.test.js` fails on a clean tree ("only configured git path
 was committed"). Pre-existing and unrelated to the UI; don't read it as your breakage.
