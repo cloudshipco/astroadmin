@@ -127,3 +127,25 @@ copy it over the site's `node_modules/astroadmin/integration/index.js` and
 restart, then restore (it's gitignored; any reinstall wipes it silently). By
 contrast the admin UI (`ui/*.js`) IS served from your source, so dashboard.js /
 form-generator.js changes are live on browser reload.
+
+## A real-browser save check (before releasing a UI fix)
+
+happy-dom tests prove the renderer and `extractFields`; only a real dashboard save
+proves the wiring around them (autosave, the saver, the API write). Recipe, used
+for the empty-array fix in 1.4.7:
+
+1. Copy an affected site (`cp -cR`) and `git remote remove origin` in the copy,
+   so no save or Publish can reach the real repo.
+2. `ADMIN_PASSWORD=admin PORT=<port> bun <checkout>/bin/cli.js dev --project <copy> --no-astro`
+   (dev credentials admin/admin; `--no-astro` skips the preview, which the save path
+   does not need).
+3. Drive it with Playwright: log in at `/login` (`#username`, `#password`), open
+   `/dashboard/<collection>/<slug>`, type into a `[name="<field>"]` input, and wait
+   for the file's mtime to change (saves are automatic and debounced; there is no
+   Save button). Then read the file and assert.
+4. Carry a positive control (the edited field changed on disk), and run the same
+   script against the unfixed checkout to watch it go red.
+
+Playwright may want a browser revision that is not downloaded; rather than
+installing another, pass `executablePath` pointing at an existing one under
+`~/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-arm64/`.
