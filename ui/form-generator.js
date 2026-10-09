@@ -270,7 +270,7 @@ function generateField(name, schema, value, path = '', ctx = {}) {
           type="number"
           name="${fullPath}"
           id="${id}"
-          value="${value ?? schema.default ?? ''}"
+          value="${escapeHtml(value ?? schema.default ?? '')}"
           class="form-input"
           ${schema.min !== undefined ? `min="${schema.min}"` : ''}
           ${schema.max !== undefined ? `max="${schema.max}"` : ''}

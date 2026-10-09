@@ -264,9 +264,9 @@ function renderLocaleTabs() {
       <button
         type="button"
         class="locale-tab ${isActive ? 'active' : ''} ${exists ? '' : 'locale-tab-missing'}"
-        data-locale="${locale}"
+        data-locale="${escapeHtml(locale)}"
       >
-        ${locale.toUpperCase()}${statusIcon}
+        ${escapeHtml(locale.toUpperCase())}${statusIcon}
       </button>
     `;
   }).join('');
@@ -326,7 +326,7 @@ async function createTranslation(collection, slug, ctx) {
     console.error('Failed to create translation:', error);
     if (ctx && ctx.myLoad !== loadSeq) return;
     document.getElementById('editorForm').innerHTML = `
-      <p class="text-red-500">Failed to initialize: ${error.message}</p>
+      <p class="text-red-500">Failed to initialize: ${escapeHtml(error.message)}</p>
     `;
   }
 }
@@ -366,7 +366,7 @@ function renderBlockSelector() {
 
   select.innerHTML = usedByBlocks.map(block => {
     const label = formatBlockLabel(block.type);
-    return `<option value="${block.type}">${label}</option>`;
+    return `<option value="${escapeHtml(block.type)}">${escapeHtml(label)}</option>`;
   }).join('');
 
   // Set current selection
@@ -606,7 +606,7 @@ async function createNewEntry(collection, slug) {
     console.error('Failed to create new entry:', error);
     if (myLoad !== loadSeq) return;
     document.getElementById('editorForm').innerHTML = `
-      <p class="text-red-500">Failed to initialize: ${error.message}</p>
+      <p class="text-red-500">Failed to initialize: ${escapeHtml(error.message)}</p>
     `;
   }
 }
@@ -750,7 +750,7 @@ async function loadEntry(collection, slug, updateUrl = true) {
     console.error('Failed to load entry:', error);
     if (myLoad !== loadSeq) return; // a newer load owns the panel now
     document.getElementById('editorForm').innerHTML = `
-      <p class="text-red-500">Failed to load entry: ${error.message}</p>
+      <p class="text-red-500">Failed to load entry: ${escapeHtml(error.message)}</p>
     `;
   }
 }
@@ -820,8 +820,8 @@ function renderVirtualPagePanel(page) {
       const entryCount = collection?.entries?.length || 0;
 
       return `
-        <button type="button" class="collection-link" data-collection="${collectionName}">
-          ${label}
+        <button type="button" class="collection-link" data-collection="${escapeHtml(collectionName)}">
+          ${escapeHtml(label)}
           <span class="collection-link-count">${entryCount}</span>
         </button>
       `;
@@ -851,11 +851,11 @@ function renderVirtualPagePanel(page) {
       <div class="virtual-page-details">
         <div class="virtual-page-detail">
           <span class="virtual-page-detail-label">File</span>
-          <code>${page.path}</code>
+          <code>${escapeHtml(page.path)}</code>
         </div>
         <div class="virtual-page-detail">
           <span class="virtual-page-detail-label">URL</span>
-          <code>${page.url}</code>
+          <code>${escapeHtml(page.url)}</code>
         </div>
       </div>
       ${collectionsHtml}
@@ -984,7 +984,7 @@ async function renderEditor(entryData, ctx) {
           class="form-input textarea-autogrow"
           placeholder="Enter markdown content..."
           data-markdown="true"
-        >${bodyContent}</textarea>
+        >${escapeHtml(bodyContent)}</textarea>
         <button type="button" class="textarea-expand-btn" data-expand-textarea title="Expand editor">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="15 3 21 3 21 9"></polyline>

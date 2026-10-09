@@ -168,10 +168,10 @@ function renderChanges(container, status) {
   container.innerHTML = allChanges.map(change => `
     <div class="change-item">
       <span class="change-type change-type-${change.type}">${change.type[0].toUpperCase()}</span>
-      <span class="change-file" title="${change.file}">${formatFilePath(change.file)}</span>
+      <span class="change-file" title="${escapeHtml(change.file)}">${escapeHtml(formatFilePath(change.file))}</span>
       <div class="change-actions">
-        ${change.type !== 'deleted' ? `<button type="button" class="btn-icon" data-view-diff="${change.file}" title="View changes">👁</button>` : ''}
-        <button type="button" class="btn-icon btn-icon-danger" data-revert-file="${change.file}" title="Revert changes">↩</button>
+        ${change.type !== 'deleted' ? `<button type="button" class="btn-icon" data-view-diff="${escapeHtml(change.file)}" title="View changes">👁</button>` : ''}
+        <button type="button" class="btn-icon btn-icon-danger" data-revert-file="${escapeHtml(change.file)}" title="Revert changes">↩</button>
       </div>
     </div>
   `).join('');
@@ -188,9 +188,9 @@ function renderCommits(container, commits) {
 
   container.innerHTML = commits.map(commit => `
     <div class="commit-item">
-      <span class="commit-hash">${commit.hashShort}</span>
-      <span class="commit-message" title="${escapeHtml(commit.message)}">${truncate(commit.message, 40)}</span>
-      <span class="commit-date">${formatRelativeDate(commit.date)}</span>
+      <span class="commit-hash">${escapeHtml(commit.hashShort)}</span>
+      <span class="commit-message" title="${escapeHtml(commit.message)}">${escapeHtml(truncate(commit.message, 40))}</span>
+      <span class="commit-date">${escapeHtml(formatRelativeDate(commit.date))}</span>
     </div>
   `).join('');
 }
@@ -220,7 +220,7 @@ async function showDiff(file) {
     modal.innerHTML = `
       <div class="diff-modal">
         <div class="diff-modal-header">
-          <h3>Changes: ${formatFilePath(file)}</h3>
+          <h3>Changes: ${escapeHtml(formatFilePath(file))}</h3>
           <button type="button" class="diff-modal-close" data-close-diff>&times;</button>
         </div>
         <div class="diff-modal-body">
@@ -228,7 +228,7 @@ async function showDiff(file) {
         </div>
         <div class="diff-modal-footer">
           <button type="button" class="btn btn-sm btn-secondary" data-close-diff>Close</button>
-          <button type="button" class="btn btn-sm btn-danger" data-revert-file="${file}">Revert File</button>
+          <button type="button" class="btn btn-sm btn-danger" data-revert-file="${escapeHtml(file)}">Revert File</button>
         </div>
       </div>
     `;
@@ -319,7 +319,7 @@ export function showPublishDialog(options = {}) {
     modal.innerHTML = `
       <div class="commit-modal">
         <div class="commit-modal-header">
-          <h3>${title}</h3>
+          <h3>${escapeHtml(title)}</h3>
           <button type="button" class="commit-modal-close" data-close-commit>&times;</button>
         </div>
         <div class="commit-modal-body">
@@ -337,7 +337,7 @@ export function showPublishDialog(options = {}) {
         </div>
         <div class="commit-modal-footer">
           <button type="button" class="btn btn-sm btn-secondary" data-close-commit>Cancel</button>
-          <button type="button" class="btn btn-sm btn-primary" data-confirm-commit>${confirmText}</button>
+          <button type="button" class="btn btn-sm btn-primary" data-confirm-commit>${escapeHtml(confirmText)}</button>
         </div>
       </div>
     `;

@@ -13,6 +13,7 @@
  */
 
 import { splitEntryValue } from './entry-urls.js';
+import { escapeHtml } from './escape-html.js';
 
 /** The slug half of an entry option value (`pages/blog` -> `blog`). */
 function rowSlug(value) {
@@ -128,11 +129,11 @@ export function initEntryPicker(select) {
         row.setAttribute('aria-selected', current ? 'true' : 'false');
         const slugHint =
           !r.isNew && labelCounts[r.label] > 1
-            ? `<span class="entry-picker-row-slug">${escapeText(rowSlug(r.value))}</span>`
+            ? `<span class="entry-picker-row-slug">${escapeHtml(rowSlug(r.value))}</span>`
             : '';
         row.innerHTML =
           `<span class="entry-picker-row-check" aria-hidden="true">${current ? '✓' : ''}</span>` +
-          `<span class="entry-picker-row-label">${escapeText(r.label)}</span>` +
+          `<span class="entry-picker-row-label">${escapeHtml(r.label)}</span>` +
           slugHint;
         list.appendChild(row);
         rowEls.push(row);
@@ -196,9 +197,3 @@ export function syncEntryPickerLabel(select) {
   labelEl.textContent = opt && value ? opt.textContent.trim() : 'Select page…';
 }
 
-/** Minimal text escape for row labels (labels are slugs/names, but be safe). */
-function escapeText(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}

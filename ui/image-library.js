@@ -3,6 +3,8 @@
  * Modal for browsing and selecting images
  */
 
+import { escapeHtml } from './escape-html.js';
+
 let currentCallback = null;
 let currentImages = [];
 let selectedImageUrl = null;
@@ -235,12 +237,12 @@ function renderImages(grid, empty) {
   empty.classList.add('hidden');
 
   grid.innerHTML = currentImages.map(img => `
-    <div class="image-library-item ${selectedImageUrl === img.url ? 'selected' : ''}" data-url="${img.url}">
-      <img src="${img.url}" alt="${img.filename}" loading="lazy">
+    <div class="image-library-item ${selectedImageUrl === img.url ? 'selected' : ''}" data-url="${escapeHtml(img.url)}">
+      <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.filename)}" loading="lazy">
       <div class="image-library-item-overlay">
         <span class="image-library-item-check">✓</span>
       </div>
-      ${img.source === 'uploads' ? `<button type="button" class="image-library-item-delete" data-delete="${img.filename}" title="Delete">&times;</button>` : ''}
+      ${img.source === 'uploads' ? `<button type="button" class="image-library-item-delete" data-delete="${escapeHtml(img.filename)}" title="Delete">&times;</button>` : ''}
     </div>
   `).join('');
 }

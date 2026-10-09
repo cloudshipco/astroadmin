@@ -248,7 +248,7 @@ function renderEntryCard(entry) {
   }
 
   return `
-    <div class="reference-list-item reference-card ${disabled ? 'disabled' : ''}" data-id="${entry.slug}">
+    <div class="reference-list-item reference-card ${disabled ? 'disabled' : ''}" data-id="${escapeHtml(entry.slug)}">
       ${cardContent}
       ${disabled ? '<span class="reference-list-item-badge">Already added</span>' : ''}
     </div>

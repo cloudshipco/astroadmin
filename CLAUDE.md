@@ -136,6 +136,13 @@ runner aggregating them). Most run server-less and need env vars:
   `src/content/assets` hold unpublished drafts. The editor's `<img>` requests are
   same-origin and carry the session cookie; the preview and the live site serve
   their own copies.
+- `bun tests/ui-escaping.test.js` — server data rendered as markup stays data (happy-dom): a
+  file name, slug, image name, commit message or stored value such as
+  `a"><img src=x onerror=alert(1)>.md` renders as that literal text or attribute value and
+  injects no element, in the changes panel, diff modal, image library, reference picker,
+  number field and the dashboard's virtual-page panel. Every interpolation of such data goes
+  through `escapeHtml` (`ui/escape-html.js`); the markdown body textarea too, or `&lt;`
+  in a body is decoded to `<` and `</textarea>` truncates it on the next save.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 
