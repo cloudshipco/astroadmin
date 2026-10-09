@@ -61,10 +61,9 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
       if (builtPagePaths.length === 0) throw new Error(NO_HTML_MESSAGE);
       const load = loadEntries || (async () => (await import('./entries.js')).collectEntries());
       const { entries } = await load();
-      // Every built page, not only the entries' own: a page no entry owns can
-      // still show other entries' cards (data-aa-entry).
-      const pagePaths = entries.map((entry) => entry.pagePath).filter(Boolean);
-      const pages = await scanBuiltPages(context.distDir, [...pagePaths, ...builtPagePaths]);
+      // Every built page, not only the entries' own: the link check and the
+      // unsupported-card warning apply to pages no entry owns too.
+      const pages = await scanBuiltPages(context.distDir, [...entries.map((entry) => entry.pagePath), ...builtPagePaths]);
       return { entries, pages };
     }),
   };

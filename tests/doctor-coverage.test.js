@@ -18,7 +18,7 @@ import {
   describeEntryFields,
   findAnnotatedLinks,
   findUnindexedBlocks,
-  findUnknownEntryRefs,
+  findEntryCards,
   findUnknownFieldNames,
 } from '../server/doctor/coverage.js';
 import fs from 'fs';
@@ -327,8 +327,9 @@ await check('the built-page reader finds both build formats and skips missing pa
   }
 });
 
-// A home page listing entries of another collection as cards, each card
-// qualified with data-aa-entry. The services collection has no page of its own.
+// A home page listing another collection's entries as cards, each marked with
+// data-aa-entry. This version does not support that: the attribute is ignored,
+// its annotations count toward no entry's coverage, and the doctor says so.
 const HOME_WITH_CARDS = `<!DOCTYPE html><html><head><title>Home</title></head><body>
 <main>
   <h1 data-aa-field="headline">Welcome to the example company</h1>
@@ -346,81 +347,67 @@ const HOME_WITH_CARDS = `<!DOCTYPE html><html><head><title>Home</title></head><b
     </ul>
   </section>
 </main></body></html>`;
+const WITHOUT_ENTRY_ATTRIBUTES = HOME_WITH_CARDS.replace(/ data-aa-entry="[^"]*"/g, '');
 
-const serviceSchema = { type: 'object', properties: { title: { type: 'string' }, summary: { type: 'string' }, details: { type: 'string' } } };
 const homeEntry = {
   collection: 'pages', slug: 'home', pagePath: '/',
   schema: { type: 'object', properties: { headline: { type: 'string' }, title: { type: 'string' } } },
   data: { headline: 'Welcome to the example company', title: 'Garden design' },
 };
-const serviceEntries = [
-  { collection: 'services', slug: 'garden-design', pagePath: null, schema: serviceSchema, data: { title: 'Garden design', summary: 'Plans and planting for any plot.', details: 'Long text shown only on a detail page.' } },
-  { collection: 'services', slug: 'hedge-trimming', pagePath: null, schema: serviceSchema, data: { title: 'Hedge trimming', summary: 'Neat edges, twice a year.', details: 'More long text not on the home page.' } },
-];
 
-console.log('\n🧪 doctor: entry-qualified annotations (data-aa-entry)\n' + '='.repeat(40));
+console.log('\n🧪 doctor: data-aa-entry is not supported\n' + '='.repeat(40));
 
-await check('the scan records each annotation\'s entry: the nearest data-aa-entry on it or an ancestor', async () => {
+await check('the scan marks annotations on or inside a data-aa-entry element as card annotations, and counts the cards', async () => {
   const scan = await scanHtml(`<body><h1 data-aa-field="headline">H</h1>
     <div data-aa-entry="services/a"><p data-aa-field="title">A</p>
       <div data-aa-entry="services/b"><p data-aa-field="title">B</p></div>
       <p data-aa-field="summary">A again</p></div>
     <img data-aa-entry="services/c" data-aa-field="image" src="/c.jpg">
     <p data-aa-field="after">after</p></body>`);
-  assert.deepEqual(scan.fields.map((field) => [field.name, field.entry]), [
-    ['headline', null], ['title', 'services/a'], ['title', 'services/b'], ['summary', 'services/a'], ['image', 'services/c'], ['after', null],
+  assert.deepEqual(scan.fields.map((field) => [field.name, field.card]), [
+    ['headline', false], ['title', true], ['title', true], ['summary', true], ['image', true], ['after', false],
   ]);
-  assert.deepEqual(scan.entryRefs, ['services/a', 'services/b', 'services/c']);
+  assert.equal(scan.entryCards, 3);
 });
 
-await check('coverage: a card\'s qualified annotations count toward ITS entry, which has no page of its own', async () => {
-  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/'));
-  const garden = report.entries.find((entry) => entry.slug === 'garden-design');
-  assert.ok(garden, JSON.stringify(report.entries.map((entry) => entry.slug)));
-  assert.equal(garden.pagePath, '/');
-  assert.equal(garden.fields, 2, 'title and summary render on the card; details does not');
-  assert.equal(garden.covered, 2);
-  assert.deepEqual(garden.notRendered, ['details']);
-  assert.deepEqual(report.byCollection.find((summary) => summary.collection === 'services'), { collection: 'services', entries: 2, fields: 4, covered: 4 });
+await check('coverage MUTATION: a card\'s "title" does not cover the page entry\'s "title"; without data-aa-entry it does', async () => {
+  const report = computeFieldCoverage([homeEntry], await pagesFor(HOME_WITH_CARDS, '/'));
+  assert.deepEqual(report.entries.map((entry) => [entry.slug, entry.missing]), [['home', ['title']]]);
+  // Control: the same markup with the attribute removed is an ordinary annotation of the page's entry.
+  const plain = computeFieldCoverage([homeEntry], await pagesFor(WITHOUT_ENTRY_ATTRIBUTES, '/'));
+  assert.deepEqual(plain.entries.map((entry) => [entry.slug, entry.missing]), [['home', []]]);
 });
 
-await check('coverage MUTATION: dropping one card\'s summary annotation drops exactly that entry\'s field', async () => {
-  const mutated = HOME_WITH_CARDS.replace('<p data-aa-field="summary">Neat edges', '<p>Neat edges');
-  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(mutated, '/'));
-  assert.deepEqual(report.entries.find((entry) => entry.slug === 'hedge-trimming').missing, ['summary']);
-  assert.deepEqual(report.entries.find((entry) => entry.slug === 'garden-design').missing, []);
+await check('names MUTATION: card annotations are not reported as unknown names; without data-aa-entry they are', async () => {
+  assert.deepEqual(findUnknownFieldNames([homeEntry], await pagesFor(HOME_WITH_CARDS, '/')), []);
+  assert.deepEqual(findUnknownFieldNames([homeEntry], await pagesFor(WITHOUT_ENTRY_ATTRIBUTES, '/')), [{ pagePath: '/', name: 'summary' }]);
 });
 
-await check('coverage: a card\'s "title" does not cover the PAGE entry\'s own "title"', async () => {
-  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/'));
-  assert.deepEqual(report.entries.find((entry) => entry.slug === 'home').missing, ['title']);
+await check('findEntryCards: lists each page using data-aa-entry with its count; none on a page without it', async () => {
+  const pages = await pagesFor(HOME_WITH_CARDS, '/');
+  pages.set('/about', await scanHtml(ANNOTATED_PAGE));
+  assert.deepEqual(findEntryCards(pages), [{ pagePath: '/', cards: 2 }]);
+  assert.deepEqual(findEntryCards(await pagesFor(WITHOUT_ENTRY_ATTRIBUTES, '/')), []);
 });
 
-await check('coverage: an entry with no page and no card is left out, not counted as zero', async () => {
-  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS.replace(/ data-aa-entry="[^"]*"/g, ''), '/'));
-  assert.deepEqual(report.entries.map((entry) => entry.slug), ['home']);
-  assert.deepEqual(report.unchecked, []);
-});
-
-await check('names: qualified names are checked against their entry, not the page\'s', async () => {
-  // "summary" is not a field of pages/home, but it is of each service.
-  assert.deepEqual(findUnknownFieldNames([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/')), []);
-});
-
-await check('names MUTATION: a qualified name its entry does not have is reported with the entry', async () => {
-  const mutated = HOME_WITH_CARDS.replace('<p data-aa-field="summary">Neat edges', '<p data-aa-field="blurb">Neat edges');
-  assert.deepEqual(findUnknownFieldNames([homeEntry, ...serviceEntries], await pagesFor(mutated, '/')), [{ pagePath: '/', name: 'blurb', entry: 'services/hedge-trimming' }]);
-});
-
-await check('entry refs: every data-aa-entry on the fixture names an existing entry', async () => {
-  assert.deepEqual(findUnknownEntryRefs([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/')), []);
-});
-
-await check('entry refs MUTATION: a reference to an entry that does not exist is reported once per page', async () => {
-  const mutated = HOME_WITH_CARDS.replace('data-aa-entry="services/hedge-trimming"', 'data-aa-entry="services/hedge-cutting"');
-  assert.deepEqual(findUnknownEntryRefs([homeEntry, ...serviceEntries], await pagesFor(mutated, '/')), [{ pagePath: '/', entry: 'services/hedge-cutting' }]);
-  // ...and its annotations are not ALSO reported as unknown names.
-  assert.deepEqual(findUnknownFieldNames([homeEntry, ...serviceEntries], await pagesFor(mutated, '/')), []);
+await check('runDoctor MUTATION: data-aa-entry turns click-to-edit-names into a "not supported" warning', async () => {
+  const { runDoctor } = await import('../server/doctor/index.js');
+  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-cards-'));
+  try {
+    const namesFor = async (html) => {
+      fs.writeFileSync(path.join(distDir, 'index.html'), html);
+      const report = await runDoctor({ projectRoot: distDir, distDir, build: false, phases: ['built'], loadEntries: async () => ({ entries: [homeEntry] }) });
+      return report.results.find((result) => result.id === 'click-to-edit-names');
+    };
+    const control = await namesFor(HOME_WITH_CARDS.replace(/<li data-aa-entry="[^"]*">[\s\S]*?<\/li>/g, ''));
+    assert.equal(control.severity, 'pass', JSON.stringify(control));
+    const names = await namesFor(HOME_WITH_CARDS);
+    assert.equal(names.severity, 'warn', JSON.stringify(names));
+    assert.match(names.message, /data-aa-entry is not supported in this version; it is ignored on 1 page/);
+    assert.deepEqual(names.details, ['/: 2 data-aa-entry elements']);
+  } finally {
+    fs.rmSync(distDir, { recursive: true, force: true });
+  }
 });
 
 await check('built pages: every page in the build is listed, including pages no entry owns', async () => {
@@ -516,10 +503,10 @@ await check('hidden markup: an annotation inside <template> or a [hidden] elemen
   assert.equal(visible.coveredFields, 1);
 });
 
-await check('hidden markup: block roots and entry references inside <template> are not on the page', async () => {
+await check('hidden markup: block roots and data-aa-entry cards inside <template> are not on the page', async () => {
   const scan = await scanHtml('<html><body><template><section data-block-index="0" data-aa-entry="services/x"></section></template><section data-block-index="0"></section></body></html>');
   assert.deepEqual(scan.blockIndexes, [0]);
-  assert.deepEqual(scan.entryRefs, []);
+  assert.equal(scan.entryCards, 0);
 });
 
 await check('implicit body: a page with no <body> tag still has its text read', async () => {
@@ -554,11 +541,6 @@ await check('block order: roots in the right order pass; out of order, duplicate
   }
 });
 
-await check('unmapped: an entry with no page and no card is carried in the report, not dropped', async () => {
-  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS.replace(/ data-aa-entry="[^"]*"/g, ''), '/'));
-  assert.deepEqual(report.unmapped, [{ collection: 'services', slug: 'garden-design' }, { collection: 'services', slug: 'hedge-trimming' }]);
-});
-
 await check('a missing or empty build is not reported as clean', async () => {
   const { runDoctor } = await import('../server/doctor/index.js');
   const emptyDist = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-empty-'));
@@ -591,63 +573,7 @@ await check('an entry whose page was not built keeps coverage from passing, and 
   }
 });
 
-console.log('\n🧪 doctor: review round 2 (cards without annotations, cards masking missing pages, <head>)\n' + '='.repeat(40));
-
-await check('coverage MUTATION: removing EVERY annotation from a card drops coverage (the card is still a place showing its entry)', async () => {
-  const bare = HOME_WITH_CARDS
-    .replace('<h3 data-aa-field="title">Hedge trimming</h3>', '<h3>Hedge trimming</h3>')
-    .replace('<p data-aa-field="summary">Neat edges', '<p>Neat edges');
-  assert.notEqual(bare, HOME_WITH_CARDS, 'the mutation applied');
-  const before = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/'));
-  const after = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(bare, '/'));
-  // Positive control: before the mutation the hedge-trimming card is counted, 2 of 2.
-  assert.deepEqual(before.entries.find((entry) => entry.slug === 'hedge-trimming')?.covered, 2);
-  const hedge = after.entries.find((entry) => entry.slug === 'hedge-trimming');
-  assert.ok(hedge, `the visible card's entry is still reported: ${JSON.stringify(after.entries.map((entry) => entry.slug))}`);
-  assert.deepEqual({ fields: hedge.fields, covered: hedge.covered, missing: hedge.missing }, { fields: 2, covered: 0, missing: ['title', 'summary'] });
-  assert.deepEqual(after.unmapped, [], 'a visible card is not "on no built page"');
-  assert.equal(after.coveredFields, before.coveredFields - 2);
-  assert.equal(after.totalFields, before.totalFields);
-});
-
-await check('coverage: a card naming an entry with no annotations at all (only data-aa-entry) still shows that entry', async () => {
-  const scan = await scanHtml('<html><body><article data-aa-entry="services/hedge-trimming"><h3>Hedge trimming</h3></article></body></html>');
-  assert.deepEqual(scan.entryRefs, ['services/hedge-trimming']);
-  const report = computeFieldCoverage(serviceEntries, new Map([['/', scan]]));
-  assert.deepEqual(report.entries.map((entry) => [entry.slug, entry.fields, entry.covered]), [['hedge-trimming', 1, 0]]);
-  assert.deepEqual(report.unmapped, [{ collection: 'services', slug: 'garden-design' }]);
-});
-
-await check('coverage MUTATION: an entry whose own page was not built is unchecked even when a card shows it elsewhere', async () => {
-  const withPages = serviceEntries.map((entry) => ({ ...entry, pagePath: `/services/${entry.slug}` }));
-  const report = computeFieldCoverage([homeEntry, ...withPages], await pagesFor(HOME_WITH_CARDS, '/'));
-  assert.deepEqual(report.unchecked, [
-    { collection: 'services', slug: 'garden-design', pagePath: '/services/garden-design' },
-    { collection: 'services', slug: 'hedge-trimming', pagePath: '/services/hedge-trimming' },
-  ]);
-  // The cards still count toward coverage.
-  assert.deepEqual(report.entries.find((entry) => entry.slug === 'garden-design')?.covered, 2);
-  // Control: with the standalone pages built, nothing is unchecked.
-  const pages = await pagesFor(HOME_WITH_CARDS, '/');
-  for (const entry of withPages) pages.set(entry.pagePath, await scanHtml(`<html><body><h1 data-aa-field="title">${entry.data.title}</h1></body></html>`));
-  assert.deepEqual(computeFieldCoverage([homeEntry, ...withPages], pages).unchecked, []);
-});
-
-await check('coverage: a card masking a missing page keeps the check from passing (runDoctor)', async () => {
-  const { runDoctor } = await import('../server/doctor/index.js');
-  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-card-mask-'));
-  try {
-    fs.writeFileSync(path.join(distDir, 'index.html'), HOME_WITH_CARDS.replace('</main>', '<p data-aa-field="title">Garden design</p></main>'));
-    const garden = { ...serviceEntries[0], pagePath: '/services/garden-design' };
-    const report = await runDoctor({ projectRoot: distDir, distDir, build: false, phases: ['built'], loadEntries: async () => ({ entries: [homeEntry, garden, serviceEntries[1]] }) });
-    const coverage = report.results.find((result) => result.id === 'click-to-edit-coverage');
-    assert.equal(coverage.data.coveredFields, coverage.data.totalFields, `positive control: everything shown is annotated: ${coverage.message}`);
-    assert.equal(coverage.severity, 'warn', JSON.stringify(coverage));
-    assert.match(coverage.message, /services\/garden-design at \/services\/garden-design/, coverage.message);
-  } finally {
-    fs.rmSync(distDir, { recursive: true, force: true });
-  }
-});
+console.log('\n🧪 doctor: review round 2 (<head>)\n' + '='.repeat(40));
 
 const titleEntry = { collection: 'pages', slug: 'home', pagePath: '/', schema: { type: 'object', properties: { title: { type: 'string' }, headline: { type: 'string' } } }, data: { title: 'Example home', headline: 'Welcome to the example' } };
 
@@ -669,14 +595,14 @@ await check('head: a page whose only annotation is its <title> does not report 1
   assert.deepEqual({ total: report.totalFields, covered: report.coveredFields }, { total: 0, covered: 0 }, JSON.stringify(report));
 });
 
-await check('head: annotations and entry refs on head elements are left out, also without a <head> tag; body text still read', async () => {
+await check('head: annotations and data-aa-entry cards on head elements are left out, also without a <head> tag; body text still read', async () => {
   const scan = await scanHtml('<title data-aa-field="title">Example home</title><meta data-aa-entry="services/x" data-aa-field="summary" content="x"><link data-aa-field="title" rel="icon" href="/x.png"><h1 data-aa-field="headline">Welcome to the example</h1>');
   assert.deepEqual(scan.fields.map((field) => field.name), ['headline']);
-  assert.deepEqual(scan.entryRefs, []);
+  assert.equal(scan.entryCards, 0);
   assert.ok(scan.clickableText.includes('welcometotheexample'), 'the implicit body is still read');
   const inHead = await scanHtml('<html><head><meta name="x" data-aa-entry="services/hedge-trimming"><noscript></noscript></head><body><p data-aa-field="headline">Hi</p></body></html>');
-  assert.deepEqual(inHead.entryRefs, []);
-  assert.deepEqual(inHead.fields.map((field) => [field.name, field.entry]), [['headline', null]], 'a head entry ref does not qualify body annotations');
+  assert.equal(inHead.entryCards, 0);
+  assert.deepEqual(inHead.fields.map((field) => [field.name, field.card]), [['headline', false]], 'a card marker in the head does not make body annotations card annotations');
   // The head ends where a browser ends it: an omitted </head> does not swallow the body.
   for (const html of [
     '<html><head><title>T</title><body><p data-aa-field="headline">Hello there</p></body></html>',

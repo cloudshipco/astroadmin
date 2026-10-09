@@ -10,7 +10,7 @@
  * Runs the real message listener and setLivePagePath from dashboard.js (the
  * dashboard touches the DOM at import, so they are lifted out of the source as
  * tests/focus-editor-field.test.js does) with the real liveSiteHref and
- * preview sync (ui/preview-sync.js), against a stubbed window and document.
+ * resolvePreviewTarget, against a stubbed window and document.
  *
  * Run: bun tests/preview-live-link.test.js
  */
@@ -20,7 +20,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { liveSiteHref } from '../ui/live-url.js';
-import { createPreviewSync } from '../ui/preview-sync.js';
+import * as previewRoutes from '../ui/preview-routes.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(path.join(dir, '../ui/dashboard.js'), 'utf8');
@@ -68,19 +68,15 @@ function navigate({ previewUrl, publicUrl, pathname, current = { collection: 'pa
     let currentSlug = current.slug;
     const allPages = PAGES, allCollections = [], collectionOrder = [];
     const location = { href: 'http://localhost:4000/' };
-    const previewSync = createPreviewSync(() => ({
-      previewUrl, entries: allPages, collections: allCollections, collectionOrder,
-      i18n: { enabled: false }, locale: null, selectedBlock: null,
-    }));
-    const openEntryRef = () => ({ collection: currentCollection, slug: currentSlug });
+    function getCurrentPagePath() { return currentSlug === 'home' ? '/' : '/' + currentSlug; }
     function focusEditorField() {}
     function loadEntry(collection, slug) { loads.push(collection + '/' + slug); }
   `;
   new Function(
     'window', 'document', 'previewUrl', 'publicUrl', 'current', 'PAGES', 'loads',
-    'liveSiteHref', 'createPreviewSync',
+    'liveSiteHref', ...Object.keys(previewRoutes),
     `${preamble}\n${previewOriginSrc}\n${setLiveSrc}\n${listenerSrc}`,
-  )(windowStub, documentStub, previewUrl, publicUrl, current, PAGES, loads, liveSiteHref, createPreviewSync);
+  )(windowStub, documentStub, previewUrl, publicUrl, current, PAGES, loads, liveSiteHref, ...Object.values(previewRoutes));
   assert.ok(handler, 'listener did not register');
   handler({ source: previewWindow, origin: new URL(previewUrl).origin, data: { type: 'pageNavigation', pathname } });
   return { href: link.href, hidden: link.hidden, loads };

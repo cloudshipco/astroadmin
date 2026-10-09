@@ -112,16 +112,6 @@ runner aggregating them). Most run server-less and need env vars:
   (`adminPreviewScript`, exported for this), run in happy-dom inside a stand-in iframe: which
   clicks post a `fieldFocus` (never one inside an `<a href>`), and which element a
   `highlightField` outlines.
-- `bun tests/click-to-edit.test.js` — `ui/click-to-edit.js`, the editor's half of a preview
-  click: parsing `data-aa-entry="<collection>/<slug>"`, and whether a click focuses a field of
-  the open entry, opens the card's entry (keeping the preview on the clicked page), or, in card
-  mode on a page with no entry, does nothing.
-- `bun tests/preview-sync.test.js` — `ui/preview-sync.js`, the editor and preview in step: the
-  page the preview shows is the single source of truth, and "card mode" (an entry opened from
-  its card on another page) is derived from it, never kept as separate state. Covers the
-  preview base and locale prefix, following a card's link to its own page, unresolved pages,
-  and an order-independence table over every permutation of the message flow (card click,
-  page click, navigations, save, entry switch, locale switch).
 - `bun tests/entry-urls.test.js` — `ui/entry-urls.js` against the real `createServer()` app: a
   nested slug (`2024/first-post`) travels as ONE encoded segment, so reads, saves and dashboard
   links reach `/:collection/:slug`; and dashboard.js builds no such URL by hand.

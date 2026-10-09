@@ -27,7 +27,7 @@ import {
   computeFieldCoverage,
   findAnnotatedLinks,
   findUnindexedBlocks,
-  findUnknownEntryRefs,
+  findEntryCards,
   findUnknownFieldNames,
 } from './coverage.js';
 import { bunExecutable, findAstroExecutable, shellQuote } from '../utils/astro-bin.js';
@@ -243,13 +243,10 @@ export const CHECKS = [
       const uncheckedNote = report.unchecked.length > 0
         ? `${report.unchecked.length} ${report.unchecked.length === 1 ? 'entry was' : 'entries were'} not checked on ${report.unchecked.length === 1 ? 'its own page, which was' : 'their own pages, which were'} not built (e.g. ${report.unchecked.slice(0, 3).map((item) => `${item.collection}/${item.slug} at ${item.pagePath}`).join(', ')}).`
         : null;
-      const unmappedNote = report.unmapped.length > 0
-        ? `${report.unmapped.length} ${report.unmapped.length === 1 ? 'entry is' : 'entries are'} on no built page (no page of their own, and no card names them with data-aa-entry), so not counted.`
-        : null;
       if (report.totalFields === 0) {
         // Only "nothing to check" when every entry's page was there to read.
-        if (uncheckedNote) return { severity: 'warn', message: `No text field could be checked. ${uncheckedNote}`, details: unmappedNote ? [unmappedNote] : [], data: report };
-        return { severity: 'skip', message: 'No built page renders an entry with text fields.', details: unmappedNote ? [unmappedNote] : [], data: report };
+        if (uncheckedNote) return { severity: 'warn', message: `No text field could be checked. ${uncheckedNote}`, data: report };
+        return { severity: 'skip', message: 'No built page renders an entry with text fields.', data: report };
       }
       const share = report.coveredFields / report.totalFields;
       const perCollection = report.byCollection.map((summary) => `${summary.collection} ${summary.covered}/${summary.fields}`).join(', ');
@@ -263,7 +260,6 @@ export const CHECKS = [
       }
       if (report.notRendered > 0) details.push(`${report.notRendered} text fields are not counted: their text is not visible outside a link on the page (page titles, link labels, metadata, reformatted dates).`);
       if (report.noControl > 0) details.push(`${report.noControl} text fields have no editor control a click could focus (gallery items, say), so are not counted.`);
-      if (unmappedNote) details.push(unmappedNote);
       // A clean result needs every entry with a page to have been read.
       const passes = share >= COVERAGE_PASS_SHARE && !uncheckedNote;
       if (!passes) details.push(`How to annotate: ${INLINE_EDITING_DOCS}#click-to-edit-in-the-preview`);
@@ -279,19 +275,21 @@ export const CHECKS = [
       if (!context.distDir) return noBuild(context);
       const { entries, pages } = await context.built();
       const unknown = findUnknownFieldNames(entries, pages);
-      const unknownEntries = findUnknownEntryRefs(entries, pages);
-      if (unknown.length === 0 && unknownEntries.length === 0) {
-        return { severity: 'pass', message: 'Every data-aa-field names a field of its entry, and every data-aa-entry an existing entry.' };
+      const cards = findEntryCards(pages);
+      if (unknown.length === 0 && cards.length === 0) {
+        return { severity: 'pass', message: 'Every data-aa-field names a field of an entry on its page.' };
       }
       const problems = [];
-      if (unknown.length > 0) problems.push(`${unknown.length} data-aa-field value(s) name no field of their entry`);
-      if (unknownEntries.length > 0) problems.push(`${unknownEntries.length} data-aa-entry value(s) name no existing entry (expected "<collection>/<slug>")`);
+      if (unknown.length > 0) problems.push(`${unknown.length} data-aa-field value(s) name no field of the entries on their page, so clicking them does nothing. See ${INLINE_EDITING_DOCS}#field-names.`);
+      // Cards for another entry are not supported yet: the attribute is
+      // ignored, so a click in the card focuses the open entry's field.
+      if (cards.length > 0) problems.push(`data-aa-entry is not supported in this version; it is ignored on ${cards.length} ${cards.length === 1 ? 'page' : 'pages'}, and the annotations inside it are not counted as coverage (a click on one focuses the open entry's field of that name).`);
       return {
         severity: 'warn',
-        message: `${problems.join('; ')}, so clicking them does nothing. See ${INLINE_EDITING_DOCS}#field-names.`,
+        message: problems.join(' '),
         details: listSome([
-          ...unknownEntries.map((item) => `${item.pagePath}: data-aa-entry="${item.entry}"`),
-          ...unknown.map((item) => (item.entry ? `${item.pagePath}: "${item.name}" (of ${item.entry})` : `${item.pagePath}: "${item.name}"`)),
+          ...cards.map((item) => `${item.pagePath}: ${item.cards} data-aa-entry ${item.cards === 1 ? 'element' : 'elements'}`),
+          ...unknown.map((item) => `${item.pagePath}: "${item.name}"`),
         ]),
       };
     },

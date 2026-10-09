@@ -259,7 +259,6 @@ nearest `data-aa-field` around it. The value is the control's form name:
 | A field of a block | `blocks[2].heading` (the block's index, then the field) |
 | An item list inside a block | `blocks[3].items` (the list's control) |
 | A Markdown entry's body | `body` |
-| A field of ANOTHER entry shown as a card | `title`, with `data-aa-entry="services/garden-design"` on the card |
 
 The check measures the **built** HTML, not the templates, so it sees what the
 preview actually renders, including an attribute a wrapper component dropped.
@@ -277,13 +276,10 @@ or the one list control that holds it (`blocks[3].items` for every field of
 every item). Annotating a nested object (`hero` for `hero.title`) or a whole
 block (`blocks[2]`) covers nothing, since neither is a control.
 For each entry, it counts the entry's text fields and how many have a matching
-`data-aa-field` (themselves, or the list that holds them) where the entry is
-shown: on its own page (a `pages` entry at `/<slug>`, or a collection's preview
-route), and as a card on any built page with a `data-aa-entry` naming it
-(since 1.4.9), whether or not the card has any annotations: a card with none
-counts its visible fields as missing. A field reached in either place counts. An
-annotation qualified with another entry never counts for the page's own
-entry, and an entry with no page of its own and no card is not counted at all.
+`data-aa-field` (themselves, or the list that holds them) on its own page (a
+`pages` entry at `/<slug>`, or a collection's preview route). An entry with no
+page of its own is not counted. Annotations inside a card marked as another
+entry's (see click-to-edit-names) count for no entry.
 
 Only text a visitor reads counts. Left out: ids, slugs, links and URLs, image
 and alt fields, dates, enums, page metadata (`meta*`, `seo*`, `og*`), fields
@@ -293,10 +289,7 @@ report says how many fields were left out that way.
 
 The check passes only on positive evidence: at least 80% coverage, and every
 entry with a page of its own had that page in the build. An entry whose page
-was not built is named in the message and keeps the check at a warning, even
-when a card shows the entry on another page. An
-entry with no page of its own and no card naming it is listed as on no built
-page, and not counted.
+was not built is named in the message and keeps the check at a warning.
 
 Coverage is reported per collection, since the entries of one collection share
 a template: a site can have well annotated pages and an FAQ list with none.
@@ -324,14 +317,13 @@ leaves it empty). The controls are the ones the editor's form renders, so
 `hero` (a nested object), `credentials` (a list of strings, whose items are
 `credentials[0]`...) and `cards[0].title` (an item field of a list edited as
 cards, whose control is `cards`) are all reported.
-One inside a `data-aa-entry` must name a field of that entry. A name that
-matches nothing does nothing when clicked. The usual cause is a block field
-annotated without its index (`heading` where the control is
+A name that matches nothing does nothing when clicked. The usual cause is a
+block field annotated without its index (`heading` where the control is
 `blocks[2].heading`), or a typo.
 
-Every `data-aa-entry` must name an existing entry as `<collection>/<slug>`,
-on any built page, including pages no entry owns (a listing page). A card
-naming a renamed or deleted entry does nothing when clicked.
+It also warns on any built page that marks a card as another entry's with
+`data-aa-entry`, which is not supported yet: the attribute is ignored and the
+annotations inside the card count for no entry.
 
 See [Field names](./inline-editing.md#field-names) and
 [Cards from other entries](./inline-editing.md#cards-from-other-entries).

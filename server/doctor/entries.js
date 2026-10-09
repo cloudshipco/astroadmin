@@ -5,11 +5,9 @@
  * after ASTROADMIN_PROJECT_ROOT is set (the CLI imports it dynamically).
  * Page paths follow the editor's preview: a `pages` entry is `/<slug>` (`home`
  * is `/`), any other collection uses its preview route (configured, else
- * detected from src/pages). Default locale only.
- *
- * Entries with no page of their own are included too (pagePath null): a page
- * can still show them as cards, named by data-aa-entry. The coverage check
- * reports the ones shown nowhere.
+ * detected from src/pages). Default locale only. An entry with no page of its
+ * own (a collection with no route) is left out: nothing in the preview can be
+ * clicked to edit it.
  *
  * Everything is read from the editor's ASTROADMIN_PROJECT_ROOT. In the editor,
  * the doctor's scan runs in a child process whose root is the publish check's
@@ -55,6 +53,7 @@ export async function collectEntries() {
     }
     for (const slug of slugs) {
       const pagePath = pagePathFor(collection, slug, route);
+      if (!pagePath) continue;
       let content;
       try {
         content = await readContent(collection, slug);

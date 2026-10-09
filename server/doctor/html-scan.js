@@ -8,8 +8,8 @@
  * Uses Bun's HTMLRewriter (a real HTML tokenizer), so attributes inside
  * <script> or comments are never mistaken for elements.
  *
- * What a visitor never sees is left out, the same way for annotations, entry
- * references and text:
+ * What a visitor never sees is left out, the same way for annotations, card
+ * markers and text:
  * - <template>, <noscript>, <script> and <style> content is not in the page's
  *   DOM at all (a browser with scripting on parses <noscript> as text), so its
  *   annotations, block roots and text are all ignored.
@@ -21,7 +21,7 @@
  * - `aria-hidden="true"` hides an element from assistive technology only; it
  *   is still visible and clickable, so it is treated as rendered.
  * - Text inside <svg> (icon titles) and <title> is not body text.
- * - <head> is never rendered, so an annotation or data-aa-entry in it (a
+ * - <head> is never rendered, so an annotation or card marker in it (a
  *   `<title data-aa-field="title">`) cannot be clicked and does not count.
  *   The same goes for the head-only elements (title, meta, link, base) where
  *   a page has no <head> tag. Its data-block-index DOES count, for the same
@@ -47,14 +47,15 @@ import path from 'path';
  *   link that navigates (<a href>, <area href>), 'inside' when it sits inside
  *   one. The integration lets such a click navigate and focuses nothing, so
  *   either way the annotation can never fire.
- * @property {string|null} entry - the nearest data-aa-entry on the element or
- *   an ancestor (`<collection>/<slug>`), or null for the page's own entry
+ * @property {boolean} card - the element or an ancestor marks a card as
+ *   another entry's (data-aa-entry), which this version does not support
  */
 
 /**
  * @typedef {Object} PageScan
  * @property {AnnotatedElement[]} fields
- * @property {string[]} entryRefs - every distinct data-aa-entry value, in document order
+ * @property {number} entryCards - rendered elements marked as another entry's
+ *   card (data-aa-entry, not supported in this version)
  * @property {Array<number|null>} blockIndexes - every data-block-index value in
  *   the DOM, in document order (null for a value that is not an integer)
  * @property {boolean[]} blockNested - for each of blockIndexes, whether it sits
@@ -113,9 +114,9 @@ export async function scanHtml(html) {
   const fields = [];
   const blockIndexes = [];
   const blockNested = [];
-  const entryRefs = [];
-  // Open elements carrying data-aa-entry, innermost last.
-  const openEntries = [];
+  let entryCards = 0;
+  // Inside a rendered card marked as another entry's.
+  let cardDepth = 0;
   const textChunks = [];
   const linkChunks = [];
   const bodyChunks = [];
@@ -174,16 +175,15 @@ export async function scanHtml(html) {
         trackDepth(element, (delta) => { blockDepth += delta; });
       },
     })
-    // Registered before the data-aa-field handler, so an element carrying both
-    // is already the innermost entry when its field is recorded.
+    // Cards for another entry are not supported in this version (see
+    // findEntryCards in ./coverage.js); they are counted so the doctor can say
+    // so. Registered before the data-aa-field handler, so an element carrying
+    // both is already inside its card when its field is recorded.
     .on('[data-aa-entry]', {
       element(element) {
         if (!isRendered(element)) return;
-        const value = element.getAttribute('data-aa-entry') || '';
-        if (!entryRefs.includes(value)) entryRefs.push(value);
-        if (!element.canHaveContent || element.selfClosing) return;
-        openEntries.push(value);
-        element.onEndTag(() => { openEntries.pop(); });
+        entryCards += 1;
+        trackDepth(element, (delta) => { cardDepth += delta; });
       },
     })
     // Registered before the link handler, so an annotated <a href> has not yet
@@ -193,8 +193,8 @@ export async function scanHtml(html) {
       element(element) {
         if (!isRendered(element)) return;
         const link = isNavigatingLink(element) ? 'is' : linkDepth > 0 ? 'inside' : null;
-        const entry = element.hasAttribute('data-aa-entry') ? element.getAttribute('data-aa-entry') || '' : openEntries.at(-1) ?? null;
-        fields.push({ name: element.getAttribute('data-aa-field') || '', tag: element.tagName.toLowerCase(), link, entry });
+        const card = cardDepth > 0 || element.hasAttribute('data-aa-entry');
+        fields.push({ name: element.getAttribute('data-aa-field') || '', tag: element.tagName.toLowerCase(), link, card });
       },
     })
     .on('[hidden]', { element(element) { trackDepth(element, (delta) => { hiddenDepth += delta; }); } })
@@ -224,7 +224,7 @@ export async function scanHtml(html) {
   const visibleText = textChunks.join('');
   return {
     fields,
-    entryRefs,
+    entryCards,
     blockIndexes,
     blockNested,
     clickableText: comparableText(visibleText),
@@ -248,8 +248,7 @@ export function pageFileCandidates(distDir, pagePath) {
 
 /**
  * Every page in a build, as page paths: `index.html` is `/`, `about/index.html`
- * and `about.html` are `/about`. Pages no entry owns are included, since a page
- * can show cards for other entries (data-aa-entry).
+ * and `about.html` are `/about`. Pages no entry owns are included.
  * @param {string} distDir
  * @returns {Promise<string[]>}
  */

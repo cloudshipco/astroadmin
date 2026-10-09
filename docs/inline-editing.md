@@ -379,54 +379,11 @@ off by one, and nothing reports it except the doctor's `block-index` check.
 
 ### Cards from other entries
 
-The editor edits one entry at a time, and an unqualified `data-aa-field` means
-a field of the entry the page is for. A page often also shows cards from
-OTHER entries: a services collection listed on the home page, testimonials,
-projects. To make those clickable, put `data-aa-entry` on the card (or any
-ancestor of the annotated elements):
-
-```astro
----
-const services = await getCollection('services');
----
-<ul>
-  {services.map((service) => (
-    <li data-aa-entry={`services/${service.id}`}>
-      <h3 data-aa-field="title">{service.data.title}</h3>
-      <p data-aa-field="summary">{service.data.summary}</p>
-      <a href={`/services/${service.id}`}>Read more</a>
-    </li>
-  ))}
-</ul>
-```
-
-The rules (since 1.4.9):
-
-- The value is `<collection>/<slug>`, with the slug the editor uses for the
-  entry (its id, as listed in the editor's entry picker). A collection name has
-  no slash, so everything after the first slash is the slug, and nested slugs
-  (`articles/2024/first-post`, a file in a subfolder) work.
-- An annotated element belongs to the nearest `data-aa-entry` on itself or an
-  ancestor. With none, it belongs to the page's own entry, exactly as before.
-- Inside a card, `data-aa-field` names the control **in that entry**: `title`,
-  not anything qualified by the page.
-- Clicking a card's annotation opens that entry in the editor and focuses the
-  field. The preview stays on the page you clicked, so you keep editing the
-  card where it is shown: a save refreshes the preview on that page, and
-  focusing one of the entry's controls outlines that card (not the page's own
-  element of the same name, nor another entry's card).
-- The editor treats the open entry as a card for as long as the preview shows
-  a page that entry does not own. Follow the card's link to the entry's own
-  page and it is the page's entry again: saves refresh that page, and its
-  controls outline the page's own elements. Go to any other page and saves
-  refresh that page; nothing returns the preview to the page the card was on.
-- While a card's entry is open, clicking an unqualified annotation goes back to
-  the page's own entry and focuses that field. The page is matched without the
-  preview's base path or a locale prefix (`/site/`, `/fr/`). On a page with no
-  entry of its own (a template page), such a click does nothing, rather than
-  focus a field of the card's entry.
-- A reference to an entry that does not exist does nothing. The doctor warns
-  about it, and counts a card's annotations toward that entry's coverage.
+An annotation always means a field of the entry open in the editor, so a card
+showing ANOTHER entry's text (services listed on the home page, say) cannot be
+clicked to edit that entry yet. Leave such cards unannotated: a `title` on a
+card would focus the open entry's `title`. Marking a card with
+`data-aa-entry` is not supported yet; the doctor warns about it.
 
 ### Links
 
@@ -447,7 +404,7 @@ link. That workaround is no longer needed.
 ### Components must pass the attribute on
 
 A wrapper component that destructures a fixed list of props and renders its
-own root element drops `data-aa-field` (and `data-aa-entry`): it compiles,
+own root element drops `data-aa-field`: it compiles,
 renders nothing, and fails no test. Spread the rest of the props onto the root:
 
 ```astro
@@ -487,7 +444,7 @@ reaches the output.
 ### Verifying
 
 1. **Run the doctor** from the site's directory. It builds the site and checks
-   block indexes, coverage, names, entry references and links on the built
+   block indexes, coverage, names and links on the built
    HTML:
 
    ```bash
@@ -504,7 +461,7 @@ reaches the output.
    ln -s "$PWD/node_modules" ../site-before/node_modules
    (cd ../site-before && bun --no-install --bun node_modules/.bin/astro build --outDir /tmp/aa-before)
    bun --no-install --bun node_modules/.bin/astro build --outDir /tmp/aa-after
-   find /tmp/aa-before /tmp/aa-after -name '*.html' -exec perl -pi -e 's/ data-(aa-field|aa-entry|block-index)="[^"]*"//g' {} +
+   find /tmp/aa-before /tmp/aa-after -name '*.html' -exec perl -pi -e 's/ data-(aa-field|block-index)="[^"]*"//g' {} +
    diff -r /tmp/aa-before /tmp/aa-after && echo "annotations are inert"
    ```
 

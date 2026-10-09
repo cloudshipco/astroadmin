@@ -1,9 +1,9 @@
 /**
  * Entry URLs (ui/entry-urls.js) against the REAL Express app: an entry with a
- * nested slug (a content file in a subfolder, `articles/2024/first-post`, as
- * a card's data-aa-entry names it) must be reachable for reads, saves and
- * dashboard links. The routes are `/:collection/:slug`, so the slug travels
- * as one encoded segment and Express decodes it.
+ * nested slug (a content file in a subfolder, `articles/2024/first-post`)
+ * must be reachable for reads, saves and dashboard links. The routes are
+ * `/:collection/:slug`, so the slug travels as one encoded segment and
+ * Express decodes it.
  *
  * Builds a throwaway project, starts createServer() on a free port, logs in,
  * and requests the URLs the dashboard builds.
@@ -71,7 +71,7 @@ const nestedFile = path.join(projectRoot, 'src/content/articles/2024/first-post.
 
 console.log('\n🧪 entry URLs against the real router\n' + '='.repeat(40));
 
-await check('the entry list reports the nested slug (it is what data-aa-entry names)', async () => {
+await check('the entry list reports the nested slug (it is what the editor names the entry by)', async () => {
   const body = await (await request('/api/collections/articles/entries')).json();
   assert.ok(body.entries.includes('2024/first-post'), JSON.stringify(body.entries));
 });
