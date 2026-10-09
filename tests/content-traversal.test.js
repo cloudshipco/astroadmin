@@ -379,6 +379,46 @@ await check('git: diff and show refuse from/to values that are options or not co
   assert.equal(fs.existsSync(path.join(projectRoot, 'probe-out')), false, 'an option reached git');
 });
 
+await check('git: revert-file and restore-from-commit refuse a folder (only a file is reverted)', async () => {
+  const flat = path.join(projectRoot, 'src/content/articles/flat.md');
+  const edited = '---\ntitle: Flat, unpublished folder probe\n---\nFlat.\n';
+  fs.writeFileSync(flat, edited);
+  try {
+    const head = git(['rev-parse', 'HEAD']).trim();
+    for (const folder of ['src/content', 'src/content/', 'src/content/articles', 'src/content/articles/', 'public/images']) {
+      await assertRefused(await request('/api/git/revert-file', { method: 'POST', body: JSON.stringify({ file: folder }) }), `revert ${folder}`);
+      await assertRefused(await request('/api/git/restore-from-commit', { method: 'POST', body: JSON.stringify({ file: folder, commit: head }) }), `restore ${folder}`);
+      assert.equal(fs.readFileSync(flat, 'utf8'), edited, `${folder}: an unpublished edit under the folder was discarded`);
+    }
+  } finally {
+    git(['checkout', 'HEAD', '--', 'src/content/articles/flat.md']);
+  }
+});
+
+await check('git control: a single file reverts, a deleted file reverts, and a file restores from an older commit', async () => {
+  const flat = path.join(projectRoot, 'src/content/articles/flat.md');
+  fs.writeFileSync(flat, '---\ntitle: Flat, to be reverted\n---\nFlat.\n');
+  const revert = await request('/api/git/revert-file', { method: 'POST', body: JSON.stringify({ file: 'src/content/articles/flat.md' }) });
+  assert.equal(revert.status, 200, await revert.text());
+  assert.equal(fs.readFileSync(flat, 'utf8'), '---\ntitle: Flat\n---\nFlat.\n');
+
+  const home = path.join(projectRoot, 'src/content/pages/home.md');
+  const homeContent = fs.readFileSync(home, 'utf8');
+  fs.rmSync(home);
+  const undelete = await request('/api/git/revert-file', { method: 'POST', body: JSON.stringify({ file: 'src/content/pages/home.md' }) });
+  assert.equal(undelete.status, 200, await undelete.text());
+  assert.equal(fs.readFileSync(home, 'utf8'), homeContent, 'a deleted file comes back');
+
+  // about.md does not exist at the root commit: restoring it from there is refused,
+  // restoring it from HEAD (where it is a blob) works.
+  const about = path.join(projectRoot, 'src/content/pages/about.md');
+  fs.writeFileSync(about, '---\ntitle: About, edited\n---\n');
+  await assertRefused(await request('/api/git/restore-from-commit', { method: 'POST', body: JSON.stringify({ file: 'src/content/pages/about.md', commit: rootCommit }) }), 'restore a file absent at that commit');
+  const restored = await request('/api/git/restore-from-commit', { method: 'POST', body: JSON.stringify({ file: 'src/content/pages/about.md', commit: git(['rev-parse', 'HEAD']).trim() }) });
+  assert.equal(restored.status, 200, await restored.text());
+  assert.match(fs.readFileSync(about, 'utf8'), /title: About\n/);
+});
+
 // --- The shared guards on their own ---------------------------------------------
 // The routes above cannot reach every layer separately (an undeclared
 // collection is refused before containment is checked), so each layer is

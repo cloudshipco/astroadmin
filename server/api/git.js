@@ -128,10 +128,13 @@ function literalPathspec(validatedFile) {
  * Validate that a file path is within allowed directories.
  * Uses path.resolve() + startsWith() for robust traversal prevention.
  * @param {string} filePath - User-provided file path
+ * @param {{ allowGitPathRoot?: boolean }} [options] - allowGitPathRoot false
+ *   refuses a configured git path itself (`src/content`), for routes that
+ *   change files; they also check the path is a file with assertBlobAt.
  * @returns {Promise<string>} - Normalized path (relative to project root)
  * @throws {GitRequestError} - If path is outside allowed directories
  */
-async function validateFilePath(filePath, fullConfig) {
+async function validateFilePath(filePath, fullConfig, { allowGitPathRoot = true } = {}) {
   // A repeated query parameter arrives as an array, a JSON body can send anything.
   if (typeof filePath !== 'string' || filePath === '' || /[\u0000-\u001f\u007f]/.test(filePath)) {
     throw new GitRequestError('Invalid file path');
@@ -158,7 +161,7 @@ async function validateFilePath(filePath, fullConfig) {
   const isAllowed = allowedGitPaths.some(allowedDir => {
     const allowedAbsolute = path.resolve(projectRoot, allowedDir);
     return absolutePath.startsWith(allowedAbsolute + path.sep) ||
-           absolutePath === allowedAbsolute;
+           (allowGitPathRoot && absolutePath === allowedAbsolute);
   });
 
   if (!isAllowed) {
@@ -228,6 +231,24 @@ async function validateCommitRef(git, commit) {
     throw new GitRequestError('Unknown commit');
   }
   return ref;
+}
+
+/**
+ * Refuse a path that is not a FILE at `ref`. validateFilePath accepts a folder
+ * (a diff or history of a folder is harmless), but a checkout of a folder
+ * discards every unpublished edit beneath it. Asking git about `ref` rather
+ * than the working tree still allows reverting a file deleted since.
+ */
+async function assertBlobAt(git, ref, validatedFile) {
+  let type = '';
+  try {
+    type = (await git.raw(['cat-file', '-t', showObjectSpec(ref, validatedFile)])).trim();
+  } catch {
+    // not in that commit at all
+  }
+  if (type !== 'blob') {
+    throw new GitRequestError('Invalid file path: not a file in that commit');
+  }
 }
 
 /**
@@ -527,8 +548,10 @@ router.post('/revert-file', async (req, res) => {
       });
     }
 
-    // Validate file path (restrict to configured git paths)
-    const validatedFile = await validateFilePath(file, fullConfig);
+    // Validate file path (restrict to configured git paths); a FILE, never a
+    // folder, whose checkout would discard every unpublished edit under it.
+    const validatedFile = await validateFilePath(file, fullConfig, { allowGitPathRoot: false });
+    await assertBlobAt(git, 'HEAD', validatedFile);
 
     // Restore file from HEAD (discard uncommitted changes)
     await git.checkout(['HEAD', '--', literalPathspec(validatedFile)]);
@@ -566,11 +589,13 @@ router.post('/restore-from-commit', async (req, res) => {
       });
     }
 
-    // Validate file path (restrict to configured git paths)
-    const validatedFile = await validateFilePath(file, fullConfig);
+    // Validate file path (restrict to configured git paths); a FILE at that
+    // commit, never a folder.
+    const validatedFile = await validateFilePath(file, fullConfig, { allowGitPathRoot: false });
 
-    // Validate commit hash format
-    const validatedCommit = validateCommitHash(commit);
+    // Validate the commit, then that the path is a file in it
+    const validatedCommit = await validateCommitRef(git, commit);
+    await assertBlobAt(git, validatedCommit, validatedFile);
 
     // Restore file from specific commit
     await git.checkout([validatedCommit, '--', literalPathspec(validatedFile)]);
