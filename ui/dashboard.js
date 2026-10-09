@@ -2,6 +2,7 @@
  * Dashboard functionality - Shopify-style layout
  */
 
+import { withCacheBuster } from './cache-bust.js';
 import {
   generateForm,
   extractFormData,
@@ -927,7 +928,7 @@ function updateVirtualPagePreview(page) {
   };
   iframe.addEventListener('load', onLoad);
 
-  const newUrl = pageUrl + '?t=' + Date.now();
+  const newUrl = withCacheBuster(pageUrl);
   if (iframe.contentWindow) {
     iframe.contentWindow.location.replace(newUrl);
   } else {
@@ -1441,7 +1442,7 @@ function makeSaver(target) {
       const previewPageUrl = getPreviewPageUrl();
       if (previewPageUrl) {
         try {
-          const res = await fetch(previewPageUrl + '?t=' + Date.now(), { cache: 'no-store' });
+          const res = await fetch(withCacheBuster(previewPageUrl), { cache: 'no-store' });
           originalHash = quickHash(await res.text());
         } catch { /* proceed without hash */ }
       }
@@ -1647,7 +1648,7 @@ async function waitForContentChange(originalHash, maxWaitMs = 2500) {
     await new Promise(r => setTimeout(r, pollDelay));
 
     try {
-      const response = await fetch(pageUrl + '?t=' + Date.now(), {
+      const response = await fetch(withCacheBuster(pageUrl), {
         cache: 'no-store'
       });
       const html = await response.text();
@@ -1840,7 +1841,7 @@ async function updatePreview() {
   iframe.classList.add('loading');
 
   // Force iframe reload
-  const newUrl = pageUrl + '?t=' + Date.now();
+  const newUrl = withCacheBuster(pageUrl);
 
   // Listen for load to restore scroll position
   let loadHandled = false;
@@ -2245,7 +2246,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     } else if (result.check) {
       showPublishProblems(result);
     } else {
-      showNotification('Failed to publish: ' + result.error, 'error');
+      showNotification('Failed to publish: ' + (result.message || result.error), 'error');
     }
   } catch (error) {
     console.error('Publish failed:', error);
