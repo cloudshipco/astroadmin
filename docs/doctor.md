@@ -15,13 +15,13 @@ feature your site may not use yet.
 ## Running it
 
 ```bash
-bunx astroadmin doctor
+npx astroadmin doctor
 ```
 
 From the site's directory, or name it:
 
 ```bash
-bunx astroadmin doctor --project ../site-a
+npx astroadmin doctor --project ../site-a
 ```
 
 | Option | Effect |
@@ -30,16 +30,16 @@ bunx astroadmin doctor --project ../site-a
 | `--build <distDir>` | Check an existing build instead of building. Without it, the site is built into a temporary directory with the site's own installed Astro, which is deleted afterwards (see [build-runs](#build-runs)). A directory that is missing or holds no HTML pages fails `build-runs`. |
 | `--json` | Print the report as JSON on stdout (progress goes to stderr), for CI or a dashboard that shows several sites at once. |
 
-The exit code is 1 when any check **fails**, otherwise 0. Warnings do not
+The exit code is 1 when any check fails, otherwise 0. Warnings do not
 change the exit code.
 
 Each result is one of:
 
-- **pass**: the feature is set up.
-- **warn**: something works less well than it could (missing click-to-edit
+- `pass`: the feature is set up.
+- `warn`: something works less well than it could (missing click-to-edit
   coverage, say). The site still builds and publishes.
-- **fail**: something stops publishing or the editor from working.
-- **skip**: the check does not apply (the site does not use Astro images, or
+- `fail`: something stops publishing or the editor from working.
+- `skip`: the check does not apply (the site does not use Astro images, or
   there is no build to read).
 
 Example output, trimmed:
@@ -260,7 +260,7 @@ nearest `data-aa-field` around it. The value is the control's form name:
 | An item list inside a block | `blocks[3].items` (the list's control) |
 | A Markdown entry's body | `body` |
 
-The check measures the **built** HTML, not the templates, so it sees what the
+The check measures the built HTML, not the templates, so it sees what the
 preview actually renders, including an attribute a wrapper component dropped.
 What a visitor never sees is left out: annotations and text inside
 `<template>`, `<noscript>`, `<script>` or `<style>`, or inside an element with
@@ -298,13 +298,13 @@ The full conventions, with examples, are in
 [Click-to-edit in the preview](./inline-editing.md#click-to-edit-in-the-preview).
 Three traps the check cannot see directly, worth knowing when annotating:
 
-- **Annotate the element the click lands on.** An annotated `<img>` behind a
+- Annotate the element the click lands on. An annotated `<img>` behind a
   full-size text layer is never reached; annotate the containing section, and
   nearer annotations inside it still win.
-- **A wrapper component must pass the attribute on.** A component that renders
+- A wrapper component must pass the attribute on. A component that renders
   its own root element without spreading its other props drops
   `data-aa-field`. Measuring the build catches this one.
-- **A block root that is not a `<section>`** needs `data-block-index` (see
+- A block root that is not a `<section>` needs `data-block-index` (see
   above).
 
 ### click-to-edit-names

@@ -1,293 +1,162 @@
-# Content Collections for AstroAdmin
+# Schemas and editor controls
 
-This guide explains how to set up Astro Content Collections so they work with AstroAdmin.
+AstroAdmin builds its forms from the collections exported by
+`src/content.config.ts`. This page covers how it reads that file, where it
+writes entries, and which control each kind of field gets. It assumes the
+current content API: loaders from `astro/loaders` and `z` from `astro/zod`.
+The pre-Astro 6 form (`src/content/config.ts`, `type: 'content'`) is not
+supported.
 
-## What Are Content Collections?
+## How collections are read
 
-[Content Collections](https://docs.astro.build/en/guides/content-collections/) are Astro's way of organizing and validating content. You define a schema using Zod, and Astro enforces it.
+AstroAdmin bundles `src/content.config.ts` and evaluates it, so the schema it
+sees is the one Astro uses. A schema written as a function
+(`schema: ({ image }) => z.object(...)`) is called too.
 
-AstroAdmin reads these schemas and generates form fields automatically.
+| Loader | Where entries live | Written as |
+|---|---|---|
+| `glob({ pattern, base })` | One file per entry under `base` | Frontmatter plus body for `.md`/`.mdx`, plain JSON for `.json` |
+| `file('path/to/x.json')` | One JSON array, one object per entry | The array, rewritten in place; each object needs an `id` |
 
-## Minimal Setup
+An existing entry is always saved back to its own file. Writes are atomic
+(a temporary file, then a rename), so the dev server never reads a half
+written file. Markdown and MDX entries also have an editor for the body.
 
-### 1. Create the Content Directory
+## Which control a field gets
 
-```bash
-mkdir -p src/content/pages
-```
-
-### 2. Create the Config File
-
-Create `src/content/config.ts`:
+The control depends on the field's type and, for strings, on its name.
+Every row below was rendered from this schema:
 
 ```typescript
-import { defineCollection, z } from 'astro:content';
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { glob, file } from 'astro/loaders';
+import { z } from 'astro/zod';
 
-const pages = defineCollection({
-  type: 'content',  // Markdown files with frontmatter
+const posts = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/content/posts' }),
   schema: z.object({
     title: z.string(),
-    description: z.string().optional(),
-    publishDate: z.date().optional(),
+    summary: z.string().optional(),
+    order: z.number().default(0),
+    featured: z.boolean().default(false),
+    category: z.enum(['news', 'guides']),
+    publishDate: z.coerce.date(),
+    heroImage: z.string().optional(),
+    heroImageAlt: z.string().optional(),
+    tags: z.array(z.string()).default([]),
+    links: z.array(z.object({
+      label: z.string(),
+      url: z.string(),
+    })).default([]),
+    seo: z.object({
+      title: z.string().optional(),
+      description: z.string().optional(),
+    }).default({}),
+    testimonialIds: z.array(z.string()).default([]),
   }),
 });
 
-export const collections = { pages };
+const testimonials = defineCollection({
+  loader: file('src/content/testimonials.json'),
+  schema: z.object({
+    id: z.string(),
+    quote: z.string(),
+    author: z.string(),
+  }),
+});
+
+export const collections = { posts, testimonials };
 ```
 
-### 3. Create a Content File
+| Field | Control |
+|---|---|
+| `title: z.string()` | One-line text input (see [text fields](#text-fields)) |
+| `summary: z.string()` | Multi-line text area |
+| `order: z.number()` | Number input; `.min()` and `.max()` carry over |
+| `featured: z.boolean()` | Checkbox |
+| `category: z.enum([...])` | Drop-down list |
+| `publishDate: z.coerce.date()` | Date picker (see [dates](#dates)) |
+| `heroImage: z.string()` | Image picker with upload (see [images](#images)) |
+| `tags: z.array(z.string())` | A list of text inputs that can be added to, removed and reordered |
+| `links: z.array(z.object({...}))` | A list of cards; each opens a form for the item |
+| `seo: z.object({...})` | The nested fields, grouped under a heading |
+| `testimonialIds: z.array(z.string())` | A picker of `testimonials` entries (see [references](#references)) |
+| `z.literal(...)` | Nothing visible; the value is kept on save |
+| `z.discriminatedUnion(...)` in an array | A block editor (see [blocks](./blocks.md)) |
 
-Create `src/content/pages/home.md`:
+Labels come from field names: `heroImage` is shown as "Hero Image". Choose
+names an editor will understand.
 
-```markdown
----
-title: Home Page
-description: Welcome to our site
----
+### Text fields
 
-This is the page content.
-```
-
-### 4. Run AstroAdmin
-
-```bash
-npx astroadmin dev
-```
-
-You should now see "pages" in the dropdown with "home" as an entry.
-
-## Schema Field Types
-
-AstroAdmin maps Zod types to form widgets:
-
-### Text Fields
+A string field is a one-line input when its name is, or ends with, `title`,
+`heading`, `name`, `label`, `text`, `link`, `href`, `url`, `value`, `number`
+or `alt`, or when it has a `.max()` under 100. Every other string
+is a text area. A name containing `description`, `content` or `subheading`
+is always a text area, and so is any field described as one:
 
 ```typescript
-schema: z.object({
-  // Single-line text input
-  title: z.string(),
-
-  // Textarea (use describe hint)
-  body: z.string().describe('textarea'),
-
-  // With placeholder
-  subtitle: z.string().describe('Enter a subtitle'),
-})
+title: z.string().describe('textarea'),
 ```
 
-### Numbers and Booleans
-
-```typescript
-schema: z.object({
-  // Number input
-  order: z.number(),
-
-  // Checkbox
-  featured: z.boolean(),
-  draft: z.boolean().default(false),
-})
-```
+A field whose name contains `color` or `colour` gets a colour picker.
 
 ### Dates
 
-```typescript
-schema: z.object({
-  // Date picker
-  publishDate: z.date(),
+A field gets a date picker when its name ends in `date` (`date`, `pubDate`,
+`publishDate`), `createdAt`, `updatedAt`, `publishedAt` or `modifiedAt`. Other date fields are edited as text.
 
-  // Coerced date (accepts strings)
-  updatedAt: z.coerce.date(),
-})
-```
-
-### Select Dropdowns
-
-```typescript
-schema: z.object({
-  // Enum creates a dropdown
-  status: z.enum(['draft', 'published', 'archived']),
-
-  // With default
-  category: z.enum(['news', 'blog', 'tutorial']).default('blog'),
-})
-```
+The picker saves the date as text (`'2026-01-15'`). Declare date fields with
+`z.coerce.date()`, which accepts that; `z.date()` rejects a quoted date in
+frontmatter, and a date in a JSON file is always a string.
 
 ### Images
 
-```typescript
-import { defineCollection, z, image } from 'astro:content';
+A string field gets the image picker when its name is, or ends with, `image`,
+`photo`, `logo`, `icon`, `avatar`, `thumbnail`, `banner`, `background` or
+`src`. The picker can choose from the image library or upload a new file.
+Uploads go to `public/images/`, and the field is saved as
+`/images/<file>`, which the site serves from `public/`.
 
-const pages = defineCollection({
-  schema: z.object({
-    // Image picker with upload
-    heroImage: image().optional(),
+The picker also offers an alt text box, saved next to the image as
+`<field>Alt` (`heroImageAlt` for `heroImage`). Declare that field in the
+schema, as above, or Astro leaves it out of `entry.data`. When it is declared
+the picker's own alt box is hidden and the declared field is shown instead.
 
-    // Alt text is stored as heroImageAlt automatically
-  }),
-});
-```
+Use `z.string()` for picker fields, not Astro's `image()`. `image()` expects a
+path relative to the entry file (`../../assets/hero.png`) and fails the build
+on a `/images/...` path, so the first image chosen in the picker would stop
+the site building. AstroAdmin's publish check then refuses to push it.
 
-### Arrays (Repeatable Fields)
-
-```typescript
-schema: z.object({
-  // Array of strings
-  tags: z.array(z.string()),
-
-  // Array of objects
-  features: z.array(z.object({
-    title: z.string(),
-    description: z.string(),
-  })),
-})
-```
-
-### Nested Objects
-
-```typescript
-schema: z.object({
-  seo: z.object({
-    metaTitle: z.string(),
-    metaDescription: z.string(),
-    ogImage: image().optional(),
-  }),
-})
-```
+A list of objects that each have a `src` (`z.array(z.object({ src, alt }))`)
+is edited as a gallery.
 
 ### References
 
-```typescript
-import { defineCollection, z, reference } from 'astro:content';
+An array of strings named `<singular>Ids` is a list of entries from the
+collection `<singular>s`: `testimonialIds` picks from `testimonials`,
+`pageIds` from `pages`. The collection name must be lower case and end in
+`s`. The entries' ids are stored, and the site looks them up:
 
-const posts = defineCollection({
-  schema: z.object({
-    // Reference to another collection
-    author: reference('authors'),
+```astro
+---
+import { getEntries, getEntry } from 'astro:content';
 
-    // Array of references
-    relatedPosts: z.array(reference('posts')).optional(),
-  }),
-});
-
-const authors = defineCollection({
-  type: 'data',  // JSON collection
-  schema: z.object({
-    name: z.string(),
-    email: z.string().email(),
-  }),
-});
+const post = await getEntry('posts', 'first-post');
+const quotes = await getEntries(
+  post.data.testimonialIds.map((id) => ({ collection: 'testimonials', id })),
+);
+---
+{quotes.map((quote) => <blockquote>{quote.data.quote}</blockquote>)}
 ```
 
-## Block Editor (Discriminated Unions)
+Astro's `reference()` helper is not supported: AstroAdmin cannot read a
+content config that uses it, and then no collection can be edited.
 
-For page builders with multiple block types, use discriminated unions:
+## Validation
 
-```typescript
-const blockSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('hero'),
-    title: z.string(),
-    subtitle: z.string().optional(),
-    backgroundImage: image().optional(),
-  }),
-  z.object({
-    type: z.literal('text'),
-    content: z.string().describe('textarea'),
-  }),
-  z.object({
-    type: z.literal('features'),
-    heading: z.string(),
-    items: z.array(z.object({
-      title: z.string(),
-      description: z.string(),
-      icon: z.string().optional(),
-    })),
-  }),
-  z.object({
-    type: z.literal('cta'),
-    title: z.string(),
-    buttonText: z.string(),
-    buttonUrl: z.string(),
-  }),
-]);
-
-const pages = defineCollection({
-  schema: z.object({
-    title: z.string(),
-    blocks: z.array(blockSchema),
-  }),
-});
-```
-
-AstroAdmin renders this as a block editor where you can:
-- Add new blocks
-- Remove blocks
-- Reorder blocks by drag-and-drop
-- Edit each block's fields
-
-## Collection Types
-
-### Content Collections
-
-For markdown/MDX files with frontmatter and body:
-
-```typescript
-const blog = defineCollection({
-  type: 'content',  // or omit (default)
-  schema: z.object({ ... }),
-});
-```
-
-Files: `src/content/blog/my-post.md`
-
-### Data Collections
-
-For JSON files without body content:
-
-```typescript
-const settings = defineCollection({
-  type: 'data',
-  schema: z.object({ ... }),
-});
-```
-
-Files: `src/content/settings/site.json`
-
-## Tips
-
-### Optional vs Required
-
-```typescript
-// Required - user must fill this in
-title: z.string(),
-
-// Optional - can be left empty
-subtitle: z.string().optional(),
-
-// Default value - pre-filled but editable
-status: z.string().default('draft'),
-```
-
-### Field Descriptions
-
-Use `.describe()` to add hints or change the widget:
-
-```typescript
-// Shows as hint text under the field
-email: z.string().describe('Enter your work email'),
-
-// Changes widget to textarea
-bio: z.string().describe('textarea'),
-```
-
-### Nullable Fields
-
-```typescript
-// Allows null value
-deletedAt: z.date().nullable(),
-```
-
-## Next Steps
-
-- [Configuration](./configuration.md) - Customize AstroAdmin
-- [Astro Content Collections Docs](https://docs.astro.build/en/guides/content-collections/)
+A save always writes the file, even when the entry does not match its
+schema; the editor marks the fields that are wrong. Publishing is stricter:
+the site's own Astro build must accept the content before anything is pushed.
+See [Git and publishing](./configuration.md#git-and-publishing).

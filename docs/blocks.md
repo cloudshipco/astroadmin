@@ -1,458 +1,187 @@
-# Block-Based Page Editing
+# Blocks
 
-This guide explains how to set up a blocks-based content structure that gives editors flexibility to build pages with reusable components.
+A block list lets editors build a page from sections: add a hero, then a
+feature grid, then testimonials, and reorder them. In the schema it is an
+array of a discriminated union keyed on `type`. AstroAdmin shows it as a list
+of blocks with an "Add block" menu, one form per block, and drag to reorder.
 
-## What Are Blocks?
-
-Blocks are reusable content sections that editors can add, remove, and reorder. Instead of a fixed page structure, blocks let editors compose pages from a library of components:
-
-- Hero sections
-- Text content
-- Feature grids
-- Testimonials
-- Image galleries
-- Call-to-action sections
-- And more...
-
-AstroAdmin renders blocks as a drag-and-drop editor in the sidebar.
-
-## Setting Up Blocks
-
-### Step 1: Define Block Types
-
-Create a discriminated union schema where each block has a `type` field:
+## Schema
 
 ```typescript
-// src/content/config.ts
-import { defineCollection, z } from 'astro:content';
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { glob, file } from 'astro/loaders';
+import { z } from 'astro/zod';
 
-// Define each block type
-const blockSchema = z.discriminatedUnion('type', [
-  // Hero block
+const blocks = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('hero'),
-    title: z.string(),
-    subtitle: z.string().optional(),
-    backgroundImage: z.string().optional(),
-    buttonText: z.string().optional(),
-    buttonUrl: z.string().optional(),
+    heading: z.string(),
+    subheading: z.string().optional(),
+    image: z.string().optional(),
+    imageAlt: z.string().optional(),
   }),
-
-  // Rich text block
-  z.object({
-    type: z.literal('text'),
-    content: z.string(),
-  }),
-
-  // Features grid
   z.object({
     type: z.literal('features'),
     heading: z.string().optional(),
     items: z.array(z.object({
       title: z.string(),
       description: z.string(),
-      icon: z.string().optional(),
-    })),
+    })).default([]),
   }),
-
-  // Testimonials
   z.object({
     type: z.literal('testimonials'),
     heading: z.string().optional(),
-    items: z.array(z.object({
-      quote: z.string(),
-      author: z.string(),
-      role: z.string().optional(),
-    })),
-  }),
-
-  // Call to action
-  z.object({
-    type: z.literal('cta'),
-    title: z.string(),
-    description: z.string().optional(),
-    buttonText: z.string(),
-    buttonUrl: z.string(),
+    testimonialIds: z.array(z.string()).default([]),
   }),
 ]);
 
-// Page collection with blocks
 const pages = defineCollection({
-  type: 'data',
+  loader: glob({ pattern: '**/*.md', base: './src/content/pages' }),
   schema: z.object({
     title: z.string(),
-    metaDescription: z.string().optional(),
-    blocks: z.array(blockSchema),
+    blocks: z.array(blocks).default([]),
   }),
 });
 
-export const collections = { pages };
+const testimonials = defineCollection({
+  loader: file('src/content/testimonials.json'),
+  schema: z.object({
+    id: z.string(),
+    quote: z.string(),
+    author: z.string(),
+  }),
+});
+
+export const collections = { pages, testimonials };
 ```
 
-### Step 2: Create Content Files
+The fields inside each block get the same controls as anywhere else (see
+[schemas and controls](./content-collections.md)). The `type` literal is not
+shown; it is set when the block is added. The block's label in the editor
+comes from its type, so `sectionHeader` is shown as "Section Header".
 
-Create JSON files with your block content:
+An entry, `src/content/pages/home.md`:
 
-```json
-// src/content/pages/home.json
-{
-  "title": "Welcome",
-  "metaDescription": "Our amazing website",
-  "blocks": [
-    {
-      "type": "hero",
-      "title": "Build Something Amazing",
-      "subtitle": "Start your journey with us",
-      "backgroundImage": "/images/hero.jpg",
-      "buttonText": "Get Started",
-      "buttonUrl": "/contact"
-    },
-    {
-      "type": "features",
-      "heading": "Why Choose Us",
-      "items": [
-        {
-          "title": "Fast",
-          "description": "Lightning quick performance"
-        },
-        {
-          "title": "Secure",
-          "description": "Enterprise-grade security"
-        },
-        {
-          "title": "Scalable",
-          "description": "Grows with your needs"
-        }
-      ]
-    },
-    {
-      "type": "testimonials",
-      "heading": "What People Say",
-      "items": [
-        {
-          "quote": "This product changed everything for us.",
-          "author": "Jane Doe",
-          "role": "CEO, Acme Inc"
-        }
-      ]
-    },
-    {
-      "type": "cta",
-      "title": "Ready to Start?",
-      "description": "Join thousands of happy customers",
-      "buttonText": "Sign Up Free",
-      "buttonUrl": "/signup"
-    }
-  ]
-}
+```markdown
+---
+title: Home
+blocks:
+  - type: hero
+    heading: Build something
+    subheading: Start here.
+  - type: features
+    heading: Why us
+    items:
+      - title: Fast
+        description: Pages are static HTML.
+      - title: Simple
+        description: Content lives in your repository.
+  - type: testimonials
+    heading: What people say
+    testimonialIds:
+      - ada
+---
 ```
 
-### Step 3: Create Block Components
+## Components
 
-Create an Astro component for each block type:
+Put one component per block type in `src/components/blocks/`, named after
+the type with a `Block` suffix: `hero` is `HeroBlock.astro`, `testimonials`
+is `TestimonialsBlock.astro`. Each takes the block as a `block` prop. That
+name and prop are what the integration's component preview (below) uses; a
+page can render the components any way it likes.
 
 ```astro
 ---
-// src/components/blocks/Hero.astro
-const { title, subtitle, backgroundImage, buttonText, buttonUrl } = Astro.props;
+// src/components/blocks/HeroBlock.astro
+const { block, index } = Astro.props;
 ---
-
-<section class="hero" style={backgroundImage ? `background-image: url(${backgroundImage})` : ''}>
-  <h1>{title}</h1>
-  {subtitle && <p class="subtitle">{subtitle}</p>}
-  {buttonText && buttonUrl && (
-    <a href={buttonUrl} class="btn">{buttonText}</a>
-  )}
+<section data-block-index={index}>
+  <h1 data-aa-field={`blocks[${index}].heading`}>{block.heading}</h1>
+  {block.subheading && <p data-aa-field={`blocks[${index}].subheading`}>{block.subheading}</p>}
+  {block.image && <img src={block.image} alt={block.imageAlt ?? ''} />}
 </section>
 ```
 
 ```astro
 ---
-// src/components/blocks/Features.astro
-const { heading, items } = Astro.props;
----
+// src/components/blocks/TestimonialsBlock.astro
+import { getEntries } from 'astro:content';
 
-<section class="features">
-  {heading && <h2>{heading}</h2>}
-  <div class="features-grid">
-    {items.map(item => (
-      <div class="feature">
-        {item.icon && <span class="icon">{item.icon}</span>}
-        <h3>{item.title}</h3>
-        <p>{item.description}</p>
-      </div>
-    ))}
-  </div>
+const { block, index } = Astro.props;
+const quotes = await getEntries(
+  block.testimonialIds.map((id) => ({ collection: 'testimonials', id })),
+);
+---
+<section data-block-index={index}>
+  {block.heading && <h2 data-aa-field={`blocks[${index}].heading`}>{block.heading}</h2>}
+  {quotes.map((quote) => (
+    <blockquote>
+      <p>{quote.data.quote}</p>
+      <cite>{quote.data.author}</cite>
+    </blockquote>
+  ))}
 </section>
 ```
 
-```astro
----
-// src/components/blocks/Testimonials.astro
-const { heading, items } = Astro.props;
----
-
-<section class="testimonials">
-  {heading && <h2>{heading}</h2>}
-  <div class="testimonials-list">
-    {items.map(item => (
-      <blockquote>
-        <p>"{item.quote}"</p>
-        <cite>
-          {item.author}
-          {item.role && <span class="role">{item.role}</span>}
-        </cite>
-      </blockquote>
-    ))}
-  </div>
-</section>
-```
-
-### Step 4: Create a Block Renderer
-
-Create a component that renders the right block based on type:
-
-```astro
----
-// src/components/BlockRenderer.astro
-import Hero from './blocks/Hero.astro';
-import Text from './blocks/Text.astro';
-import Features from './blocks/Features.astro';
-import Testimonials from './blocks/Testimonials.astro';
-import Cta from './blocks/Cta.astro';
-
-const { block } = Astro.props;
-
-const components = {
-  hero: Hero,
-  text: Text,
-  features: Features,
-  testimonials: Testimonials,
-  cta: Cta,
-};
-
-const Component = components[block.type];
----
-
-{Component ? <Component {...block} /> : <p>Unknown block type: {block.type}</p>}
-```
-
-### Step 5: Use in Your Page
+The page maps each block to its component:
 
 ```astro
 ---
 // src/pages/index.astro
 import { getEntry } from 'astro:content';
-import Layout from '../layouts/Layout.astro';
-import BlockRenderer from '../components/BlockRenderer.astro';
+import HeroBlock from '../components/blocks/HeroBlock.astro';
+import FeaturesBlock from '../components/blocks/FeaturesBlock.astro';
+import TestimonialsBlock from '../components/blocks/TestimonialsBlock.astro';
+
+const components = {
+  hero: HeroBlock,
+  features: FeaturesBlock,
+  testimonials: TestimonialsBlock,
+};
 
 const page = await getEntry('pages', 'home');
-const { title, metaDescription, blocks } = page.data;
 ---
-
-<Layout title={title} description={metaDescription}>
-  {blocks.map(block => (
-    <BlockRenderer block={block} />
-  ))}
-</Layout>
+<main>
+  {page.data.blocks.map((block, index) => {
+    const Block = components[block.type];
+    return <Block block={block} index={index} />;
+  })}
+</main>
 ```
 
-## Using AstroAdmin
+`data-block-index` and `data-aa-field` are optional. With them, clicking a
+block's header in the editor outlines that block in the preview, and
+clicking its text in the preview opens the field.
+[Click-to-edit](./inline-editing.md#click-to-edit-in-the-preview) has the
+naming rules, and its [Arrays](./inline-editing.md#arrays) section shows how
+to annotate the items of a `features` block.
 
-Once set up, AstroAdmin will:
+## Previewing a collection that blocks use
 
-1. Show a **block editor** in the sidebar
-2. Let editors **add new blocks** from a dropdown
-3. Allow **drag-and-drop reordering**
-4. Expand/collapse blocks for focused editing
-5. Show a **live preview** as changes are made
+`testimonials` has no page of its own. Because the `testimonials` block
+refers to it through `testimonialIds`, AstroAdmin can still preview an entry
+by rendering that block with only that entry in it, at
+`/component-preview/testimonials/<id>`. This needs:
 
-## Tips
+- the integration in `astro.config.mjs`:
 
-### Keep Block Types Focused
+  ```javascript
+  import { defineConfig } from 'astro/config';
+  import astroadmin from 'astroadmin/integration';
 
-Each block should do one thing well:
+  export default defineConfig({
+    integrations: [astroadmin()],
+  });
+  ```
 
-```typescript
-// Good: focused blocks
-z.object({ type: z.literal('hero'), ... }),
-z.object({ type: z.literal('testimonials'), ... }),
+- the block component at `src/components/blocks/TestimonialsBlock.astro`,
+  reading `block.testimonialIds`;
+- a stylesheet at `src/styles/global.css`, which the preview route imports so
+  the block is styled as on the site. The route fails without that file.
 
-// Avoid: kitchen-sink blocks
-z.object({
-  type: z.literal('section'),
-  variant: z.enum(['hero', 'testimonials', 'features', ...]),
-  // lots of optional fields...
-})
-```
-
-### Use Descriptive Type Names
-
-Block types become labels in AstroAdmin:
-
-```typescript
-// Shows as "Hero Section" in the editor
-z.object({ type: z.literal('hero'), ... }),
-
-// Shows as "Section Header" in the editor
-z.object({ type: z.literal('sectionHeader'), ... }),
-```
-
-### Reference Other Collections
-
-Blocks can reference items from other collections:
-
-```typescript
-z.object({
-  type: z.literal('featuredPosts'),
-  heading: z.string(),
-  postIds: z.array(z.string()), // IDs of posts to feature
-}),
-```
-
-Then in your component, fetch the referenced content:
-
-```astro
----
-import { getEntry } from 'astro:content';
-
-const { postIds } = Astro.props;
-const posts = await Promise.all(
-  postIds.map(id => getEntry('posts', id))
-);
----
-```
-
-### Provide Sensible Defaults
-
-Use `.default()` to pre-populate new blocks:
-
-```typescript
-z.object({
-  type: z.literal('cta'),
-  title: z.string().default('Ready to get started?'),
-  buttonText: z.string().default('Contact Us'),
-  buttonUrl: z.string().default('/contact'),
-}),
-```
-
-## Example: Full Page Schema
-
-Here's a complete example with multiple block types:
-
-```typescript
-import { defineCollection, z } from 'astro:content';
-
-const blockSchema = z.discriminatedUnion('type', [
-  // Hero with background image
-  z.object({
-    type: z.literal('hero'),
-    title: z.string(),
-    subtitle: z.string().optional(),
-    backgroundImage: z.string().optional(),
-    buttonText: z.string().optional(),
-    buttonUrl: z.string().optional(),
-    overlay: z.boolean().default(true),
-  }),
-
-  // Section header (title + optional subtitle)
-  z.object({
-    type: z.literal('sectionHeader'),
-    title: z.string(),
-    subtitle: z.string().optional(),
-    centered: z.boolean().default(true),
-  }),
-
-  // Rich text / markdown content
-  z.object({
-    type: z.literal('richText'),
-    content: z.string(),
-  }),
-
-  // Two-column text + image
-  z.object({
-    type: z.literal('textImage'),
-    title: z.string(),
-    content: z.string(),
-    image: z.string(),
-    imageAlt: z.string().optional(),
-    imagePosition: z.enum(['left', 'right']).default('right'),
-  }),
-
-  // Feature grid (3-4 items)
-  z.object({
-    type: z.literal('features'),
-    heading: z.string().optional(),
-    columns: z.number().min(2).max(4).default(3),
-    items: z.array(z.object({
-      title: z.string(),
-      description: z.string(),
-      icon: z.string().optional(),
-      link: z.string().optional(),
-    })),
-  }),
-
-  // Testimonial carousel/grid
-  z.object({
-    type: z.literal('testimonials'),
-    heading: z.string().optional(),
-    layout: z.enum(['carousel', 'grid']).default('carousel'),
-    items: z.array(z.object({
-      quote: z.string(),
-      author: z.string(),
-      role: z.string().optional(),
-      avatar: z.string().optional(),
-    })),
-  }),
-
-  // Stats/numbers section
-  z.object({
-    type: z.literal('stats'),
-    heading: z.string().optional(),
-    items: z.array(z.object({
-      value: z.string(),
-      label: z.string(),
-    })),
-  }),
-
-  // Call to action banner
-  z.object({
-    type: z.literal('cta'),
-    title: z.string(),
-    description: z.string().optional(),
-    buttonText: z.string(),
-    buttonUrl: z.string(),
-    variant: z.enum(['default', 'highlight']).default('default'),
-  }),
-
-  // Image gallery
-  z.object({
-    type: z.literal('gallery'),
-    heading: z.string().optional(),
-    columns: z.number().min(2).max(4).default(3),
-    images: z.array(z.object({
-      src: z.string(),
-      alt: z.string(),
-      caption: z.string().optional(),
-    })),
-  }),
-]);
-
-const pages = defineCollection({
-  type: 'data',
-  schema: z.object({
-    title: z.string(),
-    metaDescription: z.string().optional(),
-    ogImage: z.string().optional(),
-    blocks: z.array(blockSchema),
-  }),
-});
-
-export const collections = { pages };
-```
-
-## Next Steps
-
-- [Content Collections](./content-collections.md) - Schema field types
-- [Inline Editing](./inline-editing.md) - Converting from templates
-- [Configuration](./configuration.md) - Customize AstroAdmin
+The route exists only under `astro dev`, never in a production build. If
+several block types refer to the same collection, the editor offers a choice
+of which to preview. A collection with a page of its own is better served by
+a [preview route](./configuration.md#preview), which takes precedence.

@@ -1,52 +1,23 @@
-# AstroAdmin Documentation
+# AstroAdmin documentation
 
-AstroAdmin is a visual admin interface for [Astro Content Collections](https://docs.astro.build/en/guides/content-collections/). It auto-generates forms from your Zod schemas, so you can edit content without touching code.
+AstroAdmin is a content editor for Astro sites. It builds its forms from the
+Zod schemas in `src/content.config.ts`, saves to the Markdown and JSON files
+the site's `glob()` and `file()` loaders read, and publishes by committing
+and pushing with git.
 
-## Quick Links
+- [Getting started](./getting-started.md): from an Astro site to editing.
+- [Requirements](./requirements.md): versions, project layout, startup errors.
+- [Schemas and controls](./content-collections.md): which schema shapes
+  become which form controls, images, dates and references.
+- [Blocks](./blocks.md): page sections from a discriminated union, and the
+  component preview.
+- [Inline editing](./inline-editing.md): moving text out of templates, and
+  `data-aa-field` click-to-edit annotations.
+- [Configuration](./configuration.md): `astroadmin.config.js`, environment
+  variables, authentication, git and publishing.
+- [Deploy adapters](./deploy-adapters.md): publishing without a host that
+  builds on push.
+- [Doctor](./doctor.md): `npx astroadmin doctor` and each of its checks.
 
-- [Getting Started](./getting-started.md) - Install and run AstroAdmin
-- [Best Practices](./best-practices.md) - Structure your site for optimal editing
-- [Content Collections](./content-collections.md) - Schema field reference
-- [Block-Based Editing](./blocks.md) - Flexible page layouts with blocks
-- [Inline Editing](./inline-editing.md) - Convert template pages to editable content, and annotate them for click-to-edit (`data-aa-field`, `data-block-index`)
-- [Configuration](./configuration.md) - Customize AstroAdmin behavior
-- [Requirements](./requirements.md) - What your Astro project needs
-- [Doctor](./doctor.md) - Check a site's setup and click-to-edit coverage
-
-## Features
-
-- **Schema-driven forms** - Auto-generates form fields from your Zod schemas
-- **Block editor** - Visual editing for discriminated unions (e.g., page builders)
-- **Live preview** - See changes in real-time via iframe
-- **Image uploads** - Upload and select images with alt text
-- **Git integration** - Commit changes directly from the admin
-- **Collection management** - Create and delete collection entries
-
-## How It Works
-
-1. Run `npx astroadmin dev` from your Astro project
-2. AstroAdmin reads your `src/content/config.ts` schemas
-3. It generates a form UI based on your Zod field types
-4. Edits are saved as markdown/JSON files in `src/content/`
-5. Your Astro site picks up the changes automatically
-
-## Supported Field Types
-
-| Zod Type | Form Widget |
-|----------|-------------|
-| `z.string()` | Text input |
-| `z.string().describe('textarea')` | Textarea |
-| `z.number()` | Number input |
-| `z.boolean()` | Checkbox |
-| `z.date()` | Date picker |
-| `z.enum([...])` | Select dropdown |
-| `z.array(...)` | Repeatable fields |
-| `z.object(...)` | Nested fieldset |
-| `z.discriminatedUnion(...)` | Block editor |
-| `image()` | Image picker with upload |
-| `reference(...)` | Collection reference selector |
-
-## Getting Help
-
-- [GitHub Issues](https://github.com/cloudshipco/astroadmin/issues) - Report bugs or request features
-- [Astro Discord](https://astro.build/chat) - Community support
+Bugs and questions go to
+[GitHub issues](https://github.com/cloudshipco/astroadmin/issues).

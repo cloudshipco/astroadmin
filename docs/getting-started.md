@@ -1,116 +1,162 @@
-# Getting Started
+# Getting started
 
-This guide walks you through setting up AstroAdmin for your Astro project.
+This page takes an Astro site from no content collections to editing in
+AstroAdmin. If your site already has `src/content.config.ts`, skip to
+[Run AstroAdmin](#run-astroadmin).
 
-## Prerequisites
+## What you need
 
-Before installing AstroAdmin, ensure you have:
+- [Bun](https://bun.sh). The `astroadmin` command runs under Bun, including
+  when you start it with `npx`.
+- Astro 6 or later, installed in the site (`npm install` has been run), with
+  `astro.config.mjs` or `astro.config.ts` in the project root. AstroAdmin
+  runs the site's own copy of Astro and never downloads one.
 
-- [ ] **Node.js 18+** - Check with `node --version`
-- [ ] **An Astro project** - With `astro.config.mjs` or `astro.config.ts`
-- [ ] **Content Collections** - Set up in `src/content/config.ts`
+[Requirements](./requirements.md) has the full list.
 
-If you don't have Content Collections yet, see [Setting Up Content Collections](./content-collections.md).
+## Define your collections
 
-## Installation
+AstroAdmin reads the collections in `src/content.config.ts` and builds a form
+from each schema. A minimal config with one Markdown collection and one JSON
+list:
 
-```bash
-npm install astroadmin
+```typescript
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { glob, file } from 'astro/loaders';
+import { z } from 'astro/zod';
+
+const pages = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/content/pages' }),
+  schema: z.object({
+    title: z.string(),
+    description: z.string().optional(),
+  }),
+});
+
+const team = defineCollection({
+  loader: file('src/content/team.json'),
+  schema: z.object({
+    id: z.string(),
+    name: z.string(),
+    role: z.string(),
+  }),
+});
+
+export const collections = { pages, team };
 ```
 
-Or use it directly with npx (no install needed):
+Each `pages` entry is a Markdown file with frontmatter:
+
+```markdown
+---
+title: Welcome
+description: The home page.
+---
+
+This is the page body.
+```
+
+saved as `src/content/pages/home.md`. A `file()` collection is one JSON file
+holding an array, and each item needs an `id`:
+
+```json
+[
+  { "id": "ada", "name": "Ada", "role": "Engineer" },
+  { "id": "grace", "name": "Grace", "role": "Designer" }
+]
+```
+
+saved as `src/content/team.json`. A page that renders both:
+
+```astro
+---
+// src/pages/index.astro
+import { getCollection, getEntry, render } from 'astro:content';
+
+const page = await getEntry('pages', 'home');
+const team = await getCollection('team');
+const { Content } = await render(page);
+---
+<h1>{page.data.title}</h1>
+<Content />
+<ul>
+  {team.map((member) => <li>{member.data.name}, {member.data.role}</li>)}
+</ul>
+```
+
+Run `npx astro build` once to confirm the site builds before adding the
+editor. [Schemas and controls](./content-collections.md) lists which schema
+shapes become which form controls.
+
+## Run AstroAdmin
+
+From the project root:
 
 ```bash
 npx astroadmin dev
 ```
 
-## Running AstroAdmin
+It checks the project, starts the site's own `astro dev` on the preview port
+(4321 unless the preview URL says otherwise; if something is already listening
+there it is used as is), then starts the editor on port 4000, or the next free
+port above it. Both URLs are printed. Useful options:
 
-From your Astro project root:
+| Option | Effect |
+|---|---|
+| `--port <port>` / `-p` | Editor port (default `ASTROADMIN_PORT`, then `PORT`, then 4000). |
+| `--host <host>` / `-H` | Address to bind (default `localhost`). |
+| `--project <path>` | The Astro project (default: the current directory). |
+| `--no-astro` | Do not start Astro; you run `astro dev` yourself at the preview URL. |
+
+`npx astroadmin start` is the same command under another name.
+
+## Edit
+
+Open the printed URL and sign in with `admin` / `admin`.
+[Configuration](./configuration.md#authentication) explains how to change
+that before the editor is reachable by anyone else.
+
+Pick an entry from the picker at the top. The form is on the left and the
+site, running under `astro dev`, is on the right. Changes save to the entry's
+file automatically shortly after you stop typing, and the preview reloads.
+There is no save button.
+
+An entry in a collection named `pages` previews at `/<slug>`, and the `home`
+entry at `/`. Other collections need a preview route, either detected from a
+dynamic page such as `src/pages/blog/[slug].astro` or set in
+`astroadmin.config.js`. In the example above `team` is shown on the home page:
+
+```javascript
+// astroadmin.config.js
+export default {
+  preview: {
+    routes: {
+      team: '/',
+    },
+  },
+};
+```
+
+## Publish
+
+Publish commits the changed content and pushes it. Before the push, the
+site's own Astro builds that exact commit, and a commit that fails to build
+stays local. See [Git and publishing](./configuration.md#git-and-publishing).
+
+## When something is wrong
 
 ```bash
-npx astroadmin dev
+npx astroadmin doctor
 ```
 
-The server will start and print the URL:
+checks the setup, builds the site, and reports problems such as a missing
+integration or click-to-edit names that match no field. See
+[doctor](./doctor.md).
 
-```
-📁 Project root: /path/to/your-astro-site
+"Invalid Astro project" at startup means a required file is missing; the
+message names it and [requirements](./requirements.md#startup-errors)
+explains each one.
 
-🔧 AstroAdmin Configuration:
-==================================================
-   Preview URL: http://localhost:4321
-   Auth: Enabled (admin/admin)
-==================================================
-
-🚀 AstroAdmin running at http://localhost:54321
-```
-
-## Logging In
-
-Open the URL in your browser. The default credentials are:
-
-- **Username:** `admin`
-- **Password:** `admin`
-
-See [Configuration](./configuration.md) to change the credentials.
-
-## Using the Admin Interface
-
-1. **Select a page** from the dropdown in the top bar
-2. **Edit fields** in the left panel - changes auto-save
-3. **Preview changes** in the right panel (requires Astro dev server running)
-4. **Commit changes** using the Git button (if enabled)
-
-## Running with Astro Dev Server
-
-For live preview, run the Astro dev server alongside AstroAdmin:
-
-```bash
-# Terminal 1 - Astro dev server
-npm run dev
-
-# Terminal 2 - AstroAdmin
-npx astroadmin dev
-```
-
-The preview iframe will load your Astro site at `http://localhost:4321` by default.
-
-## CLI Options
-
-```bash
-npx astroadmin dev [options]
-
-Options:
-  -p, --port <port>     Port to run on (default: auto-select)
-  -H, --host <host>     Host to bind to (default: localhost)
-  --project <path>      Astro project path (default: current directory)
-```
-
-## Troubleshooting
-
-### "Invalid Astro project" error
-
-This means AstroAdmin couldn't find the required project structure. Check:
-
-1. You're running from your Astro project root (where `astro.config.mjs` is)
-2. You have a `src/content/` directory
-3. You have a `src/content/config.ts` file
-
-### Preview not loading
-
-1. Make sure your Astro dev server is running (`npm run dev`)
-2. Check the preview URL in [Configuration](./configuration.md)
-3. Look for CORS or iframe errors in the browser console
-
-### Changes not saving
-
-1. Check the browser console for errors
-2. Ensure the content files are writable
-3. Try refreshing the page
-
-## Next Steps
-
-- [Requirements](./requirements.md) - Full list of requirements
-- [Content Collections](./content-collections.md) - Schema setup guide
-- [Configuration](./configuration.md) - Customize AstroAdmin
+If the preview stays blank, look for `[astro]` lines in AstroAdmin's output.
+With `--no-astro`, your own dev server must be running at the preview URL.

@@ -1,51 +1,55 @@
 # Configuration
 
-AstroAdmin works out of the box with sensible defaults. This guide covers customization options.
-
-## Configuration File
-
-Create `astroadmin.config.js` in your Astro project root:
+AstroAdmin needs no configuration to run locally. To change its behaviour,
+create `astroadmin.config.js` in the project root with a default export.
+Only that file name is read (not `.mjs` or `.ts`), and a file that fails to
+load stops AstroAdmin rather than falling back to defaults. Environment
+variables are listed [at the end](#environment-variables); where both are
+set, the config file wins unless noted.
 
 ```javascript
+// astroadmin.config.js
 export default {
   preview: {
     url: 'http://localhost:4321',
+    routes: { team: '/' },
   },
+  publicUrl: 'https://example.com',
+  collectionOrder: ['home', 'pages'],
   auth: {
-    username: process.env.ADMIN_USERNAME || 'admin',
+    username: process.env.ADMIN_USERNAME,
     passwordHash: process.env.ADMIN_PASSWORD_HASH,
   },
 };
 ```
 
-## Options Reference
+The config is plain JavaScript, so it can read `process.env`. Bun loads a
+`.env` file from the directory you run the command in.
 
-### Preview
+## Preview
 
-Configure the live preview iframe:
+`preview.url` is the address the editor's preview frame loads: the site's
+Astro dev server as the browser reaches it. It defaults to
+`http://localhost:4321` (`http://localhost:4322` when `NODE_ENV=production`)
+and can also be set with `PREVIEW_URL`. `astroadmin dev` starts Astro on
+that URL's port; set the port with `PREVIEW_URL`, or start Astro yourself and
+pass `--no-astro`. A path on the URL is treated as the site's `base`.
 
-```javascript
-export default {
-  preview: {
-    // Astro dev server URL
-    url: 'http://localhost:4321',
-  },
-};
-```
+Each entry is previewed at a page of the site:
 
-The preview panel loads your Astro site in an iframe. Make sure your Astro dev server is running.
-
-#### Preview routes per collection
-
-AstroAdmin auto-detects which page renders each collection where it can. For
-collections without a detectable route — common on single-page sites, where
-several collections all render on the homepage — map them explicitly:
+- a `pages` entry at `/<slug>`, and `pages/home` at `/`;
+- an entry of a collection with a route in `preview.routes`, where `{slug}`
+  is replaced by the entry's slug;
+- otherwise at a route detected from a dynamic page such as
+  `src/pages/blog/[slug].astro` (matched to a collection by the folder or
+  parameter name, singular or plural);
+- otherwise, for a collection that a block refers to, in that block's
+  [component preview](./blocks.md#previewing-a-collection-that-blocks-use).
 
 ```javascript
 export default {
   preview: {
     routes: {
-      // collection name -> path to preview it at ({slug} is substituted)
       site: '/',
       services: '/',
       posts: '/blog/{slug}',
@@ -54,291 +58,173 @@ export default {
 };
 ```
 
-Without a route (and with no block-component usage to fall back on), the
-preview panel explains what to configure instead of rendering anything.
+A collection with none of these shows a message in the preview panel
+explaining what to set.
 
-### Public site URL (live-status)
+## Live site link
 
-Optionally set your production site's origin. When set, the editor shows a
-"View live site" link and, after a Publish, polls the production URL to report
-when your change is actually live — handy with build-on-push hosts (Netlify,
-Cloudflare Pages) where a deploy lags the push by a short while:
+`publicUrl` (env `PUBLIC_URL`) is the production site's address. When it is
+set, the editor header has a "View live site" link to the page being edited,
+and after a publish the editor polls that page until its HTML changes, to
+report when the change is live. A path on `publicUrl` is treated as the
+site's base path. The link never points outside `publicUrl`'s origin.
 
-```javascript
-export default {
-  // Production site origin, e.g. https://example.com
-  publicUrl: 'https://example.com',
-};
-```
+## Entry picker order
 
-Also settable via the `PUBLIC_URL` environment variable. Leave it unset to
-hide the link and disable the live-status check (the editor falls back to a
-"live shortly" message). The check is backed by a server-side
-`GET /api/publish/live-status` endpoint, so there's no browser cross-origin
-issue.
+`collectionOrder` lists collections to show first in the entry picker; the
+rest follow in their natural order. The default is `['pages']`. When two
+collections preview at the same page, the one listed first is selected when
+an editor navigates to that page in the preview.
 
-The "View live site" link in the editor header opens, in a new tab, the live
-page for whatever the editor is showing: the open entry's route, or the page
-the preview has been navigated to. When there is no such page (a collection
-with only a component preview, say) it opens the site root. A path on
-`publicUrl` is treated as the site's base path: with
-`https://example.com/site`, an entry at `/about` links to
-`https://example.com/site/about`. The link never points anywhere but
-`publicUrl`'s origin.
+## Authentication
 
-### Entry picker order
-
-The entry picker groups entries by collection. `collectionOrder` decides the
-order of those groups. Any collection you do not name keeps its natural order
-after the ones you do, so you only list what you want to move:
-
-```javascript
-export default {
-  // The homepage group first, then pages, then everything else.
-  collectionOrder: ['home', 'pages'],
-};
-```
-
-Defaults to `['pages']`, which suits a site whose pages are the main thing being
-edited. A site whose homepage is its own single-entry collection — because it
-has a hero rather than a standard page header — usually wants it listed first,
-since that is the entry an editor reaches for most.
-
-`collectionOrder` also breaks ties when the preview is read backwards. A preview
-route is a display hint — "show this URL while editing this entry" — so two
-collections can legitimately point at the same page: a site-settings entry
-previews at `/` because the header and footer it edits are visible there, and so
-does the homepage's own content. When someone navigates to `/` in the preview,
-the collection listed earlier wins. Without an order, the first matching
-collection wins, which is stable but arbitrary — so list the one you mean.
-
-### Authentication
-
-Configure admin login credentials. For anything internet-facing, prefer an
-argon2 password **hash** over a plaintext password:
+The default login is `admin` / `admin`. For anything reachable by others,
+set a username, an argon2 password hash and a session secret:
 
 ```bash
-npx astroadmin hash-password   # prints a hash to set as ADMIN_PASSWORD_HASH
+npx astroadmin hash-password
 ```
 
-```javascript
-export default {
-  auth: {
-    username: process.env.ADMIN_USERNAME || 'admin',
-    passwordHash: process.env.ADMIN_PASSWORD_HASH, // preferred
-    // password: process.env.ADMIN_PASSWORD,       // plaintext fallback, local/dev only
-  },
-};
-```
-
-Then set in `.env`:
+asks for a password (or reads one piped in) and prints its hash. Then, for
+example in
+`.env`:
 
 ```bash
-ADMIN_USERNAME=myuser
+ADMIN_USERNAME=editor
 ADMIN_PASSWORD_HASH='$argon2id$...'
 SESSION_SECRET=a-long-random-string
 ```
 
-**Security note:** AstroAdmin warns at startup when production runs with the
-default credentials, a plaintext-only password, or the default session secret.
+`ADMIN_PASSWORD` sets a plain-text password and is meant for local use only.
+At startup in production AstroAdmin warns about default credentials, a
+plain-text-only password or the default session secret.
 
-**Cross-origin writes are refused.** Every state-changing `/api` request
-(saves, uploads, git actions, publish, login and logout) must come from the
-admin's own origin: a browser's `Sec-Fetch-Site` must be `same-origin`, or, for
-a client that sends no `Sec-Fetch-Site`, the `Origin` must be absent or the
-admin's own. The session cookie is `SameSite=Strict`, but that is per site, so
-without this a page on a sibling origin (a preview subdomain, another
-localhost port) could write as the editor. The admin's own origin is the one
-the request was addressed to (`Host`, and `X-Forwarded-Proto` behind a proxy in
-production), or any origin listed in `ALLOWED_ORIGINS`; set that to the public
-admin URL if your proxy does not pass the original `Host`.
+Run a public instance with `NODE_ENV=production`. That turns on secure
+(HTTPS-only) session cookies, sessions stored in SQLite at
+`SESSION_DB_PATH` (default `/data/sessions.db`) and rate limiting on the API.
+In development, sessions are kept in memory and there is no rate limit.
 
-## Build commands
+Every request that changes something (saves, uploads, git actions, publish,
+login, logout) must come from the editor's own origin; others get a 403.
+Behind a proxy that does not pass the original `Host` header, list the public
+editor address in `ALLOWED_ORIGINS`.
 
-```javascript
-export default {
-  build: {
-    production: 'bun --bun astro build --outDir dist', // also what Publish checks
-    staging: 'bun --bun astro build --outDir staging-dist',
-    check: 'bun --bun astro build', // optional: the publish check only
-  },
-};
-```
+## Git and publishing
 
-All three are optional `/bin/sh` command lines run in the site's directory.
-Unset, they run the site's **own installed** Astro (the `bin` of
-`node_modules/astro` in the site's directory, or above it up to the
-repository root) under Bun with auto-install off: `astro build --outDir dist`
-for production and the publish check, `--outDir staging-dist` for staging. If
-the site has no Astro installed they refuse ("astro is not installed in this
-site") rather than run one: a package runner such as `bunx astro` would
-download and run whatever Astro the registry has that day. `astroadmin dev`
-starts the preview's `astro dev` the same way.
+Publish runs these steps, in order:
 
-Before every push, Publish builds the exact commit with `build.check`, else
-`build.production`, else the default; a commit that fails is kept locally and
-not pushed.
-
-## CLI Options
-
-Override settings via command line:
-
-```bash
-# Custom port
-npx astroadmin dev --port 3030
-
-# Custom host (for network access)
-npx astroadmin dev --host 0.0.0.0
-
-# Different project directory
-npx astroadmin dev --project ./my-astro-site
-```
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ADMIN_USERNAME` | Login username | `admin` |
-| `ADMIN_PASSWORD_HASH` | argon2 hash (via `astroadmin hash-password`) | unset |
-| `ADMIN_PASSWORD` | Plaintext password (local/dev fallback) | `admin` |
-| `SESSION_SECRET` | Session signing secret | dev-only default |
-| `ASTROADMIN_PROJECT_ROOT` | Project path | Current directory |
-| `PREVIEW_URL` | Browser-facing preview origin (iframe) | `http://localhost:4321` |
-| `PUBLIC_URL` | Production site origin (enables the post-publish live-status check + View-site link) | unset |
-| `ASTROADMIN_CONTENT_STORE` | Content store: `files` or `db` | `files` |
-| `ASTROADMIN_DB` | SQLite path (db mode only) | `<project>/.astroadmin/content.db` |
-| `GIT_ENABLED` | Enable git integration | `true` (`false` to disable) |
-| `DEBUG` | Show stack traces | `false` |
-
-## Image Upload Directory
-
-Images are uploaded to `public/images/` by default. Ensure this directory exists:
-
-```bash
-mkdir -p public/images
-```
-
-## Content store
-
-By default content is stored as **files** in your repo (`src/content/`, or
-wherever your `glob()`/`file()` loaders point) — git is the source of truth and
-your site reads the files natively. There is nothing to configure.
-
-The shelved SQLite backend can be selected explicitly:
-
-```javascript
-export default {
-  content: {
-    store: 'db', // 'files' (default) | 'db'; env ASTROADMIN_CONTENT_STORE wins
-  },
-  database: {
-    path: process.env.ASTROADMIN_DB, // db mode only; defaults to .astroadmin/content.db
-  },
-};
-```
-
-In db mode, add `.astroadmin/` and `content.db*` to `.gitignore`, and the site
-reads the store at build time via the `astroadmin/loader` content-layer loader
-— see the README. To migrate a db-mode site back to files, swap the loaders in
-`src/content.config.ts` first, then run `npx astroadmin export`.
-
-## Git Integration
-
-In files mode, git **is the publish mechanism**: publishing commits the
-configured paths — `src/content/` plus assets — and pushes, and a
-build-on-push host (e.g. Netlify) rebuilds the site. A
-[deploy adapter](./deploy-adapters.md) is optional for self-hosted setups.
+1. `git pull --rebase` (skipped quietly if it fails, for example with no
+   remote);
+2. stage and commit the paths in `git.paths`;
+3. build the resulting commit with the site's Astro (the pre-push check,
+   below);
+4. push that commit to the current branch's upstream;
+5. if a [deploy adapter](./deploy-adapters.md) is configured, build the site
+   and deploy it.
 
 ```javascript
 export default {
   git: {
-    enabled: true,        // or GIT_ENABLED=false to disable
-    autoPush: false,
-    // Defaults are store-aware: files mode stages src/content/ + assets;
-    // db mode stages assets only (src/content may hold stale files).
+    enabled: true,
     paths: ['src/content/', 'src/styles/', 'public/images/'],
-    includeDb: false,     // db mode: commit the binary content.db too
+    autoPush: false,
   },
 };
 ```
 
-When git is disabled, the admin hides the git "Changes" panel and the
-`/api/git/*` routes are not mounted; publishing still works via `/api/publish`
-with a deploy adapter. An explicitly-empty `paths: []` means "stage nothing".
+`git.paths` defaults to the three paths shown. Changes outside them are never
+committed by AstroAdmin, so a content collection kept elsewhere needs its
+folder added here. `paths: []` stages nothing. `git.enabled: false` (or
+`GIT_ENABLED=false`) hides the editor's changes panel and leaves Publish to
+the deploy adapter alone. `git.autoPush` (or `GIT_AUTO_PUSH=true`) makes a
+commit from the changes panel push too; Publish always pushes.
 
 ### The pre-push build check
 
-Before pushing, publish builds **exactly the commit it is about to push**, in a
-throwaway git worktree, with the site's own Astro. If the build fails, nothing
-is pushed: the commit stays local and the editor shows the build's error. This
-is what stops content the site's schema rejects from breaking the host's build.
+Before pushing, Publish builds exactly the commit it is about to push, in a
+temporary git worktree. If the build fails, nothing is pushed: the commit
+stays local and the editor shows Astro's error. This stops content the
+schema rejects from reaching the host.
+
+The check runs `build.check` if set, else `build.production`, else the site's
+own installed Astro (`astro build`, under Bun with automatic installs turned
+off). It times out after `build.checkTimeoutMs` (default 300000, five
+minutes).
 
 ```javascript
 export default {
   build: {
-    check: 'bunx --bun astro build', // the check command; see below
-    checkTimeoutMs: 300000,          // default 5 minutes
+    production: 'bun --no-install --bun node_modules/.bin/astro build --outDir dist',
+    checkTimeoutMs: 300000,
   },
 };
 ```
 
-The command is `build.check` if set, else `build.production` (so the check
-builds the way the site is built), else `bunx --bun astro build`. It runs in the
-worktree with the site's `node_modules` linked in (Astro's and Vite's cache
-directories excluded) and gitignored `.env*` files copied, and without
-AstroAdmin's own environment variables (`ASTROADMIN_*`, `ADMIN_*`,
-`SESSION_SECRET`). Sites using git submodules, or workspace packages linked
-back into their own repository, are refused, since the worktree cannot
-reproduce them. The push sends only the checked commit to the current branch's
-upstream; there is no separate push endpoint.
+Commands are `/bin/sh` command lines run in the site's directory (the check
+runs in its worktree). Keep `--no-install`: without it Bun may fetch an Astro
+from the registry instead of using the installed one. The deploy adapter
+uploads `dist/`, so `build.production` must write there. The check's
+worktree gets the site's `node_modules` linked in (without Astro's and Vite's
+caches) and the site's gitignored `.env*` files copied in. AstroAdmin's own
+variables (`ASTROADMIN_*`, `ADMIN_*`, `SESSION_SECRET`) are removed from its
+environment. Sites that use git submodules, or workspace packages linked back
+into the same repository, are refused, because the worktree cannot reproduce
+them; `npx astroadmin doctor` reports both.
 
-## CORS and Preview
+An `.mdx` body can import modules and run code during this build, so anyone
+who can save an MDX entry can run code on the machine running AstroAdmin.
 
-If the preview iframe doesn't load, you may have CORS issues. Ensure your Astro dev server allows iframe embedding.
+## Doctor in the editor
 
-For most setups, this works automatically. If you're using a reverse proxy or custom server, ensure the `X-Frame-Options` header allows embedding.
-
-## Full Example
+After each publish whose check passes, the editor scans the check's build for
+click-to-edit problems and shows a notice if it finds any (see
+[doctor](./doctor.md#in-the-editor)). Turn this off with:
 
 ```javascript
-// astroadmin.config.js
 export default {
-  // Preview configuration
-  preview: {
-    url: process.env.PREVIEW_URL || 'http://localhost:4321',
-  },
+  doctor: { enabled: false },
+};
+```
 
-  // Order of collection groups in the entry picker
-  collectionOrder: ['home', 'pages'],
+## Translations
 
-  // Authentication
-  auth: {
-    username: process.env.ADMIN_USERNAME || 'admin',
-    passwordHash: process.env.ADMIN_PASSWORD_HASH,
+```javascript
+export default {
+  i18n: {
+    enabled: true,
+    defaultLocale: 'en',
+    locales: ['en', 'fr'],
   },
 };
 ```
 
-## Troubleshooting
+With `i18n.enabled`, a file whose name ends in a locale (`about.fr.md`) is
+the translation of the entry `about`, and the editor offers a locale switch.
 
-### Config file not loading
+## Content store
 
-Ensure the file is named exactly `astroadmin.config.js` (not `.ts` or `.mjs`) and is in your Astro project root.
+Content is stored as files by default (`content.store: 'files'`), which is
+what this documentation describes. The older SQLite store
+(`content.store: 'db'`, env `ASTROADMIN_CONTENT_STORE=db`) is not under
+active development; see the README.
 
-### Environment variables not working
+## Environment variables
 
-- Check the `.env` file is in your project root
-- Restart AstroAdmin after changing `.env`
-- Use `process.env.VAR_NAME` syntax in the config
+| Variable | Sets | Default |
+|---|---|---|
+| `ASTROADMIN_PORT`, `PORT` | Editor port (`--port` wins) | `4000`, or the next free port |
+| `ASTROADMIN_HOST`, `HOST` | Address to bind (`--host` wins) | `localhost` |
+| `NODE_ENV` | `production` for a public instance (see [authentication](#authentication)) | `development` |
+| `ADMIN_USERNAME` | Login name | `admin` |
+| `ADMIN_PASSWORD_HASH` | argon2 hash from `hash-password` | unset |
+| `ADMIN_PASSWORD` | Plain-text password, local use only | `admin` |
+| `SESSION_SECRET` | Session signing secret | a development value |
+| `SESSION_DB_PATH` | Session database in production | `/data/sessions.db` |
+| `ALLOWED_ORIGINS` | Extra origins allowed to make changes, comma separated | unset |
+| `PREVIEW_URL` | `preview.url` | `http://localhost:4321` |
+| `PUBLIC_URL` | `publicUrl` | unset |
+| `GIT_ENABLED` | `false` turns git off | `true` |
+| `GIT_AUTO_PUSH` | `true` pushes after a commit from the changes panel | `false` |
+| `DEBUG` | Print stack traces on CLI errors | unset |
 
-### Preview not updating
-
-- Ensure Astro dev server is running
-- Check the preview URL matches your Astro server
-- Try clicking the refresh button in the preview panel
-
-## Next Steps
-
-- [Getting Started](./getting-started.md) - Run AstroAdmin
-- [Content Collections](./content-collections.md) - Set up schemas
-- [Deploy Adapters](./deploy-adapters.md) - Auto-deploy on publish
+`--project` sets `ASTROADMIN_PROJECT_ROOT` for you.

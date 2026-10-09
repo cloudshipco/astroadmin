@@ -1,292 +1,97 @@
-# Inline Editing
+# Inline editing
 
 Two things make a page editable in place:
 
-1. **Its content lives in a content collection**, so the sidebar can edit it.
-   [Converting template pages](#converting-template-pages) below covers moving
-   hardcoded `.astro` content into collections.
-2. **Its templates are annotated for click-to-edit**, so a click on text in
-   the preview opens the right control, and focusing a control outlines its
-   text in the preview. [Click-to-edit in the preview](#click-to-edit-in-the-preview)
+1. Its content lives in a content collection, so the form can edit it.
+   [Moving content out of templates](#moving-content-out-of-templates) covers
+   that step.
+2. Its templates are annotated for click-to-edit, so a click on text in the
+   preview opens the right control, and focusing a control outlines its text
+   in the preview. [Click-to-edit in the preview](#click-to-edit-in-the-preview)
    covers the attributes and the traps.
 
-## Converting template pages
+## Moving content out of templates
 
-This part explains how to convert your Astro pages from hardcoded template files to content collections that can be edited through AstroAdmin's sidebar.
+Text written straight into an `.astro` file can only be changed by editing
+code. To make it editable, move it into an entry and have the template read
+the entry. Keep the markup and styling in the template; only the words,
+links and images move.
 
-### Understanding the Difference
-
-#### Template Pages (Static)
-
-Template pages are `.astro` files in `src/pages/` with hardcoded content:
-
-```astro
----
-// src/pages/index.astro
-import Layout from '../layouts/Layout.astro';
----
-
-<Layout>
-  <h1>Welcome to Our Site</h1>
-  <p>This is hardcoded content that requires code changes to edit.</p>
-</Layout>
-```
-
-**Limitations:**
-- Requires code access to edit content
-- Changes need deployment
-- No admin interface
-
-#### Content Collections (Editable)
-
-Content collections store your content in JSON or Markdown files with a defined schema:
+Take an about page with a heading, an introduction and a list of people.
+Add a schema for it (or extend an existing `pages` collection):
 
 ```typescript
-// src/content/config.ts
-import { defineCollection, z } from 'astro:content';
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { glob } from 'astro/loaders';
+import { z } from 'astro/zod';
 
 const pages = defineCollection({
-  type: 'data',
+  loader: glob({ pattern: '**/*.md', base: './src/content/pages' }),
   schema: z.object({
     title: z.string(),
-    description: z.string(),
-  }),
-});
-
-export const collections = { pages };
-```
-
-```json
-// src/content/pages/home.json
-{
-  "title": "Welcome to Our Site",
-  "description": "This content can be edited in AstroAdmin!"
-}
-```
-
-**Benefits:**
-- Edit through AstroAdmin sidebar
-- Live preview while editing
-- No code changes needed
-- Schema validation
-
-### Step-by-Step Conversion
-
-#### Step 1: Identify Your Content
-
-Look at your template page and identify what content should be editable:
-
-```astro
----
-// src/pages/about.astro - BEFORE
----
-<Layout>
-  <section class="hero">
-    <h1>About Our Company</h1>
-    <p>Founded in 2020, we build amazing things.</p>
-  </section>
-  <section class="team">
-    <h2>Our Team</h2>
-    <!-- team members hardcoded here -->
-  </section>
-</Layout>
-```
-
-Editable content: title, description, team members.
-
-#### Step 2: Define the Schema
-
-Create a content collection schema that matches your content structure:
-
-```typescript
-// src/content/config.ts
-import { defineCollection, z } from 'astro:content';
-
-const pages = defineCollection({
-  type: 'data',
-  schema: z.object({
-    title: z.string(),
-    description: z.string(),
+    intro: z.string(),
     team: z.array(z.object({
       name: z.string(),
       role: z.string(),
-      image: z.string().optional(),
-    })).optional(),
+    })).default([]),
   }),
 });
 
 export const collections = { pages };
 ```
 
-#### Step 3: Create the Content File
+Move the text into `src/content/pages/about.md`:
 
-Move your content to a JSON file:
-
-```json
-// src/content/pages/about.json
-{
-  "title": "About Our Company",
-  "description": "Founded in 2020, we build amazing things.",
-  "team": [
-    { "name": "Jane Doe", "role": "CEO" },
-    { "name": "John Smith", "role": "CTO" }
-  ]
-}
+```markdown
+---
+title: About us
+intro: Founded in 2020, we build websites.
+team:
+  - name: Ada
+    role: Engineer
+  - name: Grace
+    role: Designer
+---
 ```
 
-#### Step 4: Update Your Template
-
-Modify your page to read from the content collection:
+and read it in the template, which keeps its own markup:
 
 ```astro
 ---
-// src/pages/about.astro - AFTER
+// src/pages/about.astro
 import { getEntry } from 'astro:content';
-import Layout from '../layouts/Layout.astro';
 
 const page = await getEntry('pages', 'about');
-const { title, description, team } = page.data;
+const { title, intro, team } = page.data;
 ---
-<Layout>
-  <section class="hero">
-    <h1>{title}</h1>
-    <p>{description}</p>
-  </section>
-  {team && (
-    <section class="team">
-      <h2>Our Team</h2>
-      {team.map(member => (
-        <div class="team-member">
-          <h3>{member.name}</h3>
-          <p>{member.role}</p>
-        </div>
-      ))}
-    </section>
-  )}
-</Layout>
+<section>
+  <h1 data-aa-field="title">{title}</h1>
+  <p data-aa-field="intro">{intro}</p>
+</section>
+<section>
+  <h2>Our team</h2>
+  {team.map((member) => (
+    <div>
+      <h3 data-aa-field="team">{member.name}</h3>
+      <p data-aa-field="team">{member.role}</p>
+    </div>
+  ))}
+</section>
 ```
 
-#### Step 5: Verify in AstroAdmin
-
-1. Run `npx astroadmin dev`
-2. Select "pages" > "about" from the dropdown
-3. Edit your content in the sidebar
-4. See changes live in the preview
-
-### Common Patterns
-
-#### Simple Text Page
-
-**Schema:**
-```typescript
-const pages = defineCollection({
-  type: 'data',
-  schema: z.object({
-    title: z.string(),
-    content: z.string(),
-  }),
-});
-```
-
-#### Page with Hero and Features
-
-**Schema:**
-```typescript
-const pages = defineCollection({
-  type: 'data',
-  schema: z.object({
-    hero: z.object({
-      title: z.string(),
-      subtitle: z.string().optional(),
-      image: z.string().optional(),
-    }),
-    features: z.array(z.object({
-      title: z.string(),
-      description: z.string(),
-      icon: z.string().optional(),
-    })),
-  }),
-});
-```
-
-#### Page with Blocks (Flexible Layouts)
-
-For pages with varying sections, use discriminated unions:
-
-```typescript
-const blockSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('hero'),
-    title: z.string(),
-    subtitle: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal('text'),
-    content: z.string(),
-  }),
-  z.object({
-    type: z.literal('gallery'),
-    images: z.array(z.object({
-      src: z.string(),
-      alt: z.string(),
-    })),
-  }),
-]);
-
-const pages = defineCollection({
-  type: 'data',
-  schema: z.object({
-    title: z.string(),
-    blocks: z.array(blockSchema),
-  }),
-});
-```
-
-See [Content Collections](./content-collections.md) for more schema examples.
-
-### Tips
-
-#### Keep Your Layouts
-
-Don't move layout/styling code to content. Content collections should only contain _content_, not markup:
-
-```typescript
-// Good: just the data
-schema: z.object({
-  title: z.string(),
-  buttonText: z.string(),
-  buttonUrl: z.string(),
-})
-
-// Bad: including HTML/markup in content
-schema: z.object({
-  heroHtml: z.string(), // Don't do this
-})
-```
-
-#### Use Descriptive Field Names
-
-AstroAdmin generates labels from field names. Use clear names:
-
-```typescript
-// Clear field names
-schema: z.object({
-  heroTitle: z.string(),        // Shows as "Hero Title"
-  ctaButtonText: z.string(),    // Shows as "Cta Button Text"
-})
-```
-
-#### Start Small
-
-Convert one page at a time. Start with simple pages before tackling complex ones with blocks.
+Build the site before and after and compare the pages: the output should be
+the same apart from the `data-aa-field` attributes. In AstroAdmin the entry
+appears as `pages` / `about` and previews at `/about`. Convert one page at a
+time.
 
 ## Click-to-edit in the preview
 
 The editor's preview links to the sidebar in both directions:
 
-- **Preview to editor.** Clicking an element that carries `data-aa-field`
+- Preview to editor: clicking an element that carries `data-aa-field`
   focuses, scrolls to and briefly flashes the control that attribute names.
-- **Editor to preview.** Clicking a control outlines the element annotated
+- Editor to preview: clicking a control outlines the element annotated
   with its name, and clicking a block's header outlines the block.
 
 Nothing here changes how the site looks. The attributes are plain `data-*`
@@ -335,7 +140,7 @@ reports names that match no field.
 
 ### Arrays
 
-A list of **objects** (two or more properties each) is edited as a list of
+A list of objects (two or more properties each) is edited as a list of
 cards with ONE named control, `blocks[1].items`. There is no control per item
 or per item field: `blocks[1].items[0].title` names nothing. Annotate each
 item's text with the list's name; a click scrolls to and flashes the list,
@@ -350,7 +155,7 @@ and the editor opens items from there.
 ))}
 ```
 
-A list of **strings** does get a control per item, so annotate each with its
+A list of strings does get a control per item, so annotate each with its
 own index: `credentials[2]`.
 
 The list's control (like an image picker's) is a hidden input, which cannot
@@ -360,7 +165,7 @@ without focusing anything. That is the intended behaviour, not a bug.
 ### Blocks: `data-block-index`
 
 When an editor clicks a block's header, the preview outlines the element whose
-`data-block-index` is that block's index. Blocks are picked by **position**
+`data-block-index` is that block's index. Blocks are picked by position
 among the page's `[data-block-index]` elements, not by the attribute's value,
 so the attribute must go on:
 
@@ -390,10 +195,10 @@ card would focus the open entry's `title`. Marking a card with
 A click inside a link that navigates (`<a href>`, `<area href>`) belongs to
 the link: the preview follows it and no field is focused. So:
 
-- An element that **contains** a link can be annotated (since 1.5.0). A
+- An element that contains a link can be annotated (since 1.5.0). A
   Markdown body with links in it, or a hero section with a button in it,
   focuses its field when clicked anywhere except on the link.
-- An annotation **on** a link, or on an element **inside** one, can never fire.
+- An annotation on a link, or on an element inside one, can never fire.
   Annotate the text beside the link instead, and edit link labels from the
   sidebar. The doctor's `click-to-edit-links` check reports these.
 
@@ -419,10 +224,10 @@ dropped.
 
 ### What cannot be annotated
 
-- **Media under a full-size overlay.** An `<img>` covered by a text layer or a
+- Media under a full-size overlay. An `<img>` covered by a text layer or a
   gradient never receives the click. Annotate the overlay (or the section),
   and nearer annotations inside it still win.
-- **Fields rendered only in `<head>`**: a page `title`, SEO and Open Graph
+- Fields rendered only in `<head>`: a page `title`, SEO and Open Graph
   fields. Nothing there can be clicked; edit them from the sidebar. The doctor
   leaves them out of coverage.
 
@@ -431,10 +236,10 @@ dropped.
 Two kinds of comment in a template change the output, so a comment added while
 annotating can change how the site looks:
 
-- **Tailwind's class scanner reads comments.** A comment containing a utility
+- Tailwind's class scanner reads comments. A comment containing a utility
   name ("hidden", "fixed", "block", "grid") makes Tailwind generate that class,
   and the stylesheet changes.
-- **Astro ships HTML comments.** A `<!-- -->` comment in a template is sent to
+- Astro ships HTML comments. A `<!-- -->` comment in a template is sent to
   every visitor, and a `{/* */}` line between elements can add whitespace that
   shifts inline content.
 
@@ -443,15 +248,15 @@ reaches the output.
 
 ### Verifying
 
-1. **Run the doctor** from the site's directory. It builds the site and checks
+1. Run the doctor from the site's directory. It builds the site and checks
    block indexes, coverage, names and links on the built
    HTML:
 
    ```bash
-   bunx astroadmin doctor
+   npx astroadmin doctor
    ```
 
-2. **Prove the annotations are visually inert.** Build the site before and
+2. Prove the annotations are visually inert. Build the site before and
    after annotating, strip the attributes from both, and diff. Any difference
    left is a change a visitor would see (a stylesheet that changed because of
    a comment, extra whitespace):
@@ -469,12 +274,7 @@ reaches the output.
    changed shows up as a differing file name as well as differing content.
    Remove the worktree afterwards with `git worktree remove ../site-before`.
 
-3. **Click through the preview** in the editor: a click on each kind of
+3. Click through the preview in the editor: a click on each kind of
    annotated element should focus its control, and a click on a link should
    navigate without focusing anything.
 
-## Next Steps
-
-- [Content Collections](./content-collections.md) - Schema field types
-- [Configuration](./configuration.md) - Customize AstroAdmin
-- [Doctor](./doctor.md) - Check a site's click-to-edit coverage
