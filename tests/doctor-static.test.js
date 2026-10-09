@@ -213,6 +213,89 @@ try {
     assert.equal(results['committed-lockfile'].severity, 'warn');
     assert.equal(results['astro-integration'].severity, 'pass');
   });
+
+  const configWith = (body) => `import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
+import astroadmin from 'astroadmin/integration';
+${body}
+`;
+  const VITE = "vite: { server: { allowedHosts: ['localhost'], hmr: false } }";
+  const integrationFor = async (body) => (await staticResults(makeSite((dir) => writeFile(dir, 'astro.config.mjs', configWith(body)))))['astro-integration'];
+
+  await check('integration MUTATION: a call outside the exported integrations (`const unused = astroadmin()`) fails', async () => {
+    const result = await integrationFor(`const unused = astroadmin();\nexport default defineConfig({ integrations: [], ${VITE} });`);
+    assert.equal(result.severity, 'fail', JSON.stringify(result));
+  });
+
+  await check('integration: the exported list is traced through an identifier, a spread and a bound call', async () => {
+    for (const body of [
+      `const integrations = [astroadmin(), sitemap()];\nexport default defineConfig({ integrations, ${VITE} });`,
+      `const base = [astroadmin()];\nexport default defineConfig({ integrations: [...base, sitemap()], ${VITE} });`,
+      `const admin = astroadmin();\nexport default defineConfig({ integrations: [sitemap(), admin], ${VITE} });`,
+      `const config = { integrations: [astroadmin()], ${VITE} };\nexport default defineConfig(config);`,
+    ]) {
+      const result = await integrationFor(body);
+      assert.equal(result.severity, 'pass', `${body}\n${JSON.stringify(result)}`);
+    }
+  });
+
+  await check('integration: an integrations value that cannot be read statically warns "could not verify"', async () => {
+    for (const body of [
+      `function list() { return [astroadmin()]; }\nexport default defineConfig({ integrations: list(), ${VITE} });`,
+      `export default defineConfig({ integrations: process.env.CI ? [] : [astroadmin()], ${VITE} });`,
+      `const extra = { integrations: [] };\nexport default defineConfig({ integrations: [astroadmin()], ...extra, ${VITE} });`,
+    ]) {
+      const result = await integrationFor(body);
+      assert.equal(result.severity, 'warn', `${body}\n${JSON.stringify(result)}`);
+      assert.match(result.message, /could not verify/i);
+    }
+  });
+
+  const previewFor = async (serverBody) => (await staticResults(makeSite((dir) => writeFile(dir, 'astro.config.mjs', configWith(`const overrides = {};\nexport default defineConfig({ integrations: [astroadmin()], vite: { server: ${serverBody} } });`)))))['hosted-preview-config'];
+
+  await check('preview config: a later spread or computed key makes the values unknown, an earlier one does not', async () => {
+    const later = await previewFor("{ allowedHosts: ['localhost'], hmr: false, ...overrides }");
+    assert.equal(later.severity, 'warn', JSON.stringify(later));
+    assert.match(later.message, /could not verify/i);
+    const computed = await previewFor("{ allowedHosts: ['localhost'], hmr: false, ['hm' + 'r']: true }");
+    assert.equal(computed.severity, 'warn', JSON.stringify(computed));
+    const earlier = await previewFor("{ ...overrides, allowedHosts: ['localhost'], hmr: false }");
+    assert.equal(earlier.severity, 'pass', JSON.stringify(earlier));
+  });
+
+  await check('preview config MUTATION: a duplicate key is read as the LAST one (hmr: false, then hmr: true)', async () => {
+    const result = await previewFor("{ allowedHosts: ['localhost'], hmr: false, hmr: true }");
+    assert.equal(result.severity, 'warn', JSON.stringify(result));
+    assert.match(result.message, /hmr/);
+  });
+
+  await check('lockfile MUTATION: a staged but never committed bun.lock warns (HEAD, not the index)', async () => {
+    const siteDir = makeSite((dir) => fs.rmSync(path.join(dir, 'bun.lock')));
+    writeFile(siteDir, 'bun.lock', '{ "lockfileVersion": 1 }\n');
+    git(siteDir, 'add', 'bun.lock');
+    const result = (await staticResults(siteDir))['committed-lockfile'];
+    assert.equal(result.severity, 'warn', JSON.stringify(result));
+  });
+
+  await check('lockfile: a repository with no commits yet warns rather than crashing', async () => {
+    const siteDir = path.join(tempRoot, 'no-commits');
+    fs.mkdirSync(siteDir);
+    writeFile(siteDir, 'astro.config.mjs', HOSTED_CONFIG);
+    writeFile(siteDir, 'bun.lock', '{}\n');
+    git(siteDir, 'init', '-q', '-b', 'main');
+    git(siteDir, 'add', '-A');
+    const result = (await staticResults(siteDir))['committed-lockfile'];
+    assert.equal(result.severity, 'warn', JSON.stringify(result));
+  });
+
+  await check('lockfile: a site in a subdirectory with its lockfile committed at the repo root passes', async () => {
+    const repoDir = makeSite((dir) => {
+      fs.mkdirSync(path.join(dir, 'apps', 'site'), { recursive: true });
+      fs.renameSync(path.join(dir, 'astro.config.mjs'), path.join(dir, 'apps', 'site', 'astro.config.mjs'));
+    });
+    const result = (await staticResults(path.join(repoDir, 'apps', 'site')))['committed-lockfile'];
+    assert.equal(result.severity, 'pass', JSON.stringify(result));
+  });
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -27,7 +27,7 @@ bunx astroadmin doctor --project ../site-a
 | Option | Effect |
 |---|---|
 | `--project <path>` | The Astro project to check (default: the current directory). |
-| `--build <distDir>` | Check an existing build instead of building. Without it, the site is built into a temporary directory with `bunx --bun astro build --outDir <tmp>`, which is deleted afterwards. |
+| `--build <distDir>` | Check an existing build instead of building. Without it, the site is built into a temporary directory with the site's own installed Astro, which is deleted afterwards (see [build-runs](#build-runs)). A directory that is missing or holds no HTML pages fails `build-runs`. |
 | `--json` | Print the report as JSON on stdout (progress goes to stderr), for CI or a dashboard that shows several sites at once. |
 
 The exit code is 1 when any check **fails**, otherwise 0. Warnings do not
@@ -88,9 +88,13 @@ coverage, per-page block indexes for `block-index`).
 
 The editor runs the built-HTML checks (the last four below) after every
 publish whose build check passes. It reads the build that check has just made,
-so it costs no extra build. The scan is capped at three seconds, and an error
-or a timeout only means there is no result this time: it never fails or holds
-up the publish.
+so it costs no extra build, and it reads the entries, schemas and routes from
+the same commit (the check's worktree), not the live files an autosave may
+have changed since. The scan runs in a separate process that is stopped when
+it passes its cap of three seconds, so a slow scan cannot hold up the publish.
+An error or a timeout only means there is no result this time: it never fails
+or holds up the publish. The reason shown for it is short and names no server
+path; the full error is in the server log.
 
 When the checks find something, a small notice appears above the editor form,
 for example "Click-to-edit covers 0 of 31 text fields on this site. How to
@@ -119,8 +123,16 @@ export default defineConfig({
 });
 ```
 
+Only the exported config counts: a call of `astroadmin()` elsewhere in the
+file (`const unused = astroadmin()`) does not install it. The check follows
+the exported `integrations` through a `defineConfig()` wrapper, a `const`
+holding the array (or the whole config), spreads of such arrays (`[...base]`)
+and a `const` holding the call (`const admin = astroadmin()`).
+
 The config is parsed, not run, so a config built up dynamically may not be
-readable; the check then says so.
+readable. When `integrations` is something else (a function call, a
+condition, a `let`, or a later `...spread` that may replace it) the check
+warns that it could not verify it.
 
 ### hosted-preview-config
 
@@ -142,6 +154,11 @@ vite: {
 The editor refreshes the preview itself after a save, so nothing is lost by
 turning HMR off.
 
+Properties are read the way JavaScript applies them: the last one wins. A
+`...spread` or computed key after the setting (or with no plain setting at
+all) may change it, so the check warns that it could not verify the value;
+one before the setting does not matter.
+
 ### committed-lockfile
 
 *Since 1.3.0. Warns.*
@@ -149,7 +166,8 @@ turning HMR off.
 A hosted editor installs the site's dependencies with
 `bun install --frozen-lockfile`. Without a committed `bun.lock` it installs
 whatever versions resolve on the day, which may not be what the site was built
-and tested with.
+and tested with. The check reads the last commit (`HEAD`), so a lockfile that
+is only staged, or a repository with no commits, warns.
 
 ### no-submodules
 
@@ -185,8 +203,15 @@ as the publish check (Bun), and makes a 1x1 image.
 *Since 1.4.8. Fails when the build fails.*
 
 The CLI builds the site into a temporary directory (unless `--build` is
-given) and fails if the build does. The built-HTML checks below need that
-build.
+given) and fails if the build does, or if it writes no HTML pages. The
+built-HTML checks below need that build.
+
+It runs the site's own installed Astro: the `bin` of `node_modules/astro` in
+the site's directory, or in a directory above it up to the repository root
+(a monorepo with hoisted `node_modules`), with Bun's auto-install turned off.
+A site with no Astro installed fails with "astro is not installed": a package
+runner such as `bunx` would instead fetch and run whatever Astro the registry
+has that day, which is not what the site builds with.
 
 ### block-index
 
@@ -194,10 +219,18 @@ build.
 
 Every rendered block root should carry `data-block-index` with the block's
 position in the entry's block list. When an editor focuses a block's control,
-the preview highlights the element with the matching index. Without it the
-preview guesses, by counting top-level `<section>` elements, and highlights the
-wrong one as soon as one block renders as something else (a `<figure>`, a
-`<div>`) or renders nothing.
+the preview highlights the block's element, picked by its POSITION among the
+page's `data-block-index` elements (not by the attribute's value). Without
+any, the preview guesses, by counting top-level `<section>` elements, and
+highlights the wrong one as soon as one block renders as something else (a
+`<figure>`, a `<div>`) or renders nothing.
+
+So the check wants exactly `0, 1, ... n-1` in page order for an entry with `n`
+blocks: it reports a missing index, a duplicate, an extra root (more roots
+than blocks, or an index past the end), a root nested inside another, and
+roots out of order. An entry whose page was not built is reported as not
+checked, and the check then does not pass. A page whose entry has two block
+lists is only checked for the indexes' presence.
 
 ```astro
 {blocks.map((block, i) => (
@@ -226,6 +259,17 @@ nearest `data-aa-field` around it. The value is the control's form name:
 
 The check measures the **built** HTML, not the templates, so it sees what the
 preview actually renders, including an attribute a wrapper component dropped.
+What a visitor never sees is left out: annotations and text inside
+`<template>`, `<noscript>`, `<script>` or `<style>`, or inside an element with
+the `hidden` attribute, do not count. `aria-hidden="true"` hides an element
+from screen readers only, so it still counts. CSS (`display: none`) is not
+evaluated. A page with no `<body>` tag is read as if it had one.
+
+A name counts when it is the name of the editor control the field is edited
+through, exactly as the editor's form renders it: the field's own control,
+or the one list control that holds it (`blocks[3].items` for every field of
+every item). Annotating a nested object (`hero` for `hero.title`) or a whole
+block (`blocks[2]`) covers nothing, since neither is a control.
 For each entry, it counts the entry's text fields and how many have a matching
 `data-aa-field` (themselves, or the list that holds them) where the entry is
 shown: on its own page (a `pages` entry at `/<slug>`, or a collection's preview
@@ -235,9 +279,16 @@ annotation qualified with another entry never counts for the page's own
 entry, and an entry with no page of its own and no card is not counted at all.
 
 Only text a visitor reads counts. Left out: ids, slugs, links and URLs, image
-and alt fields, dates, enums, page metadata (`meta*`, `seo*`, `og*`), and any
-field whose text is not visible on the page outside a link (a page `<title>`,
-a button label). The report says how many fields were left out that way.
+and alt fields, dates, enums, page metadata (`meta*`, `seo*`, `og*`), fields
+no control can focus (a gallery's items), and any field whose text is not
+visible on the page outside a link (a page `<title>`, a button label). The
+report says how many fields were left out that way.
+
+The check passes only on positive evidence: at least 80% coverage, and every
+entry with a page of its own had that page in the build. An entry whose page
+was not built is named in the message and keeps the check at a warning. An
+entry with no page of its own and no card naming it is listed as on no built
+page, and not counted.
 
 Coverage is reported per collection, since the entries of one collection share
 a template: a site can have well annotated pages and an FAQ list with none.
@@ -259,8 +310,12 @@ Three traps the check cannot see directly, worth knowing when annotating:
 
 *Since 1.4.1. Warns.*
 
-Every `data-aa-field` on a page should name a field of an entry shown on that
-page (a field the schema declares counts even when the entry leaves it empty).
+Every `data-aa-field` on a page should name an editor control of an entry
+shown on that page (a field the schema declares counts even when the entry
+leaves it empty). The controls are the ones the editor's form renders, so
+`hero` (a nested object), `credentials` (a list of strings, whose items are
+`credentials[0]`...) and `cards[0].title` (an item field of a list edited as
+cards, whose control is `cards`) are all reported.
 One inside a `data-aa-entry` must name a field of that entry. A name that
 matches nothing does nothing when clicked. The usual cause is a block field
 annotated without its index (`heading` where the control is

@@ -31,7 +31,9 @@ import {
   findUnknownFieldNames,
 } from './coverage.js';
 import {
+  bunExecutable,
   findAstroAssetsUse,
+  findAstroExecutable,
   findCommittedLockfile,
   isGitRepository,
   probeSharp,
@@ -51,6 +53,11 @@ export const NO_HTML_MESSAGE = 'The build has no HTML pages, so there was nothin
 const percent = (part, whole) => `${Math.round((part / whole) * 100)}%`;
 const listSome = (items) => items.slice(0, MAX_LISTED).concat(items.length > MAX_LISTED ? [`… and ${items.length - MAX_LISTED} more`] : []);
 
+/** A word for /bin/sh, single-quoted. */
+function shellQuote(word) {
+  return `'${String(word).replace(/'/g, `'\\''`)}'`;
+}
+
 /** Built checks have nothing to read when there is no build. */
 function noBuild(context) {
   return { severity: 'skip', message: context.buildSkippedReason || 'No build to check.' };
@@ -67,7 +74,10 @@ export const CHECKS = [
       if (!facts.file) return { severity: 'fail', message: 'No astro.config file found in the project.' };
       if (facts.parseError) return { severity: 'warn', message: `Could not parse ${facts.file}: ${facts.parseError}` };
       if (!facts.integrationImported) return { severity: 'fail', message: `${facts.file} does not import astroadmin/integration, so the preview has no click-to-edit, block focus or component previews.` };
-      if (!facts.integrationCalled) return { severity: 'fail', message: `${facts.file} imports astroadmin/integration but never calls it; add it to integrations: [astroadmin()].` };
+      if (facts.integrationCalled === 'unknown') {
+        return { severity: 'warn', message: `Could not verify that astroadmin() is in the integrations ${facts.file} exports: that list is not a plain array (or a const holding one) the doctor can read without running the config. Check it by hand.` };
+      }
+      if (facts.integrationCalled !== 'yes') return { severity: 'fail', message: `${facts.file} imports astroadmin/integration but the integrations it exports do not call it; add it to integrations: [astroadmin()].` };
       return { severity: 'pass', message: `astroadmin() is in ${facts.file}.` };
     },
   },
@@ -82,9 +92,13 @@ export const CHECKS = [
       const problems = [];
       if (facts.allowedHosts === 'missing') problems.push('vite.server.allowedHosts is not set, so Vite refuses the proxied preview host');
       if (facts.hmr === 'enabled') problems.push('vite.server.hmr is not false; the editor refreshes the preview itself and HMR cannot cross the preview proxy');
-      if (problems.length > 0) return { severity: 'warn', message: `${problems.join('; ')}.` };
-      if (facts.allowedHosts === 'unknown' || facts.hmr === 'unknown') {
-        return { severity: 'warn', message: 'vite.server is not a plain object literal, so allowedHosts and hmr could not be read; check them by hand.' };
+      const unknown = [facts.allowedHosts === 'unknown' ? 'allowedHosts' : null, facts.hmr === 'unknown' ? 'hmr' : null].filter(Boolean);
+      if (unknown.length > 0) {
+        problems.push(`could not verify vite.server ${unknown.join(' and ')}: the value is not a plain literal, or a spread or computed key may override it; check by hand`);
+      }
+      if (problems.length > 0) {
+        const message = problems.join('; ');
+        return { severity: 'warn', message: `${message[0].toUpperCase()}${message.slice(1)}.` };
       }
       return { severity: 'pass', message: 'vite.server.allowedHosts is set and hmr is false.' };
     },
@@ -97,7 +111,7 @@ export const CHECKS = [
     async run(context) {
       if (!(await isGitRepository(context.projectRoot))) return { severity: 'warn', message: 'The project is not a git repository.' };
       const lockfile = await findCommittedLockfile(context.projectRoot);
-      if (!lockfile) return { severity: 'warn', message: 'No bun.lock is committed, so a hosted editor installs whatever versions resolve today.' };
+      if (!lockfile) return { severity: 'warn', message: 'No bun.lock is committed (in HEAD), so a hosted editor installs whatever versions resolve today.' };
       return { severity: 'pass', message: `${lockfile} is committed.` };
     },
   },
@@ -168,9 +182,17 @@ export const CHECKS = [
         context.buildSkippedReason = 'Not built (pass --build <distDir> to check an existing build).';
         return { severity: 'skip', message: context.buildSkippedReason };
       }
+      // The site's own installed astro, run by Bun with auto-install off: a
+      // package runner (bunx) would otherwise fetch and run whatever Astro the
+      // registry has today when the site has none installed.
+      const astroBin = await findAstroExecutable(context.projectRoot);
+      if (!astroBin) {
+        context.buildSkippedReason = 'Not built: astro is not installed.';
+        return { severity: 'fail', message: 'astro is not installed in the site (no node_modules/astro in its directory or above it in the repository); run the site\'s install first.' };
+      }
       const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astroadmin-doctor-'));
       context.cleanups.push(() => fs.rm(outDir, { recursive: true, force: true }));
-      const command = `bunx --bun astro build --outDir ${JSON.stringify(outDir)}`;
+      const command = [bunExecutable(), '--no-install', '--bun', astroBin, 'build', '--outDir', outDir].map(shellQuote).join(' ');
       const result = await runCommand(command, context.projectRoot, BUILD_TIMEOUT_MS, buildEnvironment());
       if (result.timedOut || result.exitCode !== 0) {
         context.buildSkippedReason = 'The build failed, so the built HTML could not be checked.';
@@ -182,7 +204,7 @@ export const CHECKS = [
         return { severity: 'fail', message: 'The build succeeded but wrote no HTML pages.' };
       }
       context.distDir = outDir;
-      return { severity: 'pass', message: `${command.replace(JSON.stringify(outDir), '<temp dir>')} succeeded.` };
+      return { severity: 'pass', message: `astro build (${path.relative(context.projectRoot, astroBin) || astroBin}) succeeded.` };
     },
   },
   {

@@ -62,6 +62,16 @@ function check(name, fn) {
     process.exitCode = 1;
   }
 }
+async function checkAsync(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`✅ ${name}`);
+  } catch (error) {
+    console.error(`❌ ${name}\n   ${error.stack || error.message}`);
+    process.exitCode = 1;
+  }
+}
 
 try {
   console.log('\n🧪 doctor: the CLI\n' + '='.repeat(40));
@@ -106,6 +116,77 @@ export const collections = {
     assert.equal(run.status, 1, run.stdout + run.stderr);
     assert.match(run.stdout, /FAIL Astro integration \(since 0\.2\.0\)/);
     assert.match(run.stdout, /docs\/doctor\.md#astro-integration/);
+  });
+
+  const { findAstroExecutable } = await import('../server/doctor/project.js');
+  const doctorBuilding = (siteDir) => spawnSync('bun', [path.join(repoRoot, 'bin/cli.js'), 'doctor', '--project', siteDir, '--json'], { encoding: 'utf-8', timeout: 120_000 });
+
+  await checkAsync('the build uses the site\'s installed astro: its own, or one hoisted above a monorepo subdir, else none', async () => {
+    // The bin astro's own package.json declares, as its .bin link would run it.
+    const astroPackage = JSON.parse(fs.readFileSync(path.join(repoRoot, 'node_modules', 'astro', 'package.json'), 'utf-8'));
+    const installedAstro = fs.realpathSync(path.join(repoRoot, 'node_modules', 'astro', typeof astroPackage.bin === 'string' ? astroPackage.bin : astroPackage.bin.astro));
+    const own = makeSite('own-astro', HOSTED);
+    assert.equal(await findAstroExecutable(own), installedAstro);
+    // A site in a subdirectory, with node_modules hoisted to the repository root.
+    const monorepo = path.join(tempRoot, 'monorepo');
+    writeFile(monorepo, 'apps/site/package.json', '{}');
+    fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(monorepo, 'node_modules'), 'dir');
+    execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main'], { cwd: monorepo });
+    assert.equal(await findAstroExecutable(path.join(monorepo, 'apps/site')), installedAstro);
+    // None installed: null, never a download.
+    const bare = path.join(tempRoot, 'bare');
+    writeFile(bare, 'package.json', '{}');
+    assert.equal(await findAstroExecutable(bare), null);
+  });
+
+  await checkAsync('a site with no installed astro fails the build check clearly, without fetching one', async () => {
+    const bare = path.join(tempRoot, 'no-astro');
+    writeFile(bare, 'package.json', JSON.stringify({ type: 'module' }));
+    writeFile(bare, 'astro.config.mjs', HOSTED);
+    writeFile(bare, 'src/pages/index.astro', '<h1>Home</h1>\n');
+    const startedAt = Date.now();
+    const run = doctorBuilding(bare);
+    const report = JSON.parse(run.stdout);
+    const build = report.results.find((result) => result.id === 'build-runs');
+    assert.equal(build.severity, 'fail', JSON.stringify(build));
+    assert.match(build.message, /astro is not installed/i, build.message);
+    assert.ok(Date.now() - startedAt < 30_000, `took ${Date.now() - startedAt} ms`);
+    assert.equal(fs.existsSync(path.join(bare, 'node_modules')), false, 'nothing was installed into the site');
+  });
+
+  await checkAsync('control: a site with astro installed builds with it (no --build) and the built checks run', async () => {
+    const site = makeSite('builds', HOSTED);
+    // The site's own node_modules: this repo's astro and zod (the editor's
+    // schema reader needs the site's zod), and astroadmin itself (which the
+    // config imports and this repo's node_modules does not hold). No .bin, so
+    // a runner that ignored the installed package would have to fetch one.
+    fs.rmSync(path.join(site, 'node_modules'));
+    fs.mkdirSync(path.join(site, 'node_modules'));
+    for (const name of ['astro', 'zod']) fs.symlinkSync(path.join(repoRoot, 'node_modules', name), path.join(site, 'node_modules', name), 'dir');
+    fs.symlinkSync(repoRoot, path.join(site, 'node_modules', 'astroadmin'), 'dir');
+    writeFile(site, 'src/pages/index.astro', `---
+import { getEntry } from 'astro:content';
+const home = await getEntry('pages', 'home');
+---
+<html><body><h1 data-aa-field="headline">{home.data.headline}</h1></body></html>
+`);
+    const run = doctorBuilding(site);
+    assert.equal(run.status, 0, run.stdout + run.stderr);
+    const byId = Object.fromEntries(JSON.parse(run.stdout).results.map((result) => [result.id, result]));
+    assert.equal(byId['build-runs'].severity, 'pass', JSON.stringify(byId['build-runs']));
+    assert.match(byId['click-to-edit-coverage'].message, /1 of 1/);
+  });
+
+  await checkAsync('an --build directory with no HTML fails, and the built checks do not pass', async () => {
+    const site = makeSite('empty-build', HOSTED);
+    fs.mkdirSync(path.join(site, 'empty-dist'));
+    const run = spawnSync('bun', [path.join(repoRoot, 'bin/cli.js'), 'doctor', '--project', site, '--build', path.join(site, 'empty-dist'), '--json'], { encoding: 'utf-8' });
+    const byId = Object.fromEntries(JSON.parse(run.stdout).results.map((result) => [result.id, result]));
+    assert.equal(byId['build-runs'].severity, 'fail', JSON.stringify(byId['build-runs']));
+    for (const id of ['block-index', 'click-to-edit-coverage', 'click-to-edit-names', 'click-to-edit-links']) {
+      assert.notEqual(byId[id].severity, 'pass', `${id}: ${JSON.stringify(byId[id])}`);
+    }
+    assert.equal(run.status, 1);
   });
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });
