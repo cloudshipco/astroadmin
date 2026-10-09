@@ -9,6 +9,7 @@ import { execFile, spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { promisify } from 'util';
+import { bunExecutable } from '../utils/astro-bin.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -250,37 +251,6 @@ export async function findCommittedLockfile(projectRoot) {
   return committed.split('\n').find(Boolean) || null;
 }
 
-/**
- * The astro executable the site has installed: the `bin` of node_modules/astro
- * in the site's directory, or in any directory above it up to the repository
- * root (a monorepo with hoisted node_modules). Null when there is none: the
- * doctor never lets a package runner fetch one.
- * @param {string} projectRoot
- * @returns {Promise<string|null>} an absolute, real path
- */
-export async function findAstroExecutable(projectRoot) {
-  let directory = await fs.realpath(projectRoot);
-  let top = directory;
-  try {
-    top = await fs.realpath(await git(projectRoot, ['rev-parse', '--show-toplevel']));
-  } catch {
-    // not a repository: only the site's own node_modules
-  }
-  for (;;) {
-    const packageDir = path.join(directory, 'node_modules', 'astro');
-    try {
-      const manifest = JSON.parse(await fs.readFile(path.join(packageDir, 'package.json'), 'utf-8'));
-      const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.astro;
-      if (bin) return await fs.realpath(path.join(packageDir, bin));
-    } catch {
-      // not installed at this level
-    }
-    const parent = path.dirname(directory);
-    if (directory === top || parent === directory || !directory.startsWith(`${top}${path.sep}`)) return null;
-    directory = parent;
-  }
-}
-
 /** Source files under src/, skipping node_modules and dot-directories. */
 async function* sourceFiles(directory) {
   let entries;
@@ -327,11 +297,6 @@ try {
   fail(error);
 }
 `;
-
-/** The Bun running the admin (the runtime the publish check builds with). */
-export function bunExecutable() {
-  return process.versions.bun ? process.execPath : 'bun';
-}
 
 /**
  * Try to load sharp from the site, in a child process (a native module that

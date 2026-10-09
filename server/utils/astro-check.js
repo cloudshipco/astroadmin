@@ -29,10 +29,10 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
+import { ASTRO_NOT_INSTALLED_MESSAGE, DEFAULT_BUILD_ARGS, defaultAstroCommand } from './astro-bin.js';
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_CHECK_COMMAND = 'bunx --bun astro build';
 const DEFAULT_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
@@ -169,7 +169,7 @@ async function git(cwd, args) {
 
 /**
  * Run a shell command in its own process group. On timeout, kill the WHOLE
- * group (the shell, bunx, astro and anything they started) and settle at once:
+ * group (the shell, astro and anything they started) and settle at once:
  * a descendant that left the group can keep the output pipes open, and waiting
  * for them to close would hold the git lock forever.
  * @returns {Promise<{exitCode: number|null, output: string, timedOut: boolean}>}
@@ -272,7 +272,9 @@ export async function findWorkspaceLinkForProject(projectRoot) {
  * Never throws: any failure to run the check is a failed check (fail closed).
  * @param {Object} fullConfig - getConfig() result. The command is `build.check`,
  *   else the site's `build.production` (so the check builds the way the site is
- *   built), else `astro build`; `build.checkTimeoutMs` overrides the time limit.
+ *   built), else the site's own installed astro (`astro build --outDir dist`, run
+ *   from the worktree's node_modules, never fetched: when it is not installed the
+ *   check refuses); `build.checkTimeoutMs` overrides the time limit.
  * @param {Object} [options]
  * @param {(build: {siteDir: string, commit: string, command: string}) => Promise<void>} [options.onBuilt] -
  *   called after a check that passed, while its worktree (and the build output
@@ -282,7 +284,7 @@ export async function findWorkspaceLinkForProject(projectRoot) {
  */
 export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
   const projectRoot = fullConfig.paths.projectRoot;
-  const command = fullConfig.build?.check || fullConfig.build?.production || DEFAULT_CHECK_COMMAND;
+  let command = fullConfig.build?.check || fullConfig.build?.production || null;
   const timeoutMs = fullConfig.build?.checkTimeoutMs || DEFAULT_CHECK_TIMEOUT_MS;
   let commit = '';
   let tempDir = null;
@@ -324,6 +326,15 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
       await linkNodeModules(liveNodeModules, path.join(worktreeDir, relativeDir, 'node_modules'));
     }
     await copyEnvFiles(projectRoot, siteDir);
+
+    // The default: the astro the worktree's node_modules (links to the live
+    // checkout's) resolve to. Never a package runner, which would fetch one.
+    if (!command) {
+      command = await defaultAstroCommand(siteDir, DEFAULT_BUILD_ARGS.production);
+      if (!command) {
+        return fail(`${ASTRO_NOT_INSTALLED_MESSAGE} The publish check cannot run without it, so nothing was pushed.`);
+      }
+    }
 
     console.log(`🔎 Checking ${commit.slice(0, 7)} with: ${command}`);
     const result = await runCommand(command, siteDir, timeoutMs, buildEnvironment());

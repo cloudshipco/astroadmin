@@ -47,7 +47,7 @@ async function loadDriver() {
       'astroadmin loader: this build is running under Node, which needs the ' +
         'optional `better-sqlite3` dependency to read the content store. ' +
         'Install it (`npm install better-sqlite3`) or build under Bun ' +
-        `(\`bunx --bun astro build\`). Underlying error: ${error.message}`
+        `(\`bun --bun astro build\`). Underlying error: ${error.message}`
     );
   }
   return {

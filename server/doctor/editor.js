@@ -19,7 +19,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { cleanCheckOutput } from '../utils/astro-check.js';
 import { RESULT_MARKER, outDirFor } from './editor-scan.js';
-import { bunExecutable } from './project.js';
+import { bunExecutable } from '../utils/astro-bin.js';
 
 export { outDirFor };
 

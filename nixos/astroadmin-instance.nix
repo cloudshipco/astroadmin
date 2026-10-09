@@ -350,8 +350,8 @@ let
     partOf = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
     # The admin shells out to bare `git` (simple-git, for Publish commit/push)
-    # and `bunx` (astro build); systemd's minimal service PATH lacks both, so
-    # put them on the unit's PATH explicitly.
+    # and `bun` (a configured build command); systemd's minimal service PATH
+    # lacks both, so put them on the unit's PATH explicitly.
     path = [ pkgs.git pkgs.bun ];
     environment = (instanceEnv name inst) // {
       ASTROADMIN_HOST = "127.0.0.1";
@@ -412,7 +412,7 @@ let
     # fast-forwarded `astro dev` picks up new templates and config.
     partOf = [ "astroadmin-${name}-checkout.service" ];
     wantedBy = [ "multi-user.target" ];
-    # astro dev runs under Bun (`bunx --bun`), whose runtime file-watcher does NOT
+    # astro dev runs under Bun (`bun --bun`), whose runtime file-watcher does NOT
     # fire for src/content edits — the preview would serve stale content until a
     # restart. Force chokidar (Vite's watcher) into polling mode so the editor's
     # live preview reflects saves. Polling is a stat() loop, so it works
@@ -434,7 +434,12 @@ let
       # `homeMode`, which only applies when createHome first makes the dir.
       StateDirectoryMode = "0700";
       # Bind to localhost ONLY — never given an nginx vhost of its own.
-      ExecStart = "${pkgs.bun}/bin/bunx --bun astro dev --host 127.0.0.1 --port ${toString inst.previewPort}";
+      # The site's OWN astro, as the checkout unit's `bun install` linked it,
+      # with auto-install off. Never `bunx astro`: with no astro installed (or
+      # the package but no .bin link) it downloads and runs whatever Astro the
+      # registry or Bun's cache has. A missing link fails the unit loudly
+      # ("Script not found") instead.
+      ExecStart = "${pkgs.bun}/bin/bun --no-install --bun ${inst.projectRoot}/node_modules/.bin/astro dev --host 127.0.0.1 --port ${toString inst.previewPort}";
       Restart = "on-failure";
       RestartSec = 5;
     };

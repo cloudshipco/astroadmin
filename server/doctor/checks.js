@@ -30,10 +30,9 @@ import {
   findUnknownEntryRefs,
   findUnknownFieldNames,
 } from './coverage.js';
+import { bunExecutable, findAstroExecutable, shellQuote } from '../utils/astro-bin.js';
 import {
-  bunExecutable,
   findAstroAssetsUse,
-  findAstroExecutable,
   findCommittedLockfile,
   isGitRepository,
   probeSharp,
@@ -52,11 +51,6 @@ export const NO_HTML_MESSAGE = 'The build has no HTML pages, so there was nothin
 
 const percent = (part, whole) => `${Math.round((part / whole) * 100)}%`;
 const listSome = (items) => items.slice(0, MAX_LISTED).concat(items.length > MAX_LISTED ? [`… and ${items.length - MAX_LISTED} more`] : []);
-
-/** A word for /bin/sh, single-quoted. */
-function shellQuote(word) {
-  return `'${String(word).replace(/'/g, `'\\''`)}'`;
-}
 
 /** Built checks have nothing to read when there is no build. */
 function noBuild(context) {

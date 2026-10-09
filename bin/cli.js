@@ -17,6 +17,7 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import net from 'net';
 import { createRequire } from 'module';
+import { ASTRO_NOT_INSTALLED_MESSAGE, bunExecutable, findAstroExecutable } from '../server/utils/astro-bin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -100,13 +101,19 @@ async function maybeStartAstro(projectRoot, previewUrl) {
 
   console.log('🚀 Starting Astro dev server...');
 
-  // Spawn the Astro dev server under Bun so the content-layer loader's
-  // `bun:sqlite` import works. Sites needing a custom dev command can pass
-  // --no-astro and start their own dev server.
-  astroProcess = spawn('bunx', ['--bun', 'astro', 'dev', '--port', String(previewPort)], {
+  // Spawn the site's OWN installed astro dev server under Bun (so the
+  // content-layer loader's `bun:sqlite` import works), with auto-install off.
+  // Never a package runner: `bunx astro` fetches and runs an Astro the site
+  // never installed when it has none. Sites needing a custom dev command can
+  // pass --no-astro and start their own dev server.
+  const astroBin = await findAstroExecutable(projectRoot);
+  if (!astroBin) {
+    console.error(`❌ Not starting the Astro dev server: ${ASTRO_NOT_INSTALLED_MESSAGE}`);
+    return;
+  }
+  astroProcess = spawn(bunExecutable(), ['--no-install', '--bun', astroBin, 'dev', '--port', String(previewPort)], {
     cwd: projectRoot,
     stdio: ['inherit', 'pipe', 'pipe'],
-    shell: true,
   });
 
   // Prefix Astro output for clarity

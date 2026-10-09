@@ -118,7 +118,7 @@ export const collections = {
     assert.match(run.stdout, /docs\/doctor\.md#astro-integration/);
   });
 
-  const { findAstroExecutable } = await import('../server/doctor/project.js');
+  const { findAstroExecutable } = await import('../server/utils/astro-bin.js');
   const doctorBuilding = (siteDir) => spawnSync('bun', [path.join(repoRoot, 'bin/cli.js'), 'doctor', '--project', siteDir, '--json'], { encoding: 'utf-8', timeout: 120_000 });
 
   await checkAsync('the build uses the site\'s installed astro: its own, or one hoisted above a monorepo subdir, else none', async () => {

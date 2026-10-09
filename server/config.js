@@ -87,11 +87,17 @@ const defaultConfig = {
   // (useful with build-on-push hosts where a deploy takes a short while).
   publicUrl: process.env.PUBLIC_URL || null,
 
-  // Build commands
-  // Run Astro under Bun so the content-layer loader's `bun:sqlite` import works.
+  // Build commands (/bin/sh command lines run in the site's directory). Null
+  // means the site's OWN installed astro (node_modules/astro, in the site's
+  // directory or above it in the repo), run under Bun with auto-install off:
+  // `astro build --outDir staging-dist` / `--outDir dist`. Under Bun so the
+  // content-layer loader's `bun:sqlite` import works; never via a package runner
+  // (`bunx astro` downloads and runs an Astro the site never installed when it
+  // has none). `production` is also what the publish check runs, unless
+  // `check` is set. See server/utils/astro-bin.js.
   build: {
-    staging: 'bunx --bun astro build --outDir staging-dist',
-    production: 'bunx --bun astro build --outDir dist',
+    staging: null,
+    production: null,
   },
 
   // Authentication

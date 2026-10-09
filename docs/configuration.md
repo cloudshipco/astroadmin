@@ -142,6 +142,32 @@ SESSION_SECRET=a-long-random-string
 **Security note:** AstroAdmin warns at startup when production runs with the
 default credentials, a plaintext-only password, or the default session secret.
 
+## Build commands
+
+```javascript
+export default {
+  build: {
+    production: 'bun --bun astro build --outDir dist', // also what Publish checks
+    staging: 'bun --bun astro build --outDir staging-dist',
+    check: 'bun --bun astro build', // optional: the publish check only
+  },
+};
+```
+
+All three are optional `/bin/sh` command lines run in the site's directory.
+Unset, they run the site's **own installed** Astro (the `bin` of
+`node_modules/astro` in the site's directory, or above it up to the
+repository root) under Bun with auto-install off: `astro build --outDir dist`
+for production and the publish check, `--outDir staging-dist` for staging. If
+the site has no Astro installed they refuse ("astro is not installed in this
+site") rather than run one: a package runner such as `bunx astro` would
+download and run whatever Astro the registry has that day. `astroadmin dev`
+starts the preview's `astro dev` the same way.
+
+Before every push, Publish builds the exact commit with `build.check`, else
+`build.production`, else the default; a commit that fails is kept locally and
+not pushed.
+
 ## CLI Options
 
 Override settings via command line:

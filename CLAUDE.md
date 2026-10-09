@@ -97,6 +97,10 @@ runner aggregating them). Most run server-less and need env vars:
   the admin's secrets are not in the build's environment, server paths are stripped, and
   the site's own `node_modules/.astro` is byte-identical afterwards. Takes ~1-2 min (each
   publish runs a full `astro build`).
+- `bun tests/astro-bin.test.js` — the default build commands run the site's OWN installed
+  astro (`server/utils/astro-bin.js`), never a package runner: with no astro installed the
+  publish check and the production build refuse and a fake `bunx`/`npx` first on PATH is
+  never called; with the package but no `node_modules/.bin`, the check still builds. ~5 s.
 - `bun tests/live-url.test.js` — page path -> live-site URL (`ui/live-url.js`), shared by the
   header's "View live site" link and the server's live-status check: base paths, query/hash,
   and escape attempts (`//host`, `/\host`, `javascript:`, and paths that only normalise to
@@ -147,7 +151,7 @@ Two layers, deliberately unequal:
    would lose half-finished autosaved edits.
 2. **Nothing is pushed until the site's own Astro accepts the exact commit**
    (`server/utils/astro-check.js`): `build.check`, else the site's `build.production`,
-   else `astro build`, runs in a throwaway `git worktree` at HEAD, after the commit
+   else the site's own installed astro (`server/utils/astro-bin.js`), runs in a throwaway `git worktree` at HEAD, after the commit
    and after `pull --rebase`, under `withGitLock` (which `/api/git/pull` also takes) so
    the commit checked is the commit pushed. The push names that SHA and the branch's
    upstream explicitly (`pushCheckedCommit`), so a configured push refspec or

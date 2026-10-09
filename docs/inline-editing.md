@@ -493,8 +493,9 @@ reaches the output.
 
    ```bash
    git worktree add ../site-before <commit-before-annotating>
-   (cd ../site-before && bunx --bun astro build --outDir /tmp/aa-before)
-   bunx --bun astro build --outDir /tmp/aa-after
+   ln -s "$PWD/node_modules" ../site-before/node_modules
+   (cd ../site-before && bun --no-install --bun node_modules/.bin/astro build --outDir /tmp/aa-before)
+   bun --no-install --bun node_modules/.bin/astro build --outDir /tmp/aa-after
    find /tmp/aa-before /tmp/aa-after -name '*.html' -exec perl -pi -e 's/ data-(aa-field|aa-entry|block-index)="[^"]*"//g' {} +
    diff -r /tmp/aa-before /tmp/aa-after && echo "annotations are inert"
    ```
