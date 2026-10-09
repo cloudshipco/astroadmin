@@ -12,12 +12,13 @@
  */
 
 import assert from 'assert';
-import { scanHtml, scanBuiltPages } from '../server/doctor/html-scan.js';
+import { scanHtml, scanBuiltPages, listBuiltPagePaths } from '../server/doctor/html-scan.js';
 import {
   computeFieldCoverage,
   describeEntryFields,
   findAnnotatedLinks,
   findUnindexedBlocks,
+  findUnknownEntryRefs,
   findUnknownFieldNames,
 } from '../server/doctor/coverage.js';
 import fs from 'fs';
@@ -317,6 +318,117 @@ await check('the built-page reader finds both build formats and skips missing pa
     const pages = await scanBuiltPages(distDir, ['/', '/about', '/contact', '/missing']);
     assert.deepEqual([...pages.keys()], ['/', '/about', '/contact']);
     assert.equal(pages.get('/contact').fields[0].name, 'intro');
+  } finally {
+    fs.rmSync(distDir, { recursive: true, force: true });
+  }
+});
+
+// A home page listing entries of another collection as cards, each card
+// qualified with data-aa-entry. The services collection has no page of its own.
+const HOME_WITH_CARDS = `<!DOCTYPE html><html><head><title>Home</title></head><body>
+<main>
+  <h1 data-aa-field="headline">Welcome to the example company</h1>
+  <section data-block-index="0">
+    <ul>
+      <li data-aa-entry="services/garden-design">
+        <h3 data-aa-field="title">Garden design</h3>
+        <p data-aa-field="summary">Plans and planting for any plot.</p>
+        <a href="/services/garden-design">Read more</a>
+      </li>
+      <li data-aa-entry="services/hedge-trimming">
+        <h3 data-aa-field="title">Hedge trimming</h3>
+        <p data-aa-field="summary">Neat edges, twice a year.</p>
+      </li>
+    </ul>
+  </section>
+</main></body></html>`;
+
+const serviceSchema = { type: 'object', properties: { title: { type: 'string' }, summary: { type: 'string' }, details: { type: 'string' } } };
+const homeEntry = {
+  collection: 'pages', slug: 'home', pagePath: '/',
+  schema: { type: 'object', properties: { headline: { type: 'string' }, title: { type: 'string' } } },
+  data: { headline: 'Welcome to the example company', title: 'Garden design' },
+};
+const serviceEntries = [
+  { collection: 'services', slug: 'garden-design', pagePath: null, schema: serviceSchema, data: { title: 'Garden design', summary: 'Plans and planting for any plot.', details: 'Long text shown only on a detail page.' } },
+  { collection: 'services', slug: 'hedge-trimming', pagePath: null, schema: serviceSchema, data: { title: 'Hedge trimming', summary: 'Neat edges, twice a year.', details: 'More long text not on the home page.' } },
+];
+
+console.log('\n🧪 doctor: entry-qualified annotations (data-aa-entry)\n' + '='.repeat(40));
+
+await check('the scan records each annotation\'s entry: the nearest data-aa-entry on it or an ancestor', async () => {
+  const scan = await scanHtml(`<body><h1 data-aa-field="headline">H</h1>
+    <div data-aa-entry="services/a"><p data-aa-field="title">A</p>
+      <div data-aa-entry="services/b"><p data-aa-field="title">B</p></div>
+      <p data-aa-field="summary">A again</p></div>
+    <img data-aa-entry="services/c" data-aa-field="image" src="/c.jpg">
+    <p data-aa-field="after">after</p></body>`);
+  assert.deepEqual(scan.fields.map((field) => [field.name, field.entry]), [
+    ['headline', null], ['title', 'services/a'], ['title', 'services/b'], ['summary', 'services/a'], ['image', 'services/c'], ['after', null],
+  ]);
+  assert.deepEqual(scan.entryRefs, ['services/a', 'services/b', 'services/c']);
+});
+
+await check('coverage: a card\'s qualified annotations count toward ITS entry, which has no page of its own', async () => {
+  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/'));
+  const garden = report.entries.find((entry) => entry.slug === 'garden-design');
+  assert.ok(garden, JSON.stringify(report.entries.map((entry) => entry.slug)));
+  assert.equal(garden.pagePath, '/');
+  assert.equal(garden.fields, 2, 'title and summary render on the card; details does not');
+  assert.equal(garden.covered, 2);
+  assert.deepEqual(garden.notRendered, ['details']);
+  assert.deepEqual(report.byCollection.find((summary) => summary.collection === 'services'), { collection: 'services', entries: 2, fields: 4, covered: 4 });
+});
+
+await check('coverage MUTATION: dropping one card\'s summary annotation drops exactly that entry\'s field', async () => {
+  const mutated = HOME_WITH_CARDS.replace('<p data-aa-field="summary">Neat edges', '<p>Neat edges');
+  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(mutated, '/'));
+  assert.deepEqual(report.entries.find((entry) => entry.slug === 'hedge-trimming').missing, ['summary']);
+  assert.deepEqual(report.entries.find((entry) => entry.slug === 'garden-design').missing, []);
+});
+
+await check('coverage: a card\'s "title" does not cover the PAGE entry\'s own "title"', async () => {
+  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/'));
+  assert.deepEqual(report.entries.find((entry) => entry.slug === 'home').missing, ['title']);
+});
+
+await check('coverage: an entry with no page and no card is left out, not counted as zero', async () => {
+  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS.replace(/ data-aa-entry="[^"]*"/g, ''), '/'));
+  assert.deepEqual(report.entries.map((entry) => entry.slug), ['home']);
+  assert.deepEqual(report.unchecked, []);
+});
+
+await check('names: qualified names are checked against their entry, not the page\'s', async () => {
+  // "summary" is not a field of pages/home, but it is of each service.
+  assert.deepEqual(findUnknownFieldNames([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/')), []);
+});
+
+await check('names MUTATION: a qualified name its entry does not have is reported with the entry', async () => {
+  const mutated = HOME_WITH_CARDS.replace('<p data-aa-field="summary">Neat edges', '<p data-aa-field="blurb">Neat edges');
+  assert.deepEqual(findUnknownFieldNames([homeEntry, ...serviceEntries], await pagesFor(mutated, '/')), [{ pagePath: '/', name: 'blurb', entry: 'services/hedge-trimming' }]);
+});
+
+await check('entry refs: every data-aa-entry on the fixture names an existing entry', async () => {
+  assert.deepEqual(findUnknownEntryRefs([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/')), []);
+});
+
+await check('entry refs MUTATION: a reference to an entry that does not exist is reported once per page', async () => {
+  const mutated = HOME_WITH_CARDS.replace('data-aa-entry="services/hedge-trimming"', 'data-aa-entry="services/hedge-cutting"');
+  assert.deepEqual(findUnknownEntryRefs([homeEntry, ...serviceEntries], await pagesFor(mutated, '/')), [{ pagePath: '/', entry: 'services/hedge-cutting' }]);
+  // ...and its annotations are not ALSO reported as unknown names.
+  assert.deepEqual(findUnknownFieldNames([homeEntry, ...serviceEntries], await pagesFor(mutated, '/')), []);
+});
+
+await check('built pages: every page in the build is listed, including pages no entry owns', async () => {
+  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-list-'));
+  try {
+    fs.mkdirSync(path.join(distDir, 'services', 'all'), { recursive: true });
+    fs.mkdirSync(path.join(distDir, '_astro'));
+    fs.writeFileSync(path.join(distDir, 'index.html'), '');
+    fs.writeFileSync(path.join(distDir, 'services', 'all', 'index.html'), '');
+    fs.writeFileSync(path.join(distDir, 'contact.html'), '');
+    fs.writeFileSync(path.join(distDir, '_astro', 'x.js'), '');
+    assert.deepEqual((await listBuiltPagePaths(distDir)).sort(), ['/', '/contact', '/services/all']);
   } finally {
     fs.rmSync(distDir, { recursive: true, force: true });
   }

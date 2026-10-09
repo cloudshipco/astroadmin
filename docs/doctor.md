@@ -221,12 +221,17 @@ nearest `data-aa-field` around it. The value is the control's form name:
 | A field of a block | `blocks[2].heading` (the block's index, then the field) |
 | An item list inside a block | `blocks[3].items` (the list's control) |
 | A Markdown entry's body | `body` |
+| A field of ANOTHER entry shown as a card | `title`, with `data-aa-entry="services/garden-design"` on the card |
 
 The check measures the **built** HTML, not the templates, so it sees what the
 preview actually renders, including an attribute a wrapper component dropped.
-For each entry with a page (a `pages` entry at `/<slug>`, or a collection's
-preview route), it counts the entry's text fields and how many have a matching
-`data-aa-field` (themselves, or the list that holds them) on that page.
+For each entry, it counts the entry's text fields and how many have a matching
+`data-aa-field` (themselves, or the list that holds them) where the entry is
+shown: on its own page (a `pages` entry at `/<slug>`, or a collection's preview
+route), and as a card on any built page whose annotations name it with
+`data-aa-entry` (since 1.4.9). A field reached in either place counts. An
+annotation qualified with another entry never counts for the page's own
+entry, and an entry with no page of its own and no card is not counted at all.
 
 Only text a visitor reads counts. Left out: ids, slugs, links and URLs, image
 and alt fields, dates, enums, page metadata (`meta*`, `seo*`, `og*`), and any
@@ -253,9 +258,17 @@ Three traps the check cannot see directly, worth knowing when annotating:
 
 Every `data-aa-field` on a page should name a field of an entry shown on that
 page (a field the schema declares counts even when the entry leaves it empty).
-A name that matches nothing does nothing when clicked. The usual cause is a
-block field annotated without its index (`heading` where the control is
+One inside a `data-aa-entry` must name a field of that entry. A name that
+matches nothing does nothing when clicked. The usual cause is a block field
+annotated without its index (`heading` where the control is
 `blocks[2].heading`), or a typo.
+
+Every `data-aa-entry` must name an existing entry as `<collection>/<slug>`,
+on any built page, including pages no entry owns (a listing page). A card
+naming a renamed or deleted entry does nothing when clicked.
+
+See [Field names](./inline-editing.md#field-names) and
+[Cards from other entries](./inline-editing.md#cards-from-other-entries).
 
 ### click-to-edit-links
 

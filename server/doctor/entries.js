@@ -6,6 +6,9 @@
  * Page paths follow the editor's preview: a `pages` entry is `/<slug>` (`home`
  * is `/`), any other collection uses its preview route (configured, else
  * detected from src/pages). Default locale only.
+ *
+ * Entries with no page of their own are included too (pagePath null): a page
+ * can still show them as cards, named by data-aa-entry.
  */
 
 import { getConfig } from '../config.js';
@@ -31,6 +34,7 @@ function pagePathFor(collection, slug, route) {
 
 /**
  * @returns {Promise<{entries: import('./coverage.js').DoctorEntry[], withoutPage: Array<{collection: string, slug: string}>}>}
+ *   withoutPage: the entries (also in `entries`, with pagePath null) that have no page of their own
  */
 export async function collectEntries() {
   const fullConfig = await getConfig();
@@ -47,10 +51,7 @@ export async function collectEntries() {
     }
     for (const slug of slugs) {
       const pagePath = pagePathFor(collection, slug, route);
-      if (!pagePath) {
-        withoutPage.push({ collection, slug });
-        continue;
-      }
+      if (!pagePath) withoutPage.push({ collection, slug });
       let content;
       try {
         content = await readContent(collection, slug);

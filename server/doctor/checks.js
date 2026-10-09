@@ -26,6 +26,7 @@ import {
   computeFieldCoverage,
   findAnnotatedLinks,
   findUnindexedBlocks,
+  findUnknownEntryRefs,
   findUnknownFieldNames,
 } from './coverage.js';
 import {
@@ -226,11 +227,20 @@ export const CHECKS = [
       if (!context.distDir) return noBuild(context);
       const { entries, pages } = await context.built();
       const unknown = findUnknownFieldNames(entries, pages);
-      if (unknown.length === 0) return { severity: 'pass', message: 'Every data-aa-field names a field of an entry on its page.' };
+      const unknownEntries = findUnknownEntryRefs(entries, pages);
+      if (unknown.length === 0 && unknownEntries.length === 0) {
+        return { severity: 'pass', message: 'Every data-aa-field names a field of its entry, and every data-aa-entry an existing entry.' };
+      }
+      const problems = [];
+      if (unknown.length > 0) problems.push(`${unknown.length} data-aa-field value(s) name no field of their entry`);
+      if (unknownEntries.length > 0) problems.push(`${unknownEntries.length} data-aa-entry value(s) name no existing entry (expected "<collection>/<slug>")`);
       return {
         severity: 'warn',
-        message: `${unknown.length} data-aa-field value(s) name no field of the entries on their page, so clicking them does nothing.`,
-        details: listSome(unknown.map((item) => `${item.pagePath}: "${item.name}"`)),
+        message: `${problems.join('; ')}, so clicking them does nothing. See ${INLINE_EDITING_DOCS}#field-names.`,
+        details: listSome([
+          ...unknownEntries.map((item) => `${item.pagePath}: data-aa-entry="${item.entry}"`),
+          ...unknown.map((item) => (item.entry ? `${item.pagePath}: "${item.name}" (of ${item.entry})` : `${item.pagePath}: "${item.name}"`)),
+        ]),
       };
     },
   },

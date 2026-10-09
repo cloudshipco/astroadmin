@@ -6,6 +6,10 @@
  * A data-aa-field value is an editor control's form name: `title`, `hero.title`,
  * `blocks[2].heading`, or an array such as `blocks[3].items` (whose items are
  * edited through the array control). `body` is a Markdown entry's body.
+ *
+ * An annotation means a field of the entry its page is for, unless it or an
+ * ancestor carries data-aa-entry="<collection>/<slug>": then it is a field of
+ * that entry (a card listing another collection's entry).
  */
 
 import { isImageField } from '../../ui/form-generator.js';
@@ -24,7 +28,8 @@ const WHOLE_WORD_BELOW = 16;
  * @typedef {Object} DoctorEntry
  * @property {string} collection
  * @property {string} slug
- * @property {string} pagePath - e.g. '/about'
+ * @property {string|null} pagePath - e.g. '/about'; null when the entry has no
+ *   page of its own (it can still appear as a card on other pages)
  * @property {Object} data
  * @property {string|null} [body] - Markdown body, if any
  * @property {Object|null} [schema] - the collection's JSON Schema
@@ -170,27 +175,59 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** The data-aa-entry value that names an entry. */
+export function entryRef(entry) {
+  return `${entry.collection}/${entry.slug}`;
+}
+
 /**
- * Per-entry coverage: of the text fields that render as clickable text on the
- * entry's page (or are annotated anyway), the share whose control (or the array
- * control holding them) is named by a data-aa-field there.
+ * Where an entry can be clicked: its own page, where unqualified annotations
+ * (and ones qualified with its own reference) are its fields, and every other
+ * page holding annotations qualified with its reference. An annotation on or
+ * inside a link is left out: a click never reaches it.
+ * @returns {Array<{pagePath: string, page: import('./html-scan.js').PageScan, names: Set<string>}>}
+ */
+function placesShowing(entry, pages) {
+  const ref = entryRef(entry);
+  const places = [];
+  const ownPage = entry.pagePath ? pages.get(entry.pagePath) : undefined;
+  if (ownPage) {
+    const names = ownPage.fields.filter((field) => !field.link && (field.entry === null || field.entry === undefined || field.entry === ref));
+    places.push({ pagePath: entry.pagePath, page: ownPage, names: new Set(names.map((field) => field.name)) });
+  }
+  for (const [pagePath, page] of pages) {
+    if (pagePath === entry.pagePath) continue;
+    const qualified = page.fields.filter((field) => !field.link && field.entry === ref);
+    if (qualified.length > 0) places.push({ pagePath, page, names: new Set(qualified.map((field) => field.name)) });
+  }
+  return places;
+}
+
+/**
+ * Per-entry coverage: of the text fields that render as clickable text where
+ * the entry is shown (or are annotated anyway), the share whose control (or the
+ * array control holding them) is named by an annotation there. An entry is
+ * shown on its own page, and as a card wherever data-aa-entry names it; a field
+ * reached in any of those places counts as covered.
  * @param {DoctorEntry[]} entries
  * @param {Map<string, import('./html-scan.js').PageScan>} pages
  */
 export function computeFieldCoverage(entries, pages) {
   const report = { totalFields: 0, coveredFields: 0, notRendered: 0, entries: [], unchecked: [] };
   for (const entry of entries) {
-    const page = pages.get(entry.pagePath);
-    if (!page) {
-      report.unchecked.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath });
+    const places = placesShowing(entry, pages);
+    if (places.length === 0) {
+      // An entry with no page of its own and no card is not on any page we
+      // can check; one whose page was not built is reported.
+      if (entry.pagePath) report.unchecked.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath });
       continue;
     }
-    // An annotation on or inside a link is never reached by a click.
-    const names = new Set(page.fields.filter((field) => !field.link).map((field) => field.name));
     const { textFields, values } = describeEntryFields(entry);
     const blockArrays = entry.blockArrays || [];
-    const isCovered = (fieldPath) => reachingPaths(fieldPath, blockArrays).some((candidate) => names.has(candidate));
-    const counted = textFields.filter((fieldPath) => isCovered(fieldPath) || isRenderedAsText(values.get(fieldPath), page));
+    const isCovered = (fieldPath) => reachingPaths(fieldPath, blockArrays)
+      .some((candidate) => places.some((place) => place.names.has(candidate)));
+    const isRendered = (fieldPath) => places.some((place) => isRenderedAsText(values.get(fieldPath), place.page));
+    const counted = textFields.filter((fieldPath) => isCovered(fieldPath) || isRendered(fieldPath));
     const missing = counted.filter((fieldPath) => !isCovered(fieldPath));
     const covered = counted.length - missing.length;
     report.totalFields += counted.length;
@@ -199,7 +236,8 @@ export function computeFieldCoverage(entries, pages) {
     report.entries.push({
       collection: entry.collection,
       slug: entry.slug,
-      pagePath: entry.pagePath,
+      pagePath: places[0].pagePath,
+      pagePaths: places.map((place) => place.pagePath),
       fields: counted.length,
       covered,
       missing,
@@ -228,27 +266,59 @@ function summariseByCollection(entryReports) {
 }
 
 /**
- * data-aa-field values that name nothing in any entry on their page. A click
- * on one does nothing, which is the failure this exists to catch (a typo, or
- * `heading` where the control is `blocks[2].heading`).
+ * data-aa-field values that name nothing. An unqualified one must name a field
+ * of an entry whose page it is on; one qualified by data-aa-entry must name a
+ * field of that entry. A click on one does nothing, which is the failure this
+ * exists to catch (a typo, or `heading` where the control is
+ * `blocks[2].heading`). Qualified names of an entry that does not exist are
+ * left to findUnknownEntryRefs.
  * @param {DoctorEntry[]} entries
  * @param {Map<string, import('./html-scan.js').PageScan>} pages
+ * @returns {Array<{pagePath: string, name: string, entry?: string}>}
  */
 export function findUnknownFieldNames(entries, pages) {
   const validByPage = new Map();
+  const validByRef = new Map();
   for (const entry of entries) {
+    const { dataPaths } = describeEntryFields(entry);
+    validByRef.set(entryRef(entry), dataPaths);
+    if (!entry.pagePath) continue;
     if (!validByPage.has(entry.pagePath)) validByPage.set(entry.pagePath, new Set());
-    for (const dataPath of describeEntryFields(entry).dataPaths) validByPage.get(entry.pagePath).add(dataPath);
+    for (const dataPath of dataPaths) validByPage.get(entry.pagePath).add(dataPath);
   }
   const unknown = [];
-  for (const [pagePath, valid] of validByPage) {
-    const page = pages.get(pagePath);
-    if (!page) continue;
+  for (const [pagePath, page] of pages) {
+    const validHere = validByPage.get(pagePath);
     const seen = new Set();
     for (const field of page.fields) {
-      if (valid.has(field.name) || seen.has(field.name)) continue;
-      seen.add(field.name);
-      unknown.push({ pagePath, name: field.name });
+      const qualified = field.entry !== null && field.entry !== undefined;
+      let valid;
+      if (qualified) valid = validByRef.get(field.entry);
+      else valid = validHere;
+      // A page no entry owns, or a reference to a missing entry: nothing to check against.
+      if (!valid || valid.has(field.name)) continue;
+      const key = qualified ? `${field.entry}\u0000${field.name}` : field.name;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unknown.push(qualified ? { pagePath, name: field.name, entry: field.entry } : { pagePath, name: field.name });
+    }
+  }
+  return unknown;
+}
+
+/**
+ * data-aa-entry values naming no existing entry (or not of the form
+ * `<collection>/<slug>`). A click on a card carrying one does nothing.
+ * @param {DoctorEntry[]} entries
+ * @param {Map<string, import('./html-scan.js').PageScan>} pages
+ * @returns {Array<{pagePath: string, entry: string}>}
+ */
+export function findUnknownEntryRefs(entries, pages) {
+  const known = new Set(entries.map(entryRef));
+  const unknown = [];
+  for (const [pagePath, page] of pages) {
+    for (const ref of page.entryRefs || []) {
+      if (!known.has(ref)) unknown.push({ pagePath, entry: ref });
     }
   }
   return unknown;

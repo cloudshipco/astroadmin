@@ -79,6 +79,28 @@ try {
     assert.match(byId['click-to-edit-coverage'].message, /1 of 1/);
   });
 
+  check('cards: a page-less entry is covered by its card, and a bad data-aa-entry on a page no entry owns is found', () => {
+    const cards = makeSite('cards', HOSTED);
+    writeFile(cards, 'src/content.config.ts', `import { defineCollection, z } from 'astro:content';
+import { glob } from 'astro/loaders';
+export const collections = {
+  pages: defineCollection({ loader: glob({ pattern: '**/*.md', base: './src/content/pages' }), schema: z.object({ headline: z.string() }) }),
+  services: defineCollection({ loader: glob({ pattern: '**/*.md', base: './src/content/services' }), schema: z.object({ title: z.string() }) }),
+};
+`);
+    writeFile(cards, 'src/content/services/garden-design.md', '---\ntitle: Garden design for any plot\n---\n');
+    writeFile(cards, 'prebuilt/index.html', `<html><body><h1 data-aa-field="headline">Welcome to the example site</h1>
+<ul><li data-aa-entry="services/garden-design"><h3 data-aa-field="title">Garden design for any plot</h3></li></ul></body></html>`);
+    // A listing page that belongs to no entry, with a reference to a service that does not exist.
+    writeFile(cards, 'prebuilt/all-services/index.html', '<html><body><ul><li data-aa-entry="services/tree-work"><h3 data-aa-field="title">Tree work</h3></li></ul></body></html>');
+    const run = doctor(cards, '--json');
+    assert.equal(run.status, 0, run.stdout + run.stderr);
+    const byId = Object.fromEntries(JSON.parse(run.stdout).results.map((result) => [result.id, result]));
+    assert.match(byId['click-to-edit-coverage'].message, /2 of 2 .*pages 1\/1, services 1\/1/, byId['click-to-edit-coverage'].message);
+    assert.equal(byId['click-to-edit-names'].severity, 'warn');
+    assert.deepEqual(byId['click-to-edit-names'].details, ['/all-services: data-aa-entry="services/tree-work"']);
+  });
+
   check('a failing check (no astro.config) exits 1 and the text report names it', () => {
     const run = doctor(broken);
     assert.equal(run.status, 1, run.stdout + run.stderr);

@@ -7,7 +7,7 @@
 
 import { createRequire } from 'module';
 import { CHECKS, DOCS_BASE } from './checks.js';
-import { scanBuiltPages } from './html-scan.js';
+import { listBuiltPagePaths, scanBuiltPages } from './html-scan.js';
 import { readAstroConfigFacts } from './project.js';
 
 const require = createRequire(import.meta.url);
@@ -57,7 +57,10 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
     built: () => remember('built', async () => {
       const load = loadEntries || (async () => (await import('./entries.js')).collectEntries());
       const { entries } = await load();
-      const pages = await scanBuiltPages(context.distDir, entries.map((entry) => entry.pagePath));
+      // Every built page, not only the entries' own: a page no entry owns can
+      // still show other entries' cards (data-aa-entry).
+      const pagePaths = entries.map((entry) => entry.pagePath).filter(Boolean);
+      const pages = await scanBuiltPages(context.distDir, [...pagePaths, ...await listBuiltPagePaths(context.distDir)]);
       return { entries, pages };
     }),
   };

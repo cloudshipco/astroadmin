@@ -90,6 +90,27 @@ export const adminPreviewScript = `
     '.aa-highlight{outline:2px solid #3b82f6;outline-offset:3px}';
   document.head.appendChild(affordance);
 
+  // The entry an annotated element belongs to: the nearest data-aa-entry on it
+  // or an ancestor ("<collection>/<slug>"), or null when it is the page's own.
+  function entryOf(el) {
+    const qualifier = el.closest('[data-aa-entry]');
+    return qualifier ? qualifier.getAttribute('data-aa-entry') : null;
+  }
+
+  // The element to outline for the editor's field. With an entry (sent by
+  // editors since 1.4.9), only that entry's elements match: an unqualified one
+  // when the open entry is the page's own (pageEntry), else a card naming the
+  // entry. Without one (an older editor), the first element with the name.
+  function findFieldElement(field, entry, pageEntry) {
+    const named = Array.prototype.filter.call(
+      document.querySelectorAll('[data-aa-field]'),
+      (e) => e.getAttribute('data-aa-field') === field
+    );
+    if (typeof entry !== 'string') return named[0] || null;
+    const own = pageEntry === false ? null : named.find((e) => entryOf(e) === null);
+    return own || named.find((e) => entryOf(e) === entry) || null;
+  }
+
   // A click inside a link that navigates belongs to the link: it navigates as
   // usual and focuses nothing, even when an annotated element holds the link
   // (a Markdown link in a rich-text block, a button in an annotated hero).
@@ -102,7 +123,15 @@ export const adminPreviewScript = `
     if (target.closest(NAVIGATING_LINK)) return;
     const el = target.closest('[data-aa-field]');
     if (!el) return;
-    window.parent.postMessage({ type: 'fieldFocus', field: el.getAttribute('data-aa-field') }, '*');
+    // entry: the card's data-aa-entry ("<collection>/<slug>"), or null for the
+    // page's own entry. pathname: where the click was, so the editor can keep
+    // the preview here when it opens the card's entry.
+    window.parent.postMessage({
+      type: 'fieldFocus',
+      field: el.getAttribute('data-aa-field'),
+      entry: entryOf(el),
+      pathname: window.location.pathname
+    }, '*');
   });
 
   // Briefly outline an element when its control is focused/clicked in the editor.
@@ -137,10 +166,7 @@ export const adminPreviewScript = `
     if (event.data?.type === 'highlightField') {
       const field = event.data.field;
       if (typeof field !== 'string') return;
-      const el = Array.prototype.find.call(
-        document.querySelectorAll('[data-aa-field]'),
-        (e) => e.getAttribute('data-aa-field') === field
-      );
+      const el = findFieldElement(field, event.data.entry, event.data.pageEntry);
       if (el) highlightEl(el);
       return;
     }

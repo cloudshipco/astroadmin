@@ -104,6 +104,9 @@ runner aggregating them). Most run server-less and need env vars:
   (`adminPreviewScript`, exported for this), run in happy-dom inside a stand-in iframe: which
   clicks post a `fieldFocus` (never one inside an `<a href>`), and which element a
   `highlightField` outlines.
+- `bun tests/click-to-edit.test.js` — `ui/click-to-edit.js`, the editor's half of a preview
+  click: parsing `data-aa-entry="<collection>/<slug>"`, and whether a click focuses a field of
+  the open entry or opens the card's entry (keeping the preview on the clicked page).
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 

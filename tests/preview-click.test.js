@@ -119,5 +119,77 @@ await check('an <a> with no href does not navigate, so its annotation still fire
   assert.deepEqual(page.posted.map((message) => message.field), ['kicker']);
 });
 
+const CARDS = `
+  <h1 id="page-title" data-aa-field="title">Home</h1>
+  <ul>
+    <li id="card-a" data-aa-entry="services/garden-design">
+      <h3 id="card-a-title" data-aa-field="title">Garden design</h3>
+      <p id="card-a-summary" data-aa-field="summary">Plans and planting.</p>
+      <a id="card-a-link" href="/services/garden-design">Read more</a>
+    </li>
+    <li id="card-b" data-aa-entry="services/hedge-trimming">
+      <h3 id="card-b-title" data-aa-field="title">Hedge trimming</h3>
+      <p id="card-b-summary" data-aa-field="summary">Neat edges.</p>
+    </li>
+    <li id="card-c"><h3 id="card-c-title" data-aa-entry="services/tree-work" data-aa-field="title">Tree work</h3></li>
+  </ul>`;
+
+console.log('\n🧪 preview: entry-qualified annotations\n' + '='.repeat(40));
+
+await check('a click on an unqualified annotation says it names no entry, and where the click was', () => {
+  const page = previewPage(CARDS, '/');
+  page.click('#page-title');
+  assert.deepEqual(page.posted, [{ type: 'fieldFocus', field: 'title', entry: null, pathname: '/' }]);
+});
+
+await check('a click inside a card carries the entry from the nearest data-aa-entry ancestor', () => {
+  const page = previewPage(CARDS, '/');
+  page.click('#card-b-summary');
+  assert.deepEqual(page.posted, [{ type: 'fieldFocus', field: 'summary', entry: 'services/hedge-trimming', pathname: '/' }]);
+});
+
+await check('data-aa-entry on the annotated element itself qualifies it', () => {
+  const page = previewPage(CARDS, '/');
+  page.click('#card-c-title');
+  assert.equal(page.posted[0].entry, 'services/tree-work');
+});
+
+await check('the card\'s link still navigates and posts nothing', () => {
+  const page = previewPage(CARDS, '/');
+  page.click('#card-a-link');
+  assert.deepEqual(page.posted, []);
+});
+
+await check('highlight: with a card\'s entry open, its field outlines THAT card, not the page title', () => {
+  const page = previewPage(CARDS, '/');
+  page.send({ type: 'highlightField', field: 'title', entry: 'services/hedge-trimming', pageEntry: false });
+  assert.deepEqual(page.highlighted(), ['card-b-title']);
+});
+
+await check('highlight: the page\'s own entry outlines the unqualified element, not a card', () => {
+  const page = previewPage(CARDS, '/');
+  page.send({ type: 'highlightField', field: 'title', entry: 'pages/home', pageEntry: true });
+  assert.deepEqual(page.highlighted(), ['page-title']);
+});
+
+await check('highlight: an entry with no card on this page outlines nothing', () => {
+  const page = previewPage(CARDS, '/');
+  page.send({ type: 'highlightField', field: 'title', entry: 'services/not-listed', pageEntry: false });
+  assert.deepEqual(page.highlighted(), []);
+});
+
+await check('highlight: an entry\'s own page prefers its unqualified element over a card naming it', () => {
+  const page = previewPage(`<li data-aa-entry="services/garden-design"><h3 id="related" data-aa-field="title">Garden design</h3></li>
+    <h1 id="own" data-aa-field="title">Garden design</h1>`, '/services/garden-design');
+  page.send({ type: 'highlightField', field: 'title', entry: 'services/garden-design', pageEntry: true });
+  assert.deepEqual(page.highlighted(), ['own']);
+});
+
+await check('highlight: a message from an older editor (no entry) outlines the first match, as before', () => {
+  const page = previewPage(CARDS, '/');
+  page.send({ type: 'highlightField', field: 'summary' });
+  assert.deepEqual(page.highlighted(), ['card-a-summary']);
+});
+
 console.log('='.repeat(40));
 console.log(`\n📊 ${passed} checks passed.\n`);

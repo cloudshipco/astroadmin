@@ -4,6 +4,7 @@
 
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
 import { resolvePreviewTarget } from './preview-routes.js';
+import { formatEntryRef, resolveFieldFocus } from './click-to-edit.js';
 import { registerReferenceFieldHandlers } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
@@ -27,6 +28,10 @@ let publicUrl = ''; // Production site origin (optional); enables the live-statu
 // open entry's route, overridden by wherever the preview iframe reports it has
 // navigated. Null when unknown (the link then opens the site root).
 let livePagePath = null;
+// Set when the open entry was opened by clicking its card on another page
+// (data-aa-entry): the preview stays on that page while the entry is edited,
+// so its card is what the editor highlights. {path, locale}, or null.
+let previewPin = null;
 let allPages = []; // Store all pages for dropdown
 let allCollections = []; // Store collection info for new entries
 let allStaticPages = []; // Store discovered static pages (virtual pages)
@@ -546,6 +551,7 @@ document.getElementById('newItemSlug').addEventListener('keydown', (e) => {
 async function createNewEntry(collection, slug) {
   flushPendingSave();
   const myLoad = ++loadSeq; // claim, so a pending entry load can't overwrite this form
+  previewPin = null;
   currentCollection = collection;
   currentSlug = slug;
   isNewEntry = true;
@@ -658,10 +664,23 @@ function renderEditorForNewEntry(schema, contentType, ctx) {
 }
 
 // Load an entry for editing
-async function loadEntry(collection, slug, updateUrl = true) {
+/**
+ * @param {Object} [options]
+ * @param {string|null} [options.previewPagePath] - keep the preview on this page
+ *   (the entry was opened from its card there) instead of the entry's own route
+ */
+async function loadEntry(collection, slug, updateUrl = true, { previewPagePath = null } = {}) {
   // A queued autosave belongs to the form we're leaving — flush it before its
   // form is replaced, so it saves that entry rather than firing against this one.
   flushPendingSave();
+
+  // Reloading the same entry in the same locale (a revert, say) keeps its pin;
+  // anything else drops it, unless this load sets a new one.
+  const keepsPin = previewPin !== null && collection === currentCollection && slug === currentSlug
+    && previewPin.locale === currentLocale;
+  if (previewPagePath) previewPin = { path: previewPagePath, locale: currentLocale };
+  else if (!keepsPin) previewPin = null;
+  const previewAlreadyShowsPage = Boolean(previewPagePath);
 
   // Claim this load. A response that arrives after a newer load must not render.
   const myLoad = ++loadSeq;
@@ -723,7 +742,9 @@ async function loadEntry(collection, slug, updateUrl = true) {
       await renderEditor(data, ctx);
       if (myLoad !== loadSeq) return; // renderEditor awaited a schema; recheck
       renderBlockSelector(); // Show block selector for component preview
-      updatePreview();
+      // Opened from its card: the preview is already on that page, and
+      // reloading it would only lose the place.
+      if (!previewAlreadyShowsPage) updatePreview();
     } else if (response.status === 404 && i18nConfig.enabled) {
       // Entry doesn't exist for this locale - show empty form for new translation
       isNewEntry = true;
@@ -766,6 +787,7 @@ function loadVirtualPage(pageSlug) {
   }
 
   // Reset state
+  previewPin = null;
   currentCollection = null;
   currentSlug = null;
   currentData = null;
@@ -1282,6 +1304,9 @@ function setupBlockFocus() {
 
     // Don't focus SEO blocks (they're not rendered)
     if (blockType === 'seo') return;
+    // The preview is on another entry's page (this entry was opened from its
+    // card there), so its block indexes are that page's blocks, not these.
+    if (previewPin) return;
 
     // Send message to iframe to focus this block/element
     const iframe = document.getElementById('previewFrame');
@@ -1572,6 +1597,7 @@ function previewOrigin() {
 // Get current preview page URL
 function getPreviewPageUrl() {
   if (!previewUrl) return null;
+  if (previewPin) return `${previewUrl}${previewPin.path}`;
 
   const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
   const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
@@ -1656,7 +1682,7 @@ window.addEventListener('message', (event) => {
   // Click-to-edit: an element tagged data-aa-field was clicked in the preview →
   // focus, scroll to and briefly highlight its editor control.
   if (event.data?.type === 'fieldFocus') {
-    focusEditorField(event.data.field);
+    handlePreviewFieldClick(event.data);
     return;
   }
 
@@ -1706,6 +1732,27 @@ window.addEventListener('message', (event) => {
     // as it is rather than opening a read-only view.
   }
 });
+
+/**
+ * Click-to-edit (preview → editor): a click on an annotated element. Focus its
+ * field in the open entry, or first open the entry its card names
+ * (data-aa-entry), keeping the preview on the page that was clicked.
+ */
+async function handlePreviewFieldClick(message) {
+  const action = resolveFieldFocus(message, {
+    current: currentCollection && currentSlug ? { collection: currentCollection, slug: currentSlug } : null,
+    previewPagePath: previewPin ? previewPin.path : null,
+    entries: allPages,
+    resolvePage: (pathname) => resolvePreviewTarget(pathname, allPages, allCollections, collectionOrder),
+  });
+  if (!action) return;
+  if (action.action === 'open') {
+    await loadEntry(action.collection, action.slug, true, { previewPagePath: action.previewPagePath });
+    // A newer load (another click, a navigation) may have replaced this one.
+    if (currentCollection !== action.collection || currentSlug !== action.slug) return;
+  }
+  focusEditorField(action.field);
+}
 
 /**
  * Click-to-edit (preview → editor): focus, scroll to and briefly flash the
@@ -1767,7 +1814,15 @@ document.addEventListener('click', (event) => {
   const field = control?.getAttribute('name') || control?.getAttribute('data-content-field');
   if (!field) return;
   const iframe = document.getElementById('previewFrame');
-  iframe?.contentWindow?.postMessage({ type: 'highlightField', field }, previewOrigin() || '*');
+  // The entry tells the preview which card to outline when several entries'
+  // cards share a field name; pageEntry says whether unqualified elements (the
+  // page's own entry) are this entry's.
+  iframe?.contentWindow?.postMessage({
+    type: 'highlightField',
+    field,
+    entry: currentCollection && currentSlug ? formatEntryRef(currentCollection, currentSlug) : null,
+    pageEntry: previewPin === null,
+  }, previewOrigin() || '*');
 });
 
 // Update preview
@@ -2068,6 +2123,7 @@ function setLivePagePath(pagePath) {
  * Mirrors getPreviewPageUrl()'s routing, minus the origin.
  */
 function getCurrentPagePath() {
+  if (previewPin) return previewPin.path;
   const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
   const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
 
