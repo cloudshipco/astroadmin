@@ -35,7 +35,11 @@
  * implicit) has an implicit body: everything outside <head> is body text.
  */
 
-import fs from 'fs/promises';
+// Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
+// while child processes come and go can lose its completion and never settle,
+// hanging the process at 0% CPU. These paths run git and builds, so they use
+// the sync calls (small files, bounded walks).
+import fs from 'fs';
 import path from 'path';
 
 /**
@@ -257,7 +261,7 @@ export async function listBuiltPagePaths(distDir) {
   const walk = async (directory, prefix) => {
     let items;
     try {
-      items = await fs.readdir(directory, { withFileTypes: true });
+      items = fs.readdirSync(directory, { withFileTypes: true });
     } catch {
       return;
     }
@@ -286,7 +290,7 @@ export async function scanBuiltPages(distDir, pagePaths) {
     for (const candidate of pageFileCandidates(distDir, pagePath)) {
       let html;
       try {
-        html = await fs.readFile(candidate, 'utf-8');
+        html = fs.readFileSync(candidate, 'utf-8');
       } catch {
         continue;
       }

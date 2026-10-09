@@ -25,7 +25,11 @@
  */
 
 import { execFile, spawn } from 'child_process';
-import fs from 'fs/promises';
+// Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
+// while child processes come and go can lose its completion and never settle,
+// hanging the process at 0% CPU. These paths run git and builds, so they use
+// the sync calls (small files, bounded walks).
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
@@ -96,7 +100,7 @@ export function parseInvalidEntries(output) {
 
 async function realpathOrNull(target) {
   try {
-    return await fs.realpath(target);
+    return fs.realpathSync(target);
   } catch {
     return null;
   }
@@ -114,10 +118,10 @@ async function exists(target) {
  * overwrite the running preview's.
  */
 async function linkNodeModules(sourceDir, targetDir) {
-  await fs.mkdir(targetDir, { recursive: true });
-  for (const entry of await fs.readdir(sourceDir)) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDir)) {
     if (entry.startsWith('.') && entry !== '.bin') continue;
-    await fs.symlink(path.join(sourceDir, entry), path.join(targetDir, entry));
+    fs.symlinkSync(path.join(sourceDir, entry), path.join(targetDir, entry));
   }
 }
 
@@ -128,10 +132,10 @@ async function linkNodeModules(sourceDir, targetDir) {
  */
 async function findWorkspaceLink(nodeModulesDir, realRepoTop) {
   const candidates = [];
-  for (const entry of await fs.readdir(nodeModulesDir)) {
+  for (const entry of fs.readdirSync(nodeModulesDir)) {
     if (entry.startsWith('.')) continue;
     if (entry.startsWith('@')) {
-      for (const member of await fs.readdir(path.join(nodeModulesDir, entry))) {
+      for (const member of fs.readdirSync(path.join(nodeModulesDir, entry))) {
         candidates.push(path.join(nodeModulesDir, entry, member));
       }
     } else {
@@ -154,11 +158,11 @@ async function findWorkspaceLink(nodeModulesDir, realRepoTop) {
  * the worktree and is the committed version, so it is never overwritten.
  */
 async function copyEnvFiles(projectRoot, siteDir) {
-  for (const entry of await fs.readdir(projectRoot)) {
+  for (const entry of fs.readdirSync(projectRoot)) {
     if (entry !== '.env' && !entry.startsWith('.env.')) continue;
     const target = path.join(siteDir, entry);
     if (await exists(target)) continue;
-    await fs.copyFile(path.join(projectRoot, entry), target);
+    fs.copyFileSync(path.join(projectRoot, entry), target);
   }
 }
 
@@ -247,8 +251,8 @@ function nodeModulesLevels(realRepoTop, siteSubdir) {
 
 /** The repository's real top and the site's directory within it. */
 async function locateSite(projectRoot) {
-  const realRepoTop = await fs.realpath(await git(projectRoot, ['rev-parse', '--show-toplevel']));
-  const siteSubdir = path.relative(realRepoTop, await fs.realpath(projectRoot));
+  const realRepoTop = fs.realpathSync(await git(projectRoot, ['rev-parse', '--show-toplevel']));
+  const siteSubdir = path.relative(realRepoTop, fs.realpathSync(projectRoot));
   return { realRepoTop, siteSubdir };
 }
 
@@ -303,7 +307,7 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     const { realRepoTop, siteSubdir } = await locateSite(projectRoot);
     serverPaths.push(realRepoTop);
 
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astroadmin-check-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-check-'));
     serverPaths.push(tempDir, await realpathOrNull(tempDir));
     const worktreeDir = path.join(tempDir, 'worktree');
     await git(projectRoot, ['worktree', 'add', '--detach', worktreeDir, commit]);
@@ -356,7 +360,13 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     return fail(`${error.stdout || ''}${error.stderr || ''}` || error.message);
   } finally {
     // Deleting the directory and pruning removes the worktree and git's record of it.
-    if (tempDir) await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    if (tempDir) {
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // best effort: the prune below still drops git's record of the worktree
+      }
+    }
     await git(projectRoot, ['worktree', 'prune']).catch(() => {});
   }
 }

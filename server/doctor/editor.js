@@ -14,6 +14,7 @@
 
 import express from 'express';
 import { spawn } from 'child_process';
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -143,9 +144,15 @@ export async function recordDoctorAfterCheck(fullConfig, build, { timeoutMs = DE
     record({ status: 'unavailable', reason: reasonForApi(reason, serverPaths) });
   };
   try {
-    const { realpath } = await import('fs/promises');
+    // Sync: see the note on fs in ../utils/astro-check.js (Bun can lose an
+    // fs/promises completion while child processes come and go).
     for (const directory of [...serverPaths]) {
-      if (directory) serverPaths.push(await realpath(directory).catch(() => null));
+      if (!directory) continue;
+      try {
+        serverPaths.push(fs.realpathSync(directory));
+      } catch {
+        // gone: nothing to strip
+      }
     }
     const env = {
       ...process.env,

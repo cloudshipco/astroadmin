@@ -174,6 +174,14 @@ synchronous loop is killed at its cap; an error is "unavailable" with a reason n
 server path, never a failed publish; ~15 s) and
 `doctor-notice` (the editor notice, happy-dom). Run each with `bun tests/doctor-<name>.test.js`.
 
+**The doctor and the publish check use synchronous fs, never `fs/promises`.** Under Bun 1.3.4
+on macOS an `fs/promises` call made while child processes start and exit can lose its completion
+and never settle: the process sits at 0% CPU with no children until killed (seen as
+`doctor-static` hanging about once in 60 runs, inside a `readFile` or `realpath`; reproduced
+outside astroadmin with a loop of `fs.promises.readFile` plus `execFile('git')`). Both paths
+run git and builds, so they read with the `*Sync` calls; `doctor-static` fails if any
+`server/doctor/*.js`, `astro-check.js` or `astro-bin.js` imports `fs/promises` again.
+
 **Storage modes:** the content store is selected by `config.content.store`
 (`files` default | `db`), env `ASTROADMIN_CONTENT_STORE`. Tests that exercise the
 DB store **must pin db mode** (a `process.env.ASTROADMIN_CONTENT_STORE = 'db'` line

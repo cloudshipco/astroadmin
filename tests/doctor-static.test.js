@@ -332,6 +332,20 @@ export default defineConfig({ integrations: [astroadmin()], ${VITE} });
     const result = (await staticResults(path.join(repoDir, 'apps', 'site')))['committed-lockfile'];
     assert.equal(result.severity, 'pass', JSON.stringify(result));
   });
+
+  // Bun 1.3.4 on macOS can lose an fs/promises completion while child
+  // processes come and go: the doctor hung at 0% CPU about once in 60 runs of
+  // this file, inside a readFile or realpath. The doctor and the publish check
+  // run git and builds, so their fs is synchronous; keep it that way.
+  await check('the doctor and the publish check never use fs/promises (a lost completion hangs them)', async () => {
+    const importsPromises = (file) => /(?:from\s+|import\s*\(\s*)['"](?:node:)?fs\/promises['"]/.test(fs.readFileSync(path.join(repoRoot, file), 'utf-8'));
+    // Positive control: the pattern does find the import where it is still used.
+    assert.ok(importsPromises('server/config.js'), 'the import pattern no longer matches a real fs/promises import');
+    const doctorFiles = fs.readdirSync(path.join(repoRoot, 'server/doctor')).filter((name) => name.endsWith('.js')).map((name) => `server/doctor/${name}`);
+    assert.ok(doctorFiles.length >= 8, `expected the doctor modules, found ${doctorFiles.length}`);
+    const offenders = [...doctorFiles, 'server/utils/astro-check.js', 'server/utils/astro-bin.js'].filter(importsPromises);
+    assert.deepStrictEqual(offenders, []);
+  });
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }

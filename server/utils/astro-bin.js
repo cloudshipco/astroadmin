@@ -11,7 +11,11 @@
  */
 
 import { execFile } from 'child_process';
-import fs from 'fs/promises';
+// Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
+// while child processes come and go can lose its completion and never settle,
+// hanging the process at 0% CPU. These paths run git and builds, so they use
+// the sync calls (small files, bounded walks).
+import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 
@@ -44,20 +48,20 @@ export function shellQuote(word) {
  * @returns {Promise<string|null>} an absolute, real path
  */
 export async function findAstroExecutable(projectRoot) {
-  let directory = await fs.realpath(projectRoot);
+  let directory = fs.realpathSync(projectRoot);
   let top = directory;
   try {
     const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd: projectRoot });
-    top = await fs.realpath(stdout.trim());
+    top = fs.realpathSync(stdout.trim());
   } catch {
     // not a repository: only the site's own node_modules
   }
   for (;;) {
     const packageDir = path.join(directory, 'node_modules', 'astro');
     try {
-      const manifest = JSON.parse(await fs.readFile(path.join(packageDir, 'package.json'), 'utf-8'));
+      const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf-8'));
       const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.astro;
-      if (bin) return await fs.realpath(path.join(packageDir, bin));
+      if (bin) return fs.realpathSync(path.join(packageDir, bin));
     } catch {
       // not installed at this level
     }

@@ -6,7 +6,11 @@
 
 import { parse } from '@babel/parser';
 import { execFile, spawn } from 'child_process';
-import fs from 'fs/promises';
+// Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
+// while child processes come and go can lose its completion and never settle,
+// hanging the process at 0% CPU. These paths run git and builds, so they use
+// the sync calls (small files, bounded walks).
+import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { bunExecutable } from '../utils/astro-bin.js';
@@ -181,7 +185,7 @@ export async function readAstroConfigFacts(projectRoot) {
   let source = null;
   for (const name of ASTRO_CONFIG_NAMES) {
     try {
-      source = await fs.readFile(path.join(projectRoot, name), 'utf-8');
+      source = fs.readFileSync(path.join(projectRoot, name), 'utf-8');
       facts.file = name;
       break;
     } catch {
@@ -264,10 +268,10 @@ export async function isGitRepository(projectRoot) {
  * @param {string} projectRoot
  */
 export async function findCommittedLockfile(projectRoot) {
-  const topLevel = await fs.realpath(await git(projectRoot, ['rev-parse', '--show-toplevel']));
+  const topLevel = fs.realpathSync(await git(projectRoot, ['rev-parse', '--show-toplevel']));
   const candidates = [];
   for (const name of LOCKFILE_NAMES) {
-    candidates.push(path.relative(topLevel, path.join(await fs.realpath(projectRoot), name)) || name);
+    candidates.push(path.relative(topLevel, path.join(fs.realpathSync(projectRoot), name)) || name);
     candidates.push(name);
   }
   let committed;
@@ -283,7 +287,7 @@ export async function findCommittedLockfile(projectRoot) {
 async function* sourceFiles(directory) {
   let entries;
   try {
-    entries = await fs.readdir(directory, { withFileTypes: true });
+    entries = fs.readdirSync(directory, { withFileTypes: true });
   } catch {
     return;
   }
@@ -303,7 +307,7 @@ async function* sourceFiles(directory) {
  */
 export async function findAstroAssetsUse(projectRoot) {
   for await (const file of sourceFiles(path.join(projectRoot, 'src'))) {
-    const text = await fs.readFile(file, 'utf-8');
+    const text = fs.readFileSync(file, 'utf-8');
     if (text.includes('astro:assets') || (/content\.config\.[cm]?[jt]s$/.test(file) && /\bimage\s*\(\s*\)/.test(text))) {
       return path.relative(projectRoot, file);
     }

@@ -12,7 +12,11 @@
  * CLI exit non-zero, so reserve it for what stops a publish or the editor.
  */
 
-import fs from 'fs/promises';
+// Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
+// while child processes come and go can lose its completion and never settle,
+// hanging the process at 0% CPU. These paths run git and builds, so they use
+// the sync calls (small files, bounded walks).
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
@@ -184,8 +188,8 @@ export const CHECKS = [
         context.buildSkippedReason = 'Not built: astro is not installed.';
         return { severity: 'fail', message: 'astro is not installed in the site (no node_modules/astro in its directory or above it in the repository); run the site\'s install first.' };
       }
-      const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astroadmin-doctor-'));
-      context.cleanups.push(() => fs.rm(outDir, { recursive: true, force: true }));
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-doctor-'));
+      context.cleanups.push(async () => fs.rmSync(outDir, { recursive: true, force: true }));
       const command = [bunExecutable(), '--no-install', '--bun', astroBin, 'build', '--outDir', outDir].map(shellQuote).join(' ');
       const result = await runCommand(command, context.projectRoot, BUILD_TIMEOUT_MS, buildEnvironment());
       if (result.timedOut || result.exitCode !== 0) {
