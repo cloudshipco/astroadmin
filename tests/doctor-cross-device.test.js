@@ -19,6 +19,7 @@ import { execFileSync, spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { linkNodeModules } from './link-node-modules.js';
 
 if (process.platform !== 'darwin') {
   console.log('⚠️  doctor-cross-device: needs hdiutil (macOS); NOT RUN on this platform.');
@@ -78,10 +79,7 @@ import dot from '../assets/dot.png';
 <html><body><h1 data-aa-field="title">Home</h1><Image src={dot} alt="" /></body></html>
 `);
   // A real node_modules directory on the site's filesystem, linking each package.
-  fs.mkdirSync(path.join(siteDir, 'node_modules'));
-  for (const name of fs.readdirSync(path.join(repoRoot, 'node_modules'))) {
-    fs.symlinkSync(path.join(repoRoot, 'node_modules', name), path.join(siteDir, 'node_modules', name));
-  }
+  linkNodeModules(repoRoot, siteDir);
   fs.symlinkSync(repoRoot, path.join(siteDir, 'node_modules', 'astroadmin'));
 
   check('the disk image is a different filesystem from the site (the condition under test)', () => {

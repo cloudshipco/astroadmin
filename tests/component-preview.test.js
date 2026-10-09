@@ -17,6 +17,7 @@ import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { linkNodeModules } from './link-node-modules.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const siteDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-component-preview-')));
@@ -62,10 +63,7 @@ const quotes = (await Promise.all((block.testimonialIds || []).map((id) => getEn
 ---
 <ul>{quotes.map((item) => <li class="quote">{item.data.quote}</li>)}</ul>
 `);
-fs.mkdirSync(path.join(siteDir, 'node_modules'));
-for (const name of fs.readdirSync(path.join(repoRoot, 'node_modules'))) {
-  fs.symlinkSync(path.join(repoRoot, 'node_modules', name), path.join(siteDir, 'node_modules', name));
-}
+linkNodeModules(repoRoot, siteDir);
 // A copy, as an install has it: the integration inside the site's node_modules
 // (a symlink out of the site root makes Vite mis-key the route's own <style>).
 fs.mkdirSync(path.join(siteDir, 'node_modules', 'astroadmin'));
@@ -93,6 +91,13 @@ try {
     const response = await fetch(`http://localhost:${PORT}${pathname}`);
     return { status: response.status, text: await response.text() };
   };
+
+  await check('the site does not share this checkout\'s Astro data store (node_modules/.astro)', async () => {
+    const siteStore = path.join(siteDir, 'node_modules', '.astro');
+    const shared = fs.existsSync(siteStore) && fs.lstatSync(siteStore).isSymbolicLink();
+    assert.ok(!shared, 'node_modules/.astro is a link into this checkout, so test sites share one content store');
+    assert.ok(fs.existsSync(path.join(siteDir, 'node_modules', '.bin')), 'positive control: .bin is still linked');
+  });
 
   await check('the dev server is up (positive control)', async () => {
     const home = await get('/');
@@ -124,6 +129,8 @@ try {
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed.\n`);
 } finally {
-  if (server) await server.stop();
+  // A dev server that failed to start can hang in stop(); never let that hold the suite.
+  if (server) await Promise.race([server.stop(), new Promise((resolve) => setTimeout(resolve, 10000))]);
   fs.rmSync(siteDir, { recursive: true, force: true });
 }
+process.exit(process.exitCode || 0);

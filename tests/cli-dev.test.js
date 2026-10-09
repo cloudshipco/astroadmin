@@ -18,6 +18,7 @@ import net from 'net';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { linkNodeModules } from './link-node-modules.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-cli-dev-'));
@@ -76,10 +77,7 @@ const port = Number(args[args.indexOf('--port') + 1]);
 http.createServer((req, res) => res.end('fake astro')).listen(port, 'localhost');
 `);
     // The admin's own dependencies, resolved from this checkout.
-    for (const name of fs.readdirSync(path.join(repoRoot, 'node_modules'))) {
-      if (name === 'astro' || name === '.bin') continue;
-      fs.symlinkSync(path.join(repoRoot, 'node_modules', name), path.join(siteDir, 'node_modules', name));
-    }
+    linkNodeModules(repoRoot, siteDir, { skip: ['astro', '.bin'] });
 
     const child = spawn('bun', [path.join(repoRoot, 'bin/cli.js'), 'dev', '--project', siteDir, '--port', String(ADMIN_PORT)], {
       env: { ...process.env, ADMIN_PASSWORD: 'admin', ASTROADMIN_PORT: '', PORT: '', PREVIEW_URL: '' },
@@ -115,10 +113,7 @@ http.createServer((req, res) => res.end('fake astro')).listen(port, 'localhost')
     writeFile(siteDir, 'src/content.config.ts', 'export const collections = {};\n');
     writeFile(siteDir, 'src/pages/index.astro', '<h1>Real astro</h1>\n');
     writeFile(siteDir, 'astroadmin.config.js', `export default { preview: { url: 'http://localhost:${REAL_PORT}' } };\n`);
-    fs.mkdirSync(path.join(siteDir, 'node_modules'), { recursive: true });
-    for (const name of fs.readdirSync(path.join(repoRoot, 'node_modules'))) {
-      fs.symlinkSync(path.join(repoRoot, 'node_modules', name), path.join(siteDir, 'node_modules', name));
-    }
+    linkNodeModules(repoRoot, siteDir);
     const portOpen = () => new Promise((resolve) => {
       const socket = net.connect(REAL_PORT, 'localhost');
       socket.once('connect', () => { socket.destroy(); resolve(true); });
