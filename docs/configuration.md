@@ -219,6 +219,32 @@ When git is disabled, the admin hides the git "Changes" panel and the
 `/api/git/*` routes are not mounted; publishing still works via `/api/publish`
 with a deploy adapter. An explicitly-empty `paths: []` means "stage nothing".
 
+### The pre-push build check
+
+Before pushing, publish builds **exactly the commit it is about to push**, in a
+throwaway git worktree, with the site's own Astro. If the build fails, nothing
+is pushed: the commit stays local and the editor shows the build's error. This
+is what stops content the site's schema rejects from breaking the host's build.
+
+```javascript
+export default {
+  build: {
+    check: 'bunx --bun astro build', // the check command; see below
+    checkTimeoutMs: 300000,          // default 5 minutes
+  },
+};
+```
+
+The command is `build.check` if set, else `build.production` (so the check
+builds the way the site is built), else `bunx --bun astro build`. It runs in the
+worktree with the site's `node_modules` linked in (Astro's and Vite's cache
+directories excluded) and gitignored `.env*` files copied, and without
+AstroAdmin's own environment variables (`ASTROADMIN_*`, `ADMIN_*`,
+`SESSION_SECRET`). Sites using git submodules, or workspace packages linked
+back into their own repository, are refused, since the worktree cannot
+reproduce them. The push sends only the checked commit to the current branch's
+upstream; there is no separate push endpoint.
+
 ## CORS and Preview
 
 If the preview iframe doesn't load, you may have CORS issues. Ensure your Astro dev server allows iframe embedding.
