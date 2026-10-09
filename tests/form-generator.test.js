@@ -626,6 +626,26 @@ check('a list named testimonials or pages is not a reference unless the schema s
   assert.ok(/class="reference-field"[^>]*data-collection="pages"/.test(marked), 'control: a marked list is a reference');
 });
 
+check('a date value with a time of day gets a datetime input, so editing it keeps the time', () => {
+  // UTC, matching the serialiser, which reads a zoneless timestamp as UTC like YAML.
+  const timed = controlFor(generateForm(
+    { type: 'object', properties: { publishDate: { type: 'string', format: 'date' } } },
+    { publishDate: '2026-01-15T10:30:00.000Z' },
+  ), 'publishDate');
+  assert.ok(/type="datetime-local"/.test(timed), timed);
+  assert.ok(/value="2026-01-15T10:30"/.test(timed), timed);
+  const withSeconds = controlFor(generateForm(
+    { type: 'object', properties: { at: { type: 'string', format: 'date-time' } } },
+    { at: '2026-01-15T10:30:45.000Z' },
+  ), 'at');
+  assert.ok(/value="2026-01-15T10:30:45"/.test(withSeconds) && /step="1"/.test(withSeconds), withSeconds);
+  const midnight = controlFor(generateForm(
+    { type: 'object', properties: { publishDate: { type: 'string', format: 'date' } } },
+    { publishDate: '2026-01-15T00:00:00.000Z' },
+  ), 'publishDate');
+  assert.ok(/type="date"/.test(midnight) && /value="2026-01-15"/.test(midnight), midnight);
+});
+
 console.log('\n========================================\n');
 console.log(`📊 ${passed} checks passed, ${failures.length} failed.`);
 if (failures.length > 0) process.exit(1);

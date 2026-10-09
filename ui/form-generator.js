@@ -364,29 +364,37 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
                     (schema.format === 'url' || schema.format === 'uri') ? 'url' :
                     isDateField ? 'date' : 'text';
 
-  // Date fields should use date input, not textarea
+  // Date fields use a date input; a value with a time of day uses a datetime
+  // input instead, or editing the day would drop the time. Both show UTC: the
+  // serialiser reads a zoneless timestamp as UTC, as YAML does.
   if (isDateField) {
     let formattedValue = value ?? '';
-    // Convert ISO date strings or Date objects to YYYY-MM-DD format for date input
+    let dateInputType = 'date';
+    let stepAttribute = '';
     if (formattedValue) {
-      try {
-        const dateObj = new Date(formattedValue);
-        if (!isNaN(dateObj.getTime())) {
-          formattedValue = dateObj.toISOString().split('T')[0];
+      const dateObj = new Date(formattedValue);
+      if (!isNaN(dateObj.getTime())) {
+        const iso = dateObj.toISOString();
+        const time = iso.slice(11, 19);
+        if (time === '00:00:00' && dateObj.getUTCMilliseconds() === 0) {
+          formattedValue = iso.slice(0, 10);
+        } else {
+          dateInputType = 'datetime-local';
+          formattedValue = `${iso.slice(0, 10)}T${time.endsWith(':00') ? time.slice(0, 5) : time}`;
+          if (!time.endsWith(':00')) stepAttribute = 'step="1"';
         }
-      } catch (e) {
-        // Keep original value if parsing fails
       }
     }
     return `
       <div class="form-group">
         <label for="${id}" class="form-label">${getFieldLabel(name, schema)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
         <input
-          type="date"
+          type="${dateInputType}"
           name="${fullPath}"
           id="${id}"
           value="${escapeHtml(formattedValue)}"
           class="form-input"
+          ${stepAttribute}
           ${schema.required ? 'required' : ''}
         >
       </div>
