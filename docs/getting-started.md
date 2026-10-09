@@ -97,17 +97,18 @@ From the project root:
 npx astroadmin dev
 ```
 
-It checks the project, starts the site's own `astro dev` on the preview port
-(4321 unless the preview URL says otherwise; if something is already listening
-there it is used as is), then starts the editor on port 4000, or the next free
-port above it. Both URLs are printed. Useful options:
+It checks the project, starts the site's own `astro dev` on the port of the
+[preview URL](./configuration.md#preview) (4321 by default; if something is
+already listening there it is used as is), then starts the editor on port
+4000, or the next free port above it. Both URLs are printed. Stopping
+AstroAdmin stops the Astro it started. Useful options:
 
 | Option | Effect |
 |---|---|
 | `--port <port>` / `-p` | Editor port (default `ASTROADMIN_PORT`, then `PORT`, then 4000). |
 | `--host <host>` / `-H` | Address to bind (default `localhost`). |
 | `--project <path>` | The Astro project (default: the current directory). |
-| `--no-astro` | Do not start Astro; you run `astro dev` yourself at the preview URL. |
+| `--no-astro` | Do not start Astro; you run `astro dev --port <port>` yourself, on the preview URL's port. |
 
 `npx astroadmin start` is the same command under another name.
 

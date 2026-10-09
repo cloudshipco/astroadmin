@@ -32,8 +32,9 @@ The config is plain JavaScript, so it can read `process.env`. Bun loads a
 Astro dev server as the browser reaches it. It defaults to
 `http://localhost:4321` (`http://localhost:4322` when `NODE_ENV=production`)
 and can also be set with `PREVIEW_URL`. `astroadmin dev` starts Astro on
-that URL's port; set the port with `PREVIEW_URL`, or start Astro yourself and
-pass `--no-astro`. A path on the URL is treated as the site's `base`.
+that URL's port. A URL on another host, or one with no port, starts Astro on
+4321 with a warning; for those, start Astro yourself and pass `--no-astro`.
+A path on the URL is treated as the site's `base`.
 
 Each entry is previewed at a page of the site:
 
@@ -134,7 +135,9 @@ export default {
 
 `git.paths` defaults to the three paths shown. Changes outside them are never
 committed by AstroAdmin, so a content collection kept elsewhere needs its
-folder added here. `paths: []` stages nothing. `git.enabled: false` (or
+folder added here. Images for `image()` fields are stored in
+`src/content/assets/images/`, so a custom list needs `src/content/` or that
+folder. `paths: []` stages nothing. `git.enabled: false` (or
 `GIT_ENABLED=false`) hides the editor's changes panel and leaves Publish to
 the deploy adapter alone. `git.autoPush` (or `GIT_AUTO_PUSH=true`) makes a
 commit from the changes panel push too; Publish always pushes.

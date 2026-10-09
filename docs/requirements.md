@@ -20,10 +20,11 @@ your-astro-site/
 ├── astro.config.mjs        (or astro.config.ts)
 ├── astroadmin.config.js    (optional)
 ├── public/
-│   └── images/             (image uploads; created on first upload)
+│   └── images/             (uploads for plain string image fields)
 └── src/
     ├── content.config.ts   (or .mts, .js, .mjs)
     └── content/
+        ├── assets/images/  (images for image() fields)
         ├── pages/          (a glob() collection: one .md file per entry)
         │   ├── home.md
         │   └── about.md
@@ -38,7 +39,7 @@ read from `src/content/<collection>/`.
 
 | Kind | Files | Notes |
 |---|---|---|
-| `glob()` collection | `.md`, `.mdx` or `.json`, one per entry | The slug is the path under `base`, without the extension. New entries get `.md`, or `.mdx` when the loader pattern matches only `.mdx`. |
+| `glob()` collection | `.md`, `.mdx` or `.json`, one per entry | The slug is the path under `base`, without the extension. A new entry gets the first of `.md`, `.mdx` and `.json` the loader pattern matches. |
 | `file()` collection | One `.json` file | Must be an array of objects; entries are matched by `id`. |
 
 YAML and TOML data files are not supported.

@@ -28,7 +28,7 @@ const blocks = z.discriminatedUnion('type', [
       title: z.string(),
       description: z.string(),
     })).default([]),
-  }),
+  }).meta({ title: 'Feature grid' }),
   z.object({
     type: z.literal('testimonials'),
     heading: z.string().optional(),
@@ -59,7 +59,9 @@ export const collections = { pages, testimonials };
 The fields inside each block get the same controls as anywhere else (see
 [schemas and controls](./content-collections.md)). The `type` literal is not
 shown; it is set when the block is added. The block's label in the editor
-comes from its type, so `sectionHeader` is shown as "Section Header".
+comes from its type, so `sectionHeader` is shown as "Section header", unless
+the block's object sets a title with `.meta({ title: '...' })`, as
+`features` does above.
 
 An entry, `src/content/pages/home.md`:
 
@@ -88,9 +90,11 @@ blocks:
 
 Put one component per block type in `src/components/blocks/`, named after
 the type with a `Block` suffix: `hero` is `HeroBlock.astro`, `testimonials`
-is `TestimonialsBlock.astro`. Each takes the block as a `block` prop. That
-name and prop are what the integration's component preview (below) uses; a
-page can render the components any way it likes.
+is `TestimonialsBlock.astro`. Each takes the block as a `block` prop. The
+integration's component preview (below) finds components by that name
+(`Hero.astro` also works, and case and punctuation are ignored, so
+`feature-grid` finds `FeatureGridBlock.astro`); a page can render the
+components any way it likes.
 
 ```astro
 ---
@@ -161,9 +165,10 @@ to annotate the items of a `features` block.
 ## Previewing a collection that blocks use
 
 `testimonials` has no page of its own. Because the `testimonials` block
-refers to it through `testimonialIds`, AstroAdmin can still preview an entry
-by rendering that block with only that entry in it, at
-`/component-preview/testimonials/<id>`. This needs:
+refers to it through `testimonialIds` (a `reference()` list works the same
+way), AstroAdmin can still preview an entry by rendering that block with
+only that entry in it, at `/component-preview/testimonials/<id>`. This
+needs:
 
 - the integration in `astro.config.mjs`:
 
@@ -177,9 +182,14 @@ by rendering that block with only that entry in it, at
   ```
 
 - the block component at `src/components/blocks/TestimonialsBlock.astro`,
-  reading `block.testimonialIds`;
-- a stylesheet at `src/styles/global.css`, which the preview route imports so
-  the block is styled as on the site. The route fails without that file.
+  reading `block.testimonialIds`.
+
+The block the route renders holds only `type` and the reference field, set
+to that one id. The component receives it as `block`, and also spread as
+props (`Astro.props.testimonialIds`), with `index` 0, so it must cope with
+the block's other fields being absent. If the site has
+`src/styles/global.css`, the route loads it; any other styles must come from
+the component itself.
 
 The route exists only under `astro dev`, never in a production build. If
 several block types refer to the same collection, the editor offers a choice

@@ -50,7 +50,7 @@ astroadmin doctor 1.5.0 — /srv/sites/site-a
 ✓ PASS Astro integration (since 0.2.0)
        astroadmin() is in astro.config.mjs.
 ...
-! WARN Click-to-edit coverage (since 1.4.1)
+! WARN Click-to-edit coverage gaps (since 1.4.1)
        Click-to-edit reaches 0 of 18 text fields (0%): pages 0/18.
          pages: 1 of 1 entries have gaps, e.g. home on / misses blocks[0].title, ...
        https://github.com/cloudshipco/astroadmin/blob/main/docs/doctor.md#click-to-edit-coverage
@@ -69,7 +69,7 @@ astroadmin doctor 1.5.0 — /srv/sites/site-a
   "results": [
     {
       "id": "click-to-edit-coverage",
-      "title": "Click-to-edit coverage",
+      "title": "Click-to-edit coverage gaps",
       "since": "1.4.1",
       "severity": "warn",
       "message": "Click-to-edit reaches 0 of 18 text fields (0%): pages 0/18.",
@@ -81,6 +81,8 @@ astroadmin doctor 1.5.0 — /srv/sites/site-a
 }
 ```
 
+A warning or failure is titled by its problem ("Click-to-edit coverage
+gaps"); a pass or skip by the check's name ("Click-to-edit coverage").
 `data`, where present, is the check's raw report (per-entry field lists for
 coverage, per-page block indexes for `block-index`).
 
@@ -140,7 +142,7 @@ applies to `hosted-preview-config`.
 
 ### hosted-preview-config
 
-*Since 1.3.0. Warns.*
+*Since 1.3.0. Warns; skipped when neither setting is present.*
 
 A hosted editor shows the preview from its own subdomain through a proxy. Vite
 refuses requests for hosts it does not know, and its HMR websocket cannot cross
@@ -156,7 +158,9 @@ vite: {
 ```
 
 The editor refreshes the preview itself after a save, so nothing is lost by
-turning HMR off.
+turning HMR off. A site with neither setting is taken to be edited only
+locally, and the check is skipped; with one of them, it warns about the
+other.
 
 Properties are read the way JavaScript applies them: the last one wins. A
 `...spread` or computed key after the setting (or with no plain setting at
@@ -168,10 +172,13 @@ one before the setting does not matter.
 *Since 1.3.0. Warns.*
 
 A hosted editor installs the site's dependencies with
-`bun install --frozen-lockfile`. Without a committed `bun.lock` it installs
+`bun install --frozen-lockfile`. Without a committed lockfile it installs
 whatever versions resolve on the day, which may not be what the site was built
-and tested with. The check reads the last commit (`HEAD`), so a lockfile that
-is only staged, or a repository with no commits, warns.
+and tested with. Any package manager's lockfile counts: `bun.lock`,
+`bun.lockb`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock` or
+`pnpm-lock.yaml`, in the site's directory or at the repository root. The
+check reads the last commit (`HEAD`), so a lockfile that is only staged, or a
+repository with no commits, warns.
 
 ### no-submodules
 
@@ -207,7 +214,10 @@ as the publish check (Bun), and makes a 1x1 image.
 *Since 1.4.8. Fails when the build fails.*
 
 The CLI builds the site into a temporary directory (unless `--build` is
-given) and fails if the build does, or if it writes no HTML pages. The
+given) and fails if the build does, or if it writes no HTML pages. When the
+system temp directory is on another filesystem from the site (a tmpfs `/tmp`,
+a VM's shared folder), the build goes under the site's
+`node_modules/.cache/` instead. The
 built-HTML checks below need that build.
 
 It runs the site's own installed Astro: the `bin` of `node_modules/astro` in
@@ -353,7 +363,8 @@ Checks live in `server/doctor/checks.js`, one entry each:
   id: 'my-feature',          // also this page's anchor
   since: '1.5.0',            // the version that added the feature
   phase: 'built',            // 'static', 'build' or 'built'
-  title: 'My feature is set up',
+  title: 'My feature',             // shown on a pass or skip
+  problemTitle: 'My feature is not set up', // shown on a warn or fail
   async run(context) {
     // context.projectRoot, context.distDir, context.astroConfig(), context.built()
     return { severity: 'warn', message: '...', details: ['...'] };
