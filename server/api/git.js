@@ -39,9 +39,21 @@ export async function commitConfiguredGitPaths(fullConfig, message) {
  * Allowed directories for git file operations (relative to project root) —
  * the configured git paths: src/content plus assets in files mode, assets
  * only in db mode (see config.js defaultGitPathsForStore).
+ *
+ * Only entries strictly INSIDE the project root count. `path.normalize('')`
+ * and `path.normalize('./')` are `.`, so an empty, `./` or `src/..` entry
+ * would otherwise widen diff, revert and status to the whole project (and
+ * `../x` would reach outside it). Such entries are dropped, so a list of
+ * nothing but them scopes nothing, like `[]`. Kept entries come back
+ * project-relative without a trailing slash (`src/content/` -> `src/content`).
  */
 function getAllowedGitPaths(fullConfig) {
-  return getGitPaths(fullConfig).map((gitPath) => path.normalize(gitPath).replace(/[\\/]+$/, ''));
+  const projectRoot = path.resolve(fullConfig.paths.projectRoot);
+  return getGitPaths(fullConfig)
+    .filter((gitPath) => typeof gitPath === 'string')
+    .map((gitPath) => path.relative(projectRoot, path.resolve(projectRoot, gitPath)))
+    .filter((relative) => relative !== '' && relative !== '..'
+      && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
 /**
