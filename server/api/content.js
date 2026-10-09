@@ -12,8 +12,20 @@ import {
 } from '../utils/content.js';
 import { validateStoredEntry } from '../utils/content-validation.js';
 import { getConfig } from '../config.js';
+import { isContentPathError } from '../utils/glob-files.js';
 
 const router = express.Router();
+
+/**
+ * Answer a refused path (undeclared collection, malformed slug, a file outside
+ * its collection) with a 400 whose message names no server path.
+ * @returns {boolean} true when the response was sent
+ */
+function refusedPath(error, res) {
+  if (!isContentPathError(error)) return false;
+  res.status(400).json({ success: false, error: 'Invalid content path', message: error.message });
+  return true;
+}
 
 /**
  * Extract locale from request query param
@@ -77,6 +89,7 @@ router.get('/:collection/:slug', async (req, res) => {
       validation: await validateSavedEntry(collection, slug, locale),
     });
   } catch (error) {
+    if (refusedPath(error, res)) return;
     console.error(`Error reading content ${req.params.collection}/${req.params.slug}:`, error);
 
     if (error.message.includes('not found')) {
@@ -131,6 +144,7 @@ router.post('/:collection/:slug', async (req, res) => {
       message: 'Content saved successfully',
     });
   } catch (error) {
+    if (refusedPath(error, res)) return;
     console.error(`Error writing content ${req.params.collection}/${req.params.slug}:`, error);
     res.status(500).json({
       success: false,
@@ -179,6 +193,7 @@ router.put('/:collection/:slug', async (req, res) => {
       message: 'Content updated successfully',
     });
   } catch (error) {
+    if (refusedPath(error, res)) return;
     console.error(`Error updating content ${req.params.collection}/${req.params.slug}:`, error);
     res.status(500).json({
       success: false,
@@ -209,6 +224,7 @@ router.delete('/:collection/:slug', async (req, res) => {
       message: 'Content deleted successfully',
     });
   } catch (error) {
+    if (refusedPath(error, res)) return;
     console.error(`Error deleting content ${req.params.collection}/${req.params.slug}:`, error);
 
     if (error.message.includes('not found')) {

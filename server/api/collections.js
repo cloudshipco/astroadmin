@@ -17,6 +17,14 @@ import { getConfig } from '../config.js';
 import { detectPreviewRoutes, getPreviewRoute } from '../utils/routes.js';
 import { discoverStaticPages } from '../utils/page-discovery.js';
 import { enrichSchemaWithBlockTypes } from '../utils/block-types.js';
+import { isContentPathError } from '../utils/glob-files.js';
+
+/** An undeclared collection name is a 400 that names no server path. */
+function refusedCollection(error, res) {
+  if (!isContentPathError(error)) return false;
+  res.status(400).json({ success: false, error: 'Invalid collection', message: error.message });
+  return true;
+}
 
 const router = express.Router();
 
@@ -98,6 +106,7 @@ router.get('/:collectionName', async (req, res) => {
       },
     });
   } catch (error) {
+    if (refusedCollection(error, res)) return;
     console.error(`Error fetching collection ${req.params.collectionName}:`, error);
     res.status(500).json({
       success: false,
@@ -137,6 +146,7 @@ router.get('/:collectionName/entries', async (req, res) => {
       count: entries.length,
     });
   } catch (error) {
+    if (refusedCollection(error, res)) return;
     console.error(`Error fetching entries for ${req.params.collectionName}:`, error);
     res.status(500).json({
       success: false,
@@ -177,6 +187,7 @@ router.get('/:collectionName/entries-with-locales', async (req, res) => {
       count: entries.length,
     });
   } catch (error) {
+    if (refusedCollection(error, res)) return;
     console.error(`Error fetching entries with locales for ${req.params.collectionName}:`, error);
     res.status(500).json({
       success: false,

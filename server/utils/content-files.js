@@ -29,6 +29,9 @@ import {
   splitLocale,
   resolveProjectPath,
   sanitizePath,
+  assertDeclaredCollection,
+  assertSafeSlug,
+  assertContainedPath,
   allowedContentExtensions,
   CONTENT_EXTENSIONS,
 } from './glob-files.js';
@@ -44,15 +47,13 @@ async function getI18n() {
  * @returns {Promise<{isFile: boolean, filePath?: string, baseDirectory?: string, patterns?: string[], type?: string}>}
  */
 async function getCollectionLoaderInfo(collection) {
-  let schema = {};
-  try {
-    const schemas = await loadSchemas();
-    schema = schemas[collection] || {};
-  } catch (error) {
-    // No/partial content config: treat as a default glob collection under
-    // src/content/<collection>, matching the db store's tolerance.
-    console.warn(`Could not load schemas for ${collection}; treating as glob:`, error.message);
-  }
+  // The single funnel from a request's collection name to a directory: only a
+  // collection the content config declares resolves, by exact match. There is
+  // deliberately no fallback when the config cannot be parsed — joining an
+  // unchecked name onto src/content is how `/../../` reached the site root.
+  const schemas = await loadSchemas();
+  assertDeclaredCollection(collection, schemas);
+  const schema = schemas[collection] || {};
 
   if (schema.loaderType === 'file' && schema.loaderFilePath) {
     return { isFile: true, filePath: resolveProjectPath(schema.loaderFilePath), type: 'data' };
@@ -68,12 +69,24 @@ async function getCollectionLoaderInfo(collection) {
 
 /** Candidate file paths for a glob entry, in extension preference order. */
 function candidatePaths(baseDirectory, slug, locale, extensions = CONTENT_EXTENSIONS) {
-  const baseSlug = locale ? `${sanitizePath(slug)}.${locale}` : sanitizePath(slug);
-  return extensions.map((ext) => path.join(baseDirectory, baseSlug + ext));
+  return extensions.map((ext) => path.join(baseDirectory, entryBaseName(slug, locale) + ext));
 }
 
-async function findExistingFile(paths) {
+/** `<slug>` or `<slug>.<locale>`: the entry's path under its base, sans extension. */
+function entryBaseName(slug, locale) {
+  assertSafeSlug(slug);
+  const baseSlug = sanitizePath(slug);
+  return locale ? `${baseSlug}.${locale}` : baseSlug;
+}
+
+/**
+ * First candidate that exists. Each is checked for containment in the
+ * collection's base first, so a symlink cannot carry a read, write or delete
+ * outside it.
+ */
+async function findExistingFile(baseDirectory, paths) {
   for (const filePath of paths) {
+    await assertContainedPath(baseDirectory, filePath);
     try {
       await fs.access(filePath);
       return filePath;
@@ -164,7 +177,7 @@ export async function readContent(collection, slug, locale = null) {
     return readFileCollectionEntry(info.filePath, slug);
   }
 
-  const filePath = await findExistingFile(candidatePaths(info.baseDirectory, slug, locale));
+  const filePath = await findExistingFile(info.baseDirectory, candidatePaths(info.baseDirectory, slug, locale));
   if (!filePath) {
     const localeHint = locale ? ` (${locale})` : '';
     throw new Error(`Content not found: ${collection}/${slug}${localeHint}`);
@@ -208,7 +221,6 @@ export async function writeContent(collection, slug, { data, body, type }, local
     return writeFileCollectionEntry(info.filePath, slug, data);
   }
 
-  const baseSlug = locale ? `${sanitizePath(slug)}.${locale}` : sanitizePath(slug);
   const allowedExtensions = allowedContentExtensions(info.patterns);
 
   // An update must land in the entry's existing file (considering only
@@ -217,13 +229,17 @@ export async function writeContent(collection, slug, { data, body, type }, local
   // pattern expects — editing home.mdx never creates a duplicate home.md, and
   // creates on an mdx-only collection don't produce unreachable .md files.
   let filePath = await findExistingFile(
+    info.baseDirectory,
     candidatePaths(info.baseDirectory, slug, locale, allowedExtensions)
   );
   if (!filePath) {
     const effectiveType = type || info.type || 'content';
-    filePath = path.join(
+    filePath = await assertContainedPath(
       info.baseDirectory,
-      baseSlug + newEntryExtension(effectiveType, allowedExtensions)
+      path.join(
+        info.baseDirectory,
+        entryBaseName(slug, locale) + newEntryExtension(effectiveType, allowedExtensions)
+      )
     );
   }
 
@@ -280,7 +296,7 @@ export async function deleteContent(collection, slug, locale = null) {
     return deleteFileCollectionEntry(info.filePath, slug);
   }
 
-  const filePath = await findExistingFile(candidatePaths(info.baseDirectory, slug, locale));
+  const filePath = await findExistingFile(info.baseDirectory, candidatePaths(info.baseDirectory, slug, locale));
   if (!filePath) {
     const localeHint = locale ? ` (${locale})` : '';
     throw new Error(`Content not found: ${collection}/${slug}${localeHint}`);
@@ -315,7 +331,7 @@ export async function contentExists(collection, slug, locale = null) {
       return false;
     }
   }
-  const filePath = await findExistingFile(candidatePaths(info.baseDirectory, slug, locale));
+  const filePath = await findExistingFile(info.baseDirectory, candidatePaths(info.baseDirectory, slug, locale));
   return filePath !== null;
 }
 
@@ -328,7 +344,7 @@ export async function getAvailableLocales(collection, baseSlug, configuredLocale
 
   const available = [];
   for (const locale of configuredLocales) {
-    const filePath = await findExistingFile(candidatePaths(info.baseDirectory, baseSlug, locale));
+    const filePath = await findExistingFile(info.baseDirectory, candidatePaths(info.baseDirectory, baseSlug, locale));
     if (filePath) available.push(locale);
   }
   return available;

@@ -24,6 +24,7 @@ import {
   scopeStatusFiles,
   isWithinAllowedGitPaths,
   toProjectRelative,
+  showObjectSpec,
 } from '../server/api/git.js';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-gitsubdir-'));
@@ -53,6 +54,8 @@ function write(rel, content) {
 try {
   // --- Build a repo whose site/ subdirectory is the astroadmin project ---
   write('README.md', '# repo root\n');
+  // Same projectRoot-relative name, but at the REPO root: outside the project.
+  write('src/content/pages/home.md', 'REPO-ROOT-FILE\n');
   write('site/package.json', '{ "name": "site", "dependencies": {} }\n');
   write('site/bun.lock', 'lock-v1\n');
   write('site/src/content/pages/home.md', '---\ntitle: Home\n---\nHello\n');
@@ -125,6 +128,14 @@ try {
 
     const bad = await git.diff(['HEAD', '--', 'site/src/content/pages/home.md']);
     assert.strictEqual(bad, '', 'site/-prefixed path resolves to nothing from projectRoot');
+  });
+
+  await check('show reads the projectRoot file, never the repo-root file of the same name', async () => {
+    // Control: the bare `<rev>:<path>` form resolves from the repo root.
+    assert.ok((await git.show(['HEAD:src/content/pages/home.md'])).includes('REPO-ROOT-FILE'));
+    const shown = await git.show([showObjectSpec('HEAD', 'src/content/pages/home.md')]);
+    assert.ok(shown.includes('title: Home'), shown);
+    assert.ok(!shown.includes('REPO-ROOT-FILE'), 'show escaped the project subdirectory');
   });
 
   await check('root-checkout (empty prefix) is a no-op passthrough', () => {

@@ -20,15 +20,150 @@ export const CONTENT_EXTENSIONS = ['.md', '.mdx', '.json'];
 export const DEFAULT_GLOB_PATTERN = '**/*.{md,mdx,json}';
 
 /**
+ * A request named a path the content store will not touch: an undeclared
+ * collection, a malformed slug, or a file that resolves outside its
+ * collection's directory. The API answers 400 with `message`, which never
+ * names a server path.
+ */
+export class ContentPathError extends Error {
+  constructor(message = 'Invalid content path') {
+    super(message);
+    this.name = 'ContentPathError';
+    this.code = 'INVALID_CONTENT_PATH';
+    this.status = 400;
+  }
+}
+
+/** @param {unknown} error @returns {boolean} */
+export function isContentPathError(error) {
+  return Boolean(error) && error.code === 'INVALID_CONTENT_PATH';
+}
+
+/**
  * Defence-in-depth path guard. Slugs/collections become path segments, so
- * reject traversal even though callers are already schema-bounded.
+ * reject traversal even though callers are already schema-bounded. Not
+ * sufficient on its own: `path.normalize('/../../')` is `/`, which passes,
+ * which is why collections are also checked against the declared set
+ * (assertDeclaredCollection) and every final path for containment
+ * (assertContainedPath).
  */
 export function sanitizePath(userPath) {
+  if (typeof userPath !== 'string') {
+    throw new ContentPathError('Invalid path');
+  }
   const normalized = path.normalize(userPath);
   if (normalized.includes('..')) {
-    throw new Error('Invalid path: directory traversal not allowed');
+    throw new ContentPathError('Invalid path: directory traversal not allowed');
   }
   return normalized;
+}
+
+/**
+ * A collection must be one the content config declares, by exact own-key
+ * match (so `__proto__`, `constructor` and every encoded path are refused).
+ * @param {unknown} collection
+ * @param {Record<string, unknown>} schemas - parsed content config
+ */
+export function assertDeclaredCollection(collection, schemas) {
+  if (typeof collection !== 'string' || !schemas || !Object.hasOwn(schemas, collection)) {
+    throw new ContentPathError('Unknown collection');
+  }
+  return collection;
+}
+
+// Leaves room under the usual 255-byte filename limit for `.<locale>`, the
+// extension and the atomic write's `.<pid>.tmp` suffix.
+const MAX_SLUG_SEGMENT_BYTES = 200;
+const MAX_SLUG_LENGTH = 1024;
+// Control characters (NUL included) and backslashes, a separator on Windows.
+const FORBIDDEN_SLUG_CHARACTERS = /[\u0000-\u001f\u007f\\]/;
+
+/**
+ * A glob entry's slug becomes a relative path under the collection's base:
+ * '/'-separated segments, none empty, '.' or '..', none too long for a
+ * filename. Nested slugs (`2024/first-post`) are fine.
+ * @param {unknown} slug
+ */
+export function assertSafeSlug(slug) {
+  if (typeof slug !== 'string' || slug === '' || slug.length > MAX_SLUG_LENGTH) {
+    throw new ContentPathError('Invalid slug');
+  }
+  if (FORBIDDEN_SLUG_CHARACTERS.test(slug) || path.isAbsolute(slug)) {
+    throw new ContentPathError('Invalid slug');
+  }
+  for (const segment of slug.split('/')) {
+    if (segment === '' || segment === '.' || segment === '..') {
+      throw new ContentPathError('Invalid slug');
+    }
+    if (Buffer.byteLength(segment, 'utf8') > MAX_SLUG_SEGMENT_BYTES) {
+      throw new ContentPathError('Invalid slug');
+    }
+  }
+  return slug;
+}
+
+/** True when `candidate` is strictly inside `root` (both absolute). */
+function isStrictlyInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return (
+    relative !== '' &&
+    !path.isAbsolute(relative) &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`)
+  );
+}
+
+/**
+ * realpath() of a path that may not exist yet: resolve the deepest existing
+ * ancestor and re-append the rest. A dangling symlink on the way is refused,
+ * since writing through it would land wherever it points.
+ */
+async function realpathAllowingMissing(targetPath) {
+  const missingTail = [];
+  let current = path.resolve(targetPath);
+  for (;;) {
+    try {
+      const real = await fs.realpath(current);
+      return path.join(real, ...missingTail);
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') {
+        throw new ContentPathError();
+      }
+    }
+    let isDanglingLink = false;
+    try {
+      isDanglingLink = (await fs.lstat(current)).isSymbolicLink();
+    } catch {
+      // nothing there at all
+    }
+    if (isDanglingLink) throw new ContentPathError();
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(targetPath);
+    missingTail.unshift(path.basename(current));
+    current = parent;
+  }
+}
+
+/**
+ * Every file the content store reads, writes or deletes for a request is
+ * checked here AFTER its final name is built: it must lie strictly inside
+ * `rootDirectory`, both as written and with symlinks resolved.
+ * @param {string} rootDirectory - the collection's base directory
+ * @param {string} candidatePath - the resolved file path
+ * @returns {Promise<string>} candidatePath, unchanged
+ */
+export async function assertContainedPath(rootDirectory, candidatePath) {
+  if (!isStrictlyInside(path.resolve(rootDirectory), path.resolve(candidatePath))) {
+    throw new ContentPathError();
+  }
+  const [realRoot, realCandidate] = await Promise.all([
+    realpathAllowingMissing(rootDirectory),
+    realpathAllowingMissing(candidatePath),
+  ]);
+  if (!isStrictlyInside(realRoot, realCandidate)) {
+    throw new ContentPathError();
+  }
+  return candidatePath;
 }
 
 export function escapeRegExp(value) {

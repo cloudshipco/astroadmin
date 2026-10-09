@@ -6,6 +6,7 @@
 import express from 'express';
 import path from 'path';
 import { getConfig } from '../config.js';
+import { assertContainedPath, isContentPathError } from '../utils/glob-files.js';
 import {
   publishHandler,
   withGitLock,
@@ -98,20 +99,49 @@ export function scopeStatusFiles(files, repoPrefix, allowedGitPaths) {
     .filter((file) => isWithinAllowedGitPaths(file, allowedGitPaths));
 }
 
+/** A file path or commit the request named that the git API refuses (400). */
+export class GitRequestError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'GitRequestError';
+    this.status = 400;
+  }
+}
+
+/** Answer a refused file path or commit with a 400; true when sent. */
+function refusedGitRequest(error, res) {
+  if (!(error instanceof GitRequestError)) return false;
+  res.status(400).json({ success: false, error: 'Invalid git request', message: error.message });
+  return true;
+}
+
+/**
+ * A validated path as a git pathspec that matches only itself: without the
+ * `:(literal)` magic, `src/content/*.md` would be a glob and revert-file would
+ * discard every matching file's unpublished edits.
+ */
+function literalPathspec(validatedFile) {
+  return `:(literal)${validatedFile}`;
+}
+
 /**
  * Validate that a file path is within allowed directories.
  * Uses path.resolve() + startsWith() for robust traversal prevention.
  * @param {string} filePath - User-provided file path
- * @returns {string} - Normalized path (relative to project root)
- * @throws {Error} - If path is outside allowed directories
+ * @returns {Promise<string>} - Normalized path (relative to project root)
+ * @throws {GitRequestError} - If path is outside allowed directories
  */
-function validateFilePath(filePath, fullConfig) {
+async function validateFilePath(filePath, fullConfig) {
+  // A repeated query parameter arrives as an array, a JSON body can send anything.
+  if (typeof filePath !== 'string' || filePath === '' || /[\u0000-\u001f\u007f]/.test(filePath)) {
+    throw new GitRequestError('Invalid file path');
+  }
   // Normalize to handle ., .., // etc.
   const normalized = path.normalize(filePath);
 
   // Reject obvious traversal attempts early
   if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
-    throw new Error('Invalid file path: must be relative to project root');
+    throw new GitRequestError('Invalid file path: must be relative to project root');
   }
 
   // Resolve to absolute path for comparison
@@ -120,7 +150,7 @@ function validateFilePath(filePath, fullConfig) {
 
   // Ensure path is within project root (defense in depth)
   if (!absolutePath.startsWith(projectRoot + path.sep)) {
-    throw new Error('Invalid file path: path escapes project root');
+    throw new GitRequestError('Invalid file path: path escapes project root');
   }
 
   // Check against allowed directories
@@ -132,12 +162,32 @@ function validateFilePath(filePath, fullConfig) {
   });
 
   if (!isAllowed) {
-    throw new Error(
+    throw new GitRequestError(
       `Access denied: file operations restricted to ${allowedGitPaths.join(', ')}`
     );
   }
 
+  // Through symlinks too: git itself will not follow a path beyond a symlink,
+  // but the API should not depend on that.
+  try {
+    await assertContainedPath(projectRoot, absolutePath);
+  } catch (error) {
+    if (isContentPathError(error)) throw new GitRequestError('Invalid file path: path escapes project root');
+    throw error;
+  }
+
   return normalized;
+}
+
+/**
+ * `<rev>:<path>` for `git show`. A bare path there is relative to the REPO
+ * root, not the working directory, so with projectRoot in a subdirectory
+ * (`site/`) `HEAD:src/content/x.md` would read `<repo>/src/content/x.md`, a
+ * file outside the project. `./` makes it relative to projectRoot, the frame
+ * validateFilePath checked.
+ */
+export function showObjectSpec(ref, validatedFile) {
+  return `${ref}:./${validatedFile}`;
 }
 
 /**
@@ -151,8 +201,8 @@ function validateCommitHash(commit) {
   if (commit === 'HEAD') return commit;
 
   // Standard git short/full hash: 7-40 hex characters
-  if (!/^[a-f0-9]{7,40}$/i.test(commit)) {
-    throw new Error('Invalid commit hash format');
+  if (typeof commit !== 'string' || !/^[a-f0-9]{7,40}$/i.test(commit)) {
+    throw new GitRequestError('Invalid commit hash format');
   }
 
   return commit;
@@ -354,23 +404,24 @@ router.get('/diff', async (req, res) => {
     const git = createGitClient(fullConfig);
 
     // Validate file path if provided (restrict to configured git paths)
-    const validatedFile = file ? validateFilePath(file, fullConfig) : null;
+    const validatedFile = file ? await validateFilePath(file, fullConfig) : null;
 
     // Validate commit references if provided
     const validatedFrom = from ? validateCommitHash(from) : null;
     const validatedTo = to ? validateCommitHash(to) : null;
 
+    const pathspec = validatedFile ? literalPathspec(validatedFile) : '.';
     let diffResult;
 
     if (validatedFrom && validatedTo) {
       // Diff between two commits
-      diffResult = await git.diff([validatedFrom, validatedTo, '--', validatedFile || '.']);
+      diffResult = await git.diff([validatedFrom, validatedTo, '--', pathspec]);
     } else if (validatedFrom) {
       // Diff from a specific commit to working tree
-      diffResult = await git.diff([validatedFrom, '--', validatedFile || '.']);
+      diffResult = await git.diff([validatedFrom, '--', pathspec]);
     } else {
       // Diff of uncommitted changes (staged + unstaged)
-      diffResult = await git.diff(['HEAD', '--', validatedFile || '.']);
+      diffResult = await git.diff(['HEAD', '--', pathspec]);
     }
 
     res.json({
@@ -378,6 +429,7 @@ router.get('/diff', async (req, res) => {
       diff: diffResult,
     });
   } catch (error) {
+    if (refusedGitRequest(error, res)) return;
     console.error('Error getting diff:', error);
     res.status(500).json({
       success: false,
@@ -405,11 +457,11 @@ router.get('/show', async (req, res) => {
     }
 
     // Validate file path (restrict to configured git paths)
-    const validatedFile = validateFilePath(file, fullConfig);
+    const validatedFile = await validateFilePath(file, fullConfig);
 
     // Validate commit reference
     const ref = commit ? validateCommitHash(commit) : 'HEAD';
-    const content = await git.show([`${ref}:${validatedFile}`]);
+    const content = await git.show([showObjectSpec(ref, validatedFile)]);
 
     res.json({
       success: true,
@@ -418,6 +470,7 @@ router.get('/show', async (req, res) => {
       file,
     });
   } catch (error) {
+    if (refusedGitRequest(error, res)) return;
     console.error('Error showing file:', error);
     res.status(500).json({
       success: false,
@@ -445,10 +498,10 @@ router.post('/revert-file', async (req, res) => {
     }
 
     // Validate file path (restrict to configured git paths)
-    const validatedFile = validateFilePath(file, fullConfig);
+    const validatedFile = await validateFilePath(file, fullConfig);
 
     // Restore file from HEAD (discard uncommitted changes)
-    await git.checkout(['HEAD', '--', validatedFile]);
+    await git.checkout(['HEAD', '--', literalPathspec(validatedFile)]);
 
     res.json({
       success: true,
@@ -456,6 +509,7 @@ router.post('/revert-file', async (req, res) => {
       file,
     });
   } catch (error) {
+    if (refusedGitRequest(error, res)) return;
     console.error('Error reverting file:', error);
     res.status(500).json({
       success: false,
@@ -483,13 +537,13 @@ router.post('/restore-from-commit', async (req, res) => {
     }
 
     // Validate file path (restrict to configured git paths)
-    const validatedFile = validateFilePath(file, fullConfig);
+    const validatedFile = await validateFilePath(file, fullConfig);
 
     // Validate commit hash format
     const validatedCommit = validateCommitHash(commit);
 
     // Restore file from specific commit
-    await git.checkout([validatedCommit, '--', validatedFile]);
+    await git.checkout([validatedCommit, '--', literalPathspec(validatedFile)]);
 
     res.json({
       success: true,
@@ -498,6 +552,7 @@ router.post('/restore-from-commit', async (req, res) => {
       commit,
     });
   } catch (error) {
+    if (refusedGitRequest(error, res)) return;
     console.error('Error restoring file:', error);
     res.status(500).json({
       success: false,
@@ -526,9 +581,9 @@ router.get('/file-history', async (req, res) => {
     }
 
     // Validate file path (restrict to configured git paths)
-    const validatedFile = validateFilePath(file, fullConfig);
+    const validatedFile = await validateFilePath(file, fullConfig);
 
-    const log = await git.log({ maxCount: limit, file: validatedFile });
+    const log = await git.log({ maxCount: limit, file: literalPathspec(validatedFile) });
 
     const commits = log.all.map(commit => ({
       hash: commit.hash,
@@ -544,6 +599,7 @@ router.get('/file-history', async (req, res) => {
       file,
     });
   } catch (error) {
+    if (refusedGitRequest(error, res)) return;
     console.error('Error getting file history:', error);
     res.status(500).json({
       success: false,

@@ -125,6 +125,15 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/entry-urls.test.js` — `ui/entry-urls.js` against the real `createServer()` app: a
   nested slug (`2024/first-post`) travels as ONE encoded segment, so reads, saves and dashboard
   links reach `/:collection/:slug`; and dashboard.js builds no such URL by hand.
+- `bun tests/content-traversal.test.js` — path traversal through the real `createServer()` app,
+  as a logged-in editor: encoded collections (`%2F..`, double-encoded, backslashes, absolute,
+  unicode dots, NUL, `__proto__`), hostile slugs, symlinks out of a collection, image filenames
+  and git file paths (including pathspec globs), with sentinels outside the content directory
+  checked byte-for-byte. The rule it pins: a collection must be DECLARED in the content config
+  (exact own-key match), and every resolved file is checked for containment, through realpath,
+  after its final name is built (`server/utils/glob-files.js`: `assertDeclaredCollection`,
+  `assertSafeSlug`, `assertContainedPath`). `path.normalize` alone is not a guard: it turns
+  `/../../` into `/`. Refusals are 400s that name no server path.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 

@@ -3,8 +3,10 @@
  *
  * Exercises the default (files) store: server/utils/content-files.js via the
  * content-store dispatcher + content.js + the listing in collections.js, with
- * no running server and no Astro config (collections default to glob under
- * src/content/<collection>).
+ * no running server and a minimal content config declaring `pages` and
+ * `settings` with no loader (so they default to glob under
+ * src/content/<collection>). A collection the config does not declare is
+ * refused: the store has no fallback for an unparsed or absent config.
  *
  * Self-contained: always runs against its own temp project root (any
  * ASTROADMIN_PROJECT_ROOT in the environment is deliberately overridden, so a
@@ -21,6 +23,15 @@ import path from 'path';
 // Must be set before config loads, hence the dynamic imports below.
 const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'aa-files-'));
 process.env.ASTROADMIN_PROJECT_ROOT = tmpRoot;
+// The schema parser resolves zod from the project's node_modules.
+fsSync.symlinkSync(path.resolve(import.meta.dir, '..', 'node_modules'), path.join(tmpRoot, 'node_modules'), 'dir');
+fsSync.mkdirSync(path.join(tmpRoot, 'src'), { recursive: true });
+fsSync.writeFileSync(path.join(tmpRoot, 'src/content.config.ts'), `import { defineCollection, z } from 'astro:content';
+export const collections = {
+  pages: defineCollection({ schema: z.object({ title: z.string() }) }),
+  settings: defineCollection({ type: 'data', schema: z.object({ siteName: z.string() }) }),
+};
+`);
 
 const {
   readContent,
@@ -73,6 +84,11 @@ await check('read round-trips frontmatter + body', async () => {
   assert.equal(entry.type, 'content', 'type content');
   assert.equal(entry.data.title, 'Home', 'frontmatter round-trips');
   assert.equal(entry.body.trim(), '# Welcome', 'body round-trips');
+});
+
+await check('a collection the content config does not declare is refused', async () => {
+  await assert.rejects(() => writeContent('undeclared', 'x', { data: { title: 'X' }, body: '', type: 'content' }, null), /Unknown collection/);
+  await assert.rejects(() => fs.access(path.join(CONTENT_DIR, 'undeclared')), 'nothing was created for it');
 });
 
 await check('contentExists reflects presence', async () => {

@@ -16,6 +16,7 @@ import {
   readContent,
   getAvailableLocales,
 } from './content.js';
+import { isContentPathError } from './glob-files.js';
 
 // Cache for parsed schemas
 let cachedSchemas = null;
@@ -137,6 +138,9 @@ export async function getCollectionEntries(collectionName) {
     // the catch and bubble store errors to API callers as 500s.
     return await listSlugs(collectionName);
   } catch (error) {
+    // A request for an undeclared collection is the caller's error (400), not
+    // an empty collection.
+    if (isContentPathError(error)) throw error;
     console.error(`Error reading collection ${collectionName}:`, error);
     return [];
   }

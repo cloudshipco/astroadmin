@@ -36,15 +36,51 @@ async function saveMetadata(metadata) {
 }
 
 /**
- * Get metadata for a specific image
+ * Get metadata for a specific image (own keys only, so a filename such as
+ * `constructor` never reads an inherited value).
  */
 function getImageMetadata(metadata, filename) {
-  return metadata[filename] || {};
+  return Object.hasOwn(metadata, filename) ? metadata[filename] : {};
 }
 
 // Allowed image extensions
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+/**
+ * The :filename route parameter as an image filename, or null. It must be a
+ * bare name (no separators, nothing a basename() would strip), not a dotfile
+ * (the metadata file is one), and carry an image extension — which also rules
+ * out `__proto__`, `constructor` and the like as metadata keys.
+ * @param {unknown} filename
+ * @returns {string|null}
+ */
+function imageFilenameFromParam(filename) {
+  if (typeof filename !== 'string' || filename === '' || filename.length > 255) return null;
+  if (/[\u0000-\u001f\u007f\\/]/.test(filename)) return null;
+  if (filename !== path.basename(filename) || filename.startsWith('.')) return null;
+  if (!ALLOWED_EXTENSIONS.includes(path.extname(filename).toLowerCase())) return null;
+  return filename;
+}
+
+function invalidFilename(res) {
+  return res.status(400).json({ success: false, error: 'Invalid image filename' });
+}
+
+/**
+ * Whether this name is an image the library lists (a file, by stat as the
+ * listing does) in either image directory.
+ */
+async function imageExists(filename) {
+  for (const directory of [config.paths.images, config.paths.srcImages]) {
+    try {
+      if ((await fs.stat(path.join(directory, filename))).isFile()) return true;
+    } catch {
+      // not in this directory
+    }
+  }
+  return false;
+}
 
 // Configure multer storage
 const storage = multer.diskStorage({
@@ -209,8 +245,8 @@ router.post('/', upload.single('image'), (req, res) => {
  */
 router.get('/:filename/metadata', async (req, res) => {
   try {
-    const { filename } = req.params;
-    const sanitizedFilename = path.basename(filename);
+    const sanitizedFilename = imageFilenameFromParam(req.params.filename);
+    if (!sanitizedFilename) return invalidFilename(res);
     const metadata = await loadMetadata();
     const imageMeta = getImageMetadata(metadata, sanitizedFilename);
 
@@ -235,14 +271,17 @@ router.get('/:filename/metadata', async (req, res) => {
  */
 router.put('/:filename/metadata', express.json(), async (req, res) => {
   try {
-    const { filename } = req.params;
-    const sanitizedFilename = path.basename(filename);
+    const sanitizedFilename = imageFilenameFromParam(req.params.filename);
+    if (!sanitizedFilename) return invalidFilename(res);
+    if (!(await imageExists(sanitizedFilename))) {
+      return res.status(404).json({ success: false, error: 'Image not found' });
+    }
     const { alt, focalPoint } = req.body;
 
     const metadata = await loadMetadata();
 
     // Initialize metadata for this file if it doesn't exist
-    if (!metadata[sanitizedFilename]) {
+    if (!Object.hasOwn(metadata, sanitizedFilename) || !metadata[sanitizedFilename]) {
       metadata[sanitizedFilename] = {};
     }
 
@@ -279,10 +318,9 @@ router.put('/:filename/metadata', express.json(), async (req, res) => {
  */
 router.delete('/:filename', async (req, res) => {
   try {
-    const { filename } = req.params;
-
-    // Sanitize filename to prevent directory traversal
-    const sanitizedFilename = path.basename(filename);
+    // A bare image filename only: no traversal, and never the metadata file.
+    const sanitizedFilename = imageFilenameFromParam(req.params.filename);
+    if (!sanitizedFilename) return invalidFilename(res);
 
     // Check if it's a source image (not deletable)
     const srcPath = path.join(config.paths.srcImages, sanitizedFilename);
