@@ -10,6 +10,7 @@ import { toggleChangesPanel, getChangesCount, showPublishDialog } from './change
 import { initEntryPicker, syncEntryPickerLabel } from './entry-picker.js';
 
 import { escapeHtml } from './escape-html.js';
+import { liveSiteHref } from './live-url.js';
 import { showEntryProblems, renderPublishProblems } from './content-problems.js';
 
 // Reference fields can appear anywhere a field can — including inside the array item
@@ -21,7 +22,11 @@ let currentCollection = null;
 let currentSlug = null;
 let currentData = null;
 let previewUrl = '';
-let publicUrl = ''; // Production site origin (optional); enables the live-status check
+let publicUrl = ''; // Production site origin (optional); enables the live-status check + View live site link
+// Site path of what the editor is showing, for the "View live site" link: the
+// open entry's route, overridden by wherever the preview iframe reports it has
+// navigated. Null when unknown (the link then opens the site root).
+let livePagePath = null;
 let allPages = []; // Store all pages for dropdown
 let allCollections = []; // Store collection info for new entries
 let allStaticPages = []; // Store discovered static pages (virtual pages)
@@ -77,6 +82,7 @@ async function loadConfig() {
     previewUrl = data.previewUrl;
     publicUrl = data.publicUrl || '';
     gitEnabled = data.gitEnabled !== false;
+    setLivePagePath(livePagePath);
     if (Array.isArray(data.collectionOrder)) collectionOrder = data.collectionOrder;
 
     // Content lives in the database, so the git-history "Changes" panel only
@@ -543,6 +549,7 @@ async function createNewEntry(collection, slug) {
   currentCollection = collection;
   currentSlug = slug;
   isNewEntry = true;
+  setLivePagePath(getCurrentPagePath());
 
   // Update URL
   const newUrl = `/dashboard/${collection}/${slug}`;
@@ -668,6 +675,7 @@ async function loadEntry(collection, slug, updateUrl = true) {
   currentSlug = slug;
   isNewEntry = false; // Loading existing entry
   isVirtualPage = false; // Not a virtual page
+  setLivePagePath(getCurrentPagePath());
 
   // Update URL without page reload
   if (updateUrl) {
@@ -763,6 +771,7 @@ function loadVirtualPage(pageSlug) {
   currentData = null;
   isNewEntry = false;
   isVirtualPage = true;
+  setLivePagePath(page.url);
 
   // Update URL
   const newUrl = `/dashboard/__page__/${pageSlug}`;
@@ -1662,6 +1671,11 @@ window.addEventListener('message', (event) => {
       return;
     }
 
+    // The preview is now showing this route, whether or not it resolves to an
+    // entry below; the live link follows it (as the preview reported it, so a
+    // site with trailing-slash URLs keeps them).
+    setLivePagePath(pathname);
+
     // Resolve the previewed route to an editor target. A route can be BOTH a
     // rendered `.astro` file (read-only "site page") and an editable pages
     // entry — prefer the editable entry.
@@ -2030,6 +2044,25 @@ function friendlyPublishMessage(result) {
 }
 
 /**
+ * Point the header's "View live site" link at pagePath on the public site (the
+ * site root when pagePath is null or unsafe). Hidden when no publicUrl is
+ * configured; liveSiteHref only ever returns a URL on publicUrl's origin.
+ */
+function setLivePagePath(pagePath) {
+  livePagePath = pagePath;
+  const link = document.getElementById('viewLiveBtn');
+  if (!link) return;
+  const href = liveSiteHref(publicUrl, pagePath);
+  if (href === null) {
+    link.hidden = true;
+    link.removeAttribute('href');
+    return;
+  }
+  link.href = href;
+  link.hidden = false;
+}
+
+/**
  * The production path of the current entry (e.g. '/', '/about'), or null when
  * the entry has no real production page (component-preview-only collections).
  * Mirrors getPreviewPageUrl()'s routing, minus the origin.
@@ -2146,7 +2179,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   // deploy actually goes live. Only possible with a configured publicUrl and a
   // real production page for this entry.
   const pagePath = getCurrentPagePath();
-  const liveUrl = (publicUrl && pagePath) ? publicUrl.replace(/\/$/, '') + pagePath : null;
+  const liveUrl = pagePath ? liveSiteHref(publicUrl, pagePath) : null;
   const preHash = (publicUrl && pagePath) ? await fetchLiveHash(pagePath) : null;
 
   try {

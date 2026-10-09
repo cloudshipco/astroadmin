@@ -72,9 +72,19 @@ export default {
 ```
 
 Also settable via the `PUBLIC_URL` environment variable. Leave it unset to
-disable the live-status check (the editor falls back to a "live shortly"
-message). Backed by a server-side `GET /api/publish/live-status` endpoint, so
-there's no browser cross-origin issue.
+hide the link and disable the live-status check (the editor falls back to a
+"live shortly" message). The check is backed by a server-side
+`GET /api/publish/live-status` endpoint, so there's no browser cross-origin
+issue.
+
+The "View live site" link in the editor header opens, in a new tab, the live
+page for whatever the editor is showing: the open entry's route, or the page
+the preview has been navigated to. When there is no such page (a collection
+with only a component preview, say) it opens the site root. A path on
+`publicUrl` is treated as the site's base path: with
+`https://example.com/site`, an entry at `/about` links to
+`https://example.com/site/about`. The link never points anywhere but
+`publicUrl`'s origin.
 
 ### Entry picker order
 

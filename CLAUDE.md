@@ -97,6 +97,9 @@ runner aggregating them). Most run server-less and need env vars:
   the admin's secrets are not in the build's environment, server paths are stripped, and
   the site's own `node_modules/.astro` is byte-identical afterwards. Takes ~1-2 min (each
   publish runs a full `astro build`).
+- `bun tests/live-url.test.js` — page path -> live-site URL (`ui/live-url.js`), shared by the
+  header's "View live site" link and the server's live-status check: base paths, query/hash,
+  and escape attempts (`//host`, `/\host`, `javascript:`) falling back to the site root.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 

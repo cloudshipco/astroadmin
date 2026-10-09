@@ -20,6 +20,8 @@ import { deploy, validateDeployConfig } from '../utils/deploy.js';
 import { runProductionBuild } from '../utils/build.js';
 import { checkHeadWithAstro } from '../utils/astro-check.js';
 import { listSlugs } from '../utils/content.js';
+// Shared with the editor's "View live site" link (ui/ is served to the browser).
+import { resolveLiveUrl } from '../../ui/live-url.js';
 
 const router = express.Router();
 // Conservative fallback for a malformed config; an explicitly-configured
@@ -328,19 +330,12 @@ export async function publishHandler(req, res) {
 }
 
 /**
- * Resolve a requested page path against the configured public origin, refusing
+ * Resolve a requested page path against the configured public site, refusing
  * anything that would escape it (SSRF guard — `path` is client-supplied, e.g.
- * `//evil.com` or `http://internal`). Returns a URL guaranteed to be same-origin
- * as publicUrl.
+ * `//evil.com` or `http://internal`). Lives in ui/live-url.js so the editor's
+ * link and this check map paths identically; re-exported for existing callers.
  */
-export function resolveLiveUrl(publicUrl, requestedPath) {
-  const base = new URL(publicUrl);
-  const resolved = new URL(requestedPath || '/', base);
-  if (resolved.origin !== base.origin) {
-    throw new Error('path must stay within the configured public site');
-  }
-  return resolved;
-}
+export { resolveLiveUrl };
 
 // Stable, fast content hash (djb2) so the editor can tell when a page's live
 // HTML changes after a publish without transferring the whole body around.
