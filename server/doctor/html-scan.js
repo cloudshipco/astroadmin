@@ -26,8 +26,9 @@
  *   The same goes for the head-only elements (title, meta, link, base) where
  *   a page has no <head> tag. Its data-block-index DOES count, for the same
  *   reason as a hidden one: the integration's position count includes it.
- *   The head ends where a browser ends it: at </head>, or at the first element
- *   that is not head content (a <div> after an unclosed <head> is body).
+ *   The head ends where a browser ends it: at </head>, at the first element
+ *   that is not head content (a <div> after an unclosed <head> is body), or at
+ *   the first text that is not whitespace.
  * CSS (`display: none`, a `hidden` class) is not evaluated.
  *
  * A page with no <body> tag (a fragment, or a template that leaves the tag
@@ -201,6 +202,14 @@ export async function scanHtml(html) {
     .on('a[href]', { element(element) { trackDepth(element, (delta) => { linkDepth += delta; }); } })
     .onDocument({
       text(chunk) {
+        // In the "in head" insertion mode a character that is not HTML
+        // whitespace implies </head> and is reprocessed as body content, so
+        // `<head><title>T</title>Welcome` puts "Welcome" in the body. Text
+        // inside <title> (nonText) or script/style/noscript/template (absent)
+        // belongs to that element and does not.
+        if (inHead && absentDepth === 0 && nonTextDepth === 0 && /[^\t\n\f\r ]/.test(chunk.text)) {
+          inHead = false;
+        }
         const inBody = bodyDepth > 0 || (!sawBody && !inHead);
         if (!inBody || absentDepth > 0 || hiddenDepth > 0 || nonTextDepth > 0) return;
         const target = linkDepth > 0 ? linkChunks : textChunks;

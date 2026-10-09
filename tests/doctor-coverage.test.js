@@ -688,6 +688,19 @@ await check('head: annotations and entry refs on head elements are left out, als
   }
 });
 
+await check('head: non-whitespace text ends an unclosed <head>, as in a browser, and is body text', async () => {
+  const page = '<html><head><title>T</title>Welcome to the example</html>';
+  const scan = await scanHtml(page);
+  assert.equal(scan.clickableText, 'welcometotheexample', JSON.stringify(scan));
+  const report = computeFieldCoverage([titleEntry], new Map([['/', scan]]));
+  assert.equal(report.totalFields, 1, `the headline is shown, so it counts: ${JSON.stringify(report)}`);
+  // Also with a later <body> tag, which a browser merges into the implicit body.
+  assert.equal((await scanHtml('<html><head><title>T</title>Welcome<body><p>there</p></body></html>')).clickableText, 'welcomethere');
+  // Controls: whitespace keeps head mode, and title/style/script text is never body text.
+  assert.equal((await scanHtml('<html><head>\n  <title>T</title>\n  <style>p{}</style><script>var x</script>\n</head><body><p>Hi</p></body></html>')).clickableText, 'hi');
+  assert.equal((await scanHtml('<html><head><title>Welcome to the example</title><meta name="x" data-aa-field="headline"></head></html>')).clickableText, '');
+});
+
 await check('head: a block root in <head> still counts, as the integration picks roots by position among every [data-block-index]', async () => {
   const scan = await scanHtml('<html><head><meta data-block-index="0"></head><body><section data-block-index="0"></section><section data-block-index="1"></section></body></html>');
   assert.deepEqual(scan.blockIndexes, [0, 0, 1]);
