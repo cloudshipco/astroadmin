@@ -984,7 +984,7 @@ async function renderEditor(entryData, ctx) {
           class="form-input textarea-autogrow"
           placeholder="Enter markdown content..."
           data-markdown="true"
-        >${escapeHtml(bodyContent)}</textarea>
+        ></textarea>
         <button type="button" class="textarea-expand-btn" data-expand-textarea title="Expand editor">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="15 3 21 3 21 9"></polyline>
@@ -1003,6 +1003,12 @@ async function renderEditor(entryData, ctx) {
       ${bodyEditor}
     </form>
   `;
+  // The body goes in as the textarea's value, not as markup: the HTML parser
+  // drops a newline straight after <textarea>, so a body that starts with a
+  // blank line (the usual gap after frontmatter) lost it on every save, and
+  // markup would also need escaping (`&lt;` decodes, `</textarea>` ends it).
+  const bodyTextarea = editorForm.querySelector('#markdown-body');
+  if (bodyTextarea) bodyTextarea.value = bodyContent;
 
   // Setup form handlers for dynamic fields (blocks, arrays), bound to a saver
   // that always writes THIS form to THIS entry.

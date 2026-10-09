@@ -185,6 +185,7 @@ await check('dashboard: the markdown body textarea holds the file body byte for 
   const bodies = [
     'Literal &lt;b&gt; in prose, and &amp; an ampersand entity.\n\n</textarea><script>alert(1)</script>\n\nAfter the close tag.\n',
     'Plain markdown with **bold** & a bare ampersand.\n',
+    '\nA body that starts with a blank line, as after frontmatter.\n',
   ];
   for (const body of bodies) {
     document.body.innerHTML = '<div id="editorForm"></div>';
@@ -192,6 +193,10 @@ await check('dashboard: the markdown body textarea holds the file body byte for 
     const textarea = document.getElementById('markdown-body');
     assert.ok(textarea, 'markdown body textarea rendered');
     assert.equal(textarea.value, body, 'textarea value differs from the file body');
+    // Set as a value, never parsed from markup: a browser's parser drops a
+    // newline straight after <textarea> (happy-dom does not, so it cannot show
+    // that loss; checked in real Chrome), so the markup must hold no body.
+    assert.equal(textarea.textContent, '', 'the body was rendered into the textarea markup');
     assert.equal(document.querySelectorAll('#editorForm script').length, 0, 'a <script> escaped the textarea');
   }
 });
