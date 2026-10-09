@@ -530,6 +530,34 @@ check(".describe('textarea') still forces a textarea on a short-named field", ()
   assert.ok(control && /^<textarea\b/.test(control), control);
 });
 
+check('an image() field gets the picker whatever its name', () => {
+  // image() reaches the editor as the bundled stand-in z.string().describe('Image path'),
+  // so a field named `cover` (no image-like name) must be recognised by that description.
+  const html = generateFields({ cover: { type: 'string', description: 'Image path' } }, { cover: '/a.jpg' });
+  assert.ok(/class="image-picker"/.test(html), 'an image() field must render the picker');
+});
+
+check('a plain string with an unremarkable name is not an image field', () => {
+  const html = generateFields({ cover: { type: 'string' } }, { cover: 'x' });
+  assert.ok(!/class="image-picker"/.test(html), 'must not guess an image from the name cover');
+});
+
+check('a number input carries the schema bounds (JSON Schema minimum/maximum)', () => {
+  const control = controlFor(generateForm(
+    { type: 'object', properties: { rating: { type: 'integer', minimum: 1, maximum: 5 } } },
+    { rating: 3 },
+  ), 'rating');
+  assert.ok(/min="1"/.test(control) && /max="5"/.test(control), control);
+});
+
+check("zod 4's safe-integer bounds are not rendered as min/max", () => {
+  const control = controlFor(generateForm(
+    { type: 'object', properties: { count: { type: 'integer', minimum: -9007199254740991, maximum: 9007199254740991 } } },
+    { count: 3 },
+  ), 'count');
+  assert.ok(!/\bmin="/.test(control) && !/\bmax="/.test(control), control);
+});
+
 console.log('\n========================================\n');
 console.log(`📊 ${passed} checks passed, ${failures.length} failed.`);
 if (failures.length > 0) process.exit(1);

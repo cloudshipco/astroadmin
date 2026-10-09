@@ -312,8 +312,8 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
           value="${escapeHtml(value ?? schema.default ?? '')}"
           class="form-input"
           ${schema.type === 'integer' ? 'step="1"' : 'step="any"'}
-          ${schema.min !== undefined ? `min="${schema.min}"` : ''}
-          ${schema.max !== undefined ? `max="${schema.max}"` : ''}
+          ${numberBound('min', schema.minimum)}
+          ${numberBound('max', schema.maximum)}
           ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
           ${schema.required ? 'required' : ''}
         >
@@ -770,6 +770,18 @@ function countImageFields(siblingProps) {
 /**
  * Check if a field is an image field based on name and schema
  */
+/**
+ * A min/max attribute from a JSON Schema bound. zod 4 gives every integer
+ * bounds of +/-Number.MAX_SAFE_INTEGER, which say nothing to an editor, so
+ * those are left off.
+ * @param {'min'|'max'} attribute
+ * @param {number|undefined} bound - schema.minimum or schema.maximum
+ */
+function numberBound(attribute, bound) {
+  if (typeof bound !== 'number' || Math.abs(bound) >= Number.MAX_SAFE_INTEGER) return '';
+  return `${attribute}="${bound}"`;
+}
+
 export function isImageField(name, schema) {
   // Field names that indicate an image
   const imageFieldNames = ['image', 'logo', 'ogImage', 'src', 'icon', 'avatar', 'photo', 'thumbnail', 'banner', 'background'];
@@ -782,6 +794,12 @@ export function isImageField(name, schema) {
 
   // Check if schema explicitly marks it as image
   if (schema.format === 'image' || schema.widget === 'image') {
+    return true;
+  }
+
+  // Astro's image() reaches the editor as the schema parser's stand-in,
+  // z.string().describe('Image path') (server/utils/schema-parser.js).
+  if (schema.description === 'Image path') {
     return true;
   }
 
