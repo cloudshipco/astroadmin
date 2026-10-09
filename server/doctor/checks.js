@@ -7,9 +7,14 @@
  * use it yet". Phases run in order: `static` (no build), `build` (makes or
  * accepts the build), `built` (reads the built HTML).
  *
- * run(context) returns { severity, message, details? } where severity is
- * 'pass' | 'warn' | 'fail' | 'skip' (not applicable here). Only 'fail' makes the
- * CLI exit non-zero, so reserve it for what stops a publish or the editor.
+ * run(context) returns { severity, message, details?, title? } where severity
+ * is 'pass' | 'warn' | 'fail' | 'skip' (not applicable here). Only 'fail' makes
+ * the CLI exit non-zero, so reserve it for what stops a publish or the editor.
+ *
+ * `title` names the check neutrally; `problemTitle` is what a warn or fail is
+ * reported as (the editor's notice lists failing checks by title alone, so a
+ * title like "names match a field" read as a pass there). A run may return its
+ * own `title` when the problem it found is a different one.
  */
 
 // Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
@@ -56,6 +61,38 @@ export const NO_HTML_MESSAGE = 'The build has no HTML pages, so there was nothin
 const percent = (part, whole) => `${Math.round((part / whole) * 100)}%`;
 const listSome = (items) => items.slice(0, MAX_LISTED).concat(items.length > MAX_LISTED ? [`… and ${items.length - MAX_LISTED} more`] : []);
 
+/**
+ * Where the doctor's build output goes: the system temp directory when it is on
+ * the site's filesystem, else a directory inside the site's node_modules.
+ * Astro moves prerendered assets from the site's .astro into the outDir with
+ * rename(), which fails with EXDEV across filesystems (a tmpfs /tmp on Linux,
+ * a VM's shared folder). Exported for the tests.
+ * @param {string} projectRoot
+ * @param {string} [tempDir]
+ */
+export function doctorOutDirParent(projectRoot, tempDir = os.tmpdir()) {
+  try {
+    if (fs.statSync(tempDir).dev === fs.statSync(projectRoot).dev) return tempDir;
+  } catch {
+    // fall through to the site's own directory
+  }
+  // Every site ignores node_modules, and .cache is where tools (Vite among
+  // them) keep their scratch files.
+  // A symlinked node_modules may itself be elsewhere: then the site's root.
+  const parent = path.join(projectRoot, 'node_modules', '.cache');
+  try {
+    fs.mkdirSync(parent); // throws without node_modules: never create one
+  } catch {
+    // exists already, or no node_modules
+  }
+  try {
+    if (fs.statSync(parent).dev === fs.statSync(projectRoot).dev) return parent;
+  } catch {
+    // no writable node_modules
+  }
+  return projectRoot;
+}
+
 /** Built checks have nothing to read when there is no build. */
 function noBuild(context) {
   return { severity: 'skip', message: context.buildSkippedReason || 'No build to check.' };
@@ -83,10 +120,16 @@ export const CHECKS = [
     id: 'hosted-preview-config',
     since: '1.3.0',
     phase: 'static',
-    title: 'Hosted preview config',
+    title: 'Hosted editor: preview config',
+    problemTitle: 'Hosted editor: preview config incomplete',
     async run(context) {
       const facts = await context.astroConfig();
       if (!facts.file || facts.parseError) return { severity: 'skip', message: 'No readable astro.config.' };
+      // Neither setting at all: a plain local setup, where the preview is not
+      // behind a proxy and neither is needed.
+      if (facts.allowedHosts === 'missing' && facts.hmr === 'enabled') {
+        return { severity: 'skip', message: 'Applies only to the hosted editor (a preview behind a proxy): vite.server.allowedHosts and hmr: false are not set, which is right for a local setup.' };
+      }
       const problems = [];
       if (facts.allowedHosts === 'missing') problems.push('vite.server.allowedHosts is not set, so Vite refuses the proxied preview host');
       if (facts.hmr === 'enabled') problems.push('vite.server.hmr is not false; the editor refreshes the preview itself and HMR cannot cross the preview proxy');
@@ -95,8 +138,7 @@ export const CHECKS = [
         problems.push(`could not verify vite.server ${unknown.join(' and ')}: the value is not a plain literal, or a spread or computed key may override it; check by hand`);
       }
       if (problems.length > 0) {
-        const message = problems.join('; ');
-        return { severity: 'warn', message: `${message[0].toUpperCase()}${message.slice(1)}.` };
+        return { severity: 'warn', message: `For the hosted editor: ${problems.join('; ')}.` };
       }
       return { severity: 'pass', message: 'vite.server.allowedHosts is set and hmr is false.' };
     },
@@ -105,11 +147,12 @@ export const CHECKS = [
     id: 'committed-lockfile',
     since: '1.3.0',
     phase: 'static',
-    title: 'Committed bun.lock',
+    title: 'Committed lockfile',
+    problemTitle: 'No lockfile committed',
     async run(context) {
-      if (!(await isGitRepository(context.projectRoot))) return { severity: 'warn', message: 'The project is not a git repository.' };
+      if (!(await isGitRepository(context.projectRoot))) return { severity: 'warn', title: 'Not a git repository', message: 'The project is not a git repository.' };
       const lockfile = await findCommittedLockfile(context.projectRoot);
-      if (!lockfile) return { severity: 'warn', message: 'No bun.lock is committed (in HEAD), so a hosted editor installs whatever versions resolve today.' };
+      if (!lockfile) return { severity: 'warn', message: 'No lockfile (bun.lock, package-lock.json, yarn.lock or pnpm-lock.yaml) is committed (in HEAD), so an install, a hosted editor\'s included, gets whatever versions resolve today.' };
       return { severity: 'pass', message: `${lockfile} is committed.` };
     },
   },
@@ -118,6 +161,7 @@ export const CHECKS = [
     since: '1.4.8',
     phase: 'static',
     title: 'No git submodules',
+    problemTitle: 'Git submodules in the repository',
     async run(context) {
       if (!(await isGitRepository(context.projectRoot))) return { severity: 'skip', message: 'The project is not a git repository.' };
       let gitlinks;
@@ -137,6 +181,7 @@ export const CHECKS = [
     since: '1.4.8',
     phase: 'static',
     title: 'No workspace packages linked into the repo',
+    problemTitle: 'Workspace package linked into the repo',
     async run(context) {
       if (!(await isGitRepository(context.projectRoot))) return { severity: 'skip', message: 'The project is not a git repository.' };
       const workspaceLink = await findWorkspaceLinkForProject(context.projectRoot);
@@ -151,6 +196,7 @@ export const CHECKS = [
     since: '1.4.8',
     phase: 'static',
     title: 'sharp loads',
+    problemTitle: 'sharp does not load',
     async run(context) {
       const usedIn = await findAstroAssetsUse(context.projectRoot);
       if (!usedIn) return { severity: 'skip', message: 'The site does not use astro:assets or image(), so it does not need sharp.' };
@@ -166,13 +212,14 @@ export const CHECKS = [
     since: '1.4.8',
     phase: 'build',
     title: 'The build runs',
+    problemTitle: 'The build failed',
     async run(context) {
       if (context.distDir) {
         if ((await listBuiltPagePaths(context.distDir)).length === 0) {
           context.buildSkippedReason = NO_HTML_MESSAGE;
           const given = context.distDir;
           context.distDir = null;
-          return { severity: 'fail', message: `${given} is missing or has no HTML pages, so the built pages could not be checked.` };
+          return { severity: 'fail', title: 'The given build has no HTML pages', message: `${given} is missing or has no HTML pages, so the built pages could not be checked.` };
         }
         return { severity: 'skip', message: `Using the existing build in ${context.distDir}.` };
       }
@@ -188,7 +235,7 @@ export const CHECKS = [
         context.buildSkippedReason = 'Not built: astro is not installed.';
         return { severity: 'fail', message: 'astro is not installed in the site (no node_modules/astro in its directory or above it in the repository); run the site\'s install first.' };
       }
-      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-doctor-'));
+      const outDir = fs.mkdtempSync(path.join(doctorOutDirParent(context.projectRoot), 'astroadmin-doctor-'));
       context.cleanups.push(async () => fs.rmSync(outDir, { recursive: true, force: true }));
       const command = [bunExecutable(), '--no-install', '--bun', astroBin, 'build', '--outDir', outDir].map(shellQuote).join(' ');
       const result = await runCommand(command, context.projectRoot, BUILD_TIMEOUT_MS, buildEnvironment());
@@ -199,7 +246,7 @@ export const CHECKS = [
       }
       if ((await listBuiltPagePaths(outDir)).length === 0) {
         context.buildSkippedReason = NO_HTML_MESSAGE;
-        return { severity: 'fail', message: 'The build succeeded but wrote no HTML pages.' };
+        return { severity: 'fail', title: 'The build wrote no HTML pages', message: 'The build succeeded but wrote no HTML pages.' };
       }
       context.distDir = outDir;
       return { severity: 'pass', message: `astro build (${path.relative(context.projectRoot, astroBin) || astroBin}) succeeded.` };
@@ -210,6 +257,7 @@ export const CHECKS = [
     since: '0.2.0',
     phase: 'built',
     title: 'Block roots carry data-block-index',
+    problemTitle: 'Blocks without the right data-block-index',
     async run(context) {
       if (!context.distDir) return noBuild(context);
       const { entries, pages } = await context.built();
@@ -240,6 +288,7 @@ export const CHECKS = [
     since: '1.4.1',
     phase: 'built',
     title: 'Click-to-edit coverage',
+    problemTitle: 'Click-to-edit coverage gaps',
     async run(context) {
       if (!context.distDir) return noBuild(context);
       const { entries, pages } = await context.built();
@@ -274,7 +323,8 @@ export const CHECKS = [
     id: 'click-to-edit-names',
     since: '1.4.1',
     phase: 'built',
-    title: 'data-aa-field names match a field',
+    title: 'data-aa-field names',
+    problemTitle: 'data-aa-field names that match no field',
     async run(context) {
       if (!context.distDir) return noBuild(context);
       const { entries, pages } = await context.built();
@@ -290,6 +340,7 @@ export const CHECKS = [
       if (cards.length > 0) problems.push(`data-aa-entry is not supported in this version; it is ignored on ${cards.length} ${cards.length === 1 ? 'page' : 'pages'}, and the annotations inside it are not counted as coverage (a click on one focuses the open entry's field of that name).`);
       return {
         severity: 'warn',
+        ...(unknown.length === 0 ? { title: 'data-aa-entry is not supported' } : {}),
         message: problems.join(' '),
         details: listSome([
           ...cards.map((item) => `${item.pagePath}: ${item.cards} data-aa-entry ${item.cards === 1 ? 'element' : 'elements'}`),
@@ -303,6 +354,7 @@ export const CHECKS = [
     since: '1.4.1',
     phase: 'built',
     title: 'No data-aa-field on links',
+    problemTitle: 'data-aa-field on links',
     async run(context) {
       if (!context.distDir) return noBuild(context);
       const { pages } = await context.built();

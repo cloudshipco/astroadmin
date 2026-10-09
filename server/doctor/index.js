@@ -76,11 +76,14 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
       try {
         outcome = await definition.run(context);
       } catch (error) {
-        outcome = { severity: 'warn', message: `The check could not run: ${error.message}` };
+        outcome = { severity: 'warn', title: `${definition.title} (could not run)`, message: `The check could not run: ${error.message}` };
       }
+      // A warn or fail is reported by a title that states the problem (the
+      // editor's notice lists failing checks by title alone).
+      const failing = outcome.severity === 'warn' || outcome.severity === 'fail';
       results.push({
         id: definition.id,
-        title: definition.title,
+        title: failing ? (outcome.title || definition.problemTitle || definition.title) : definition.title,
         since: definition.since,
         severity: outcome.severity,
         message: outcome.message,

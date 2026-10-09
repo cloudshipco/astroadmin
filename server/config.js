@@ -289,6 +289,35 @@ if (!process.env.ASTROADMIN_DB) {
   process.env.ASTROADMIN_DB = defaultConfig.database.path;
 }
 
+// The port `astroadmin dev` starts Astro on when preview.url names none it can use.
+export const DEFAULT_ASTRO_PORT = 4321;
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '0.0.0.0']);
+
+/**
+ * The port `astroadmin dev` should start the Astro dev server on so that the
+ * preview URL it prints (preview.url) is true: the URL's port when it names a
+ * port on this machine. Otherwise Astro starts on DEFAULT_ASTRO_PORT and
+ * `warning` says why the two do not agree.
+ * @param {string} previewUrl
+ * @returns {{port: number, warning: string|null}}
+ */
+export function astroDevPortFor(previewUrl) {
+  const fix = `Set preview.url to http://localhost:<port> in astroadmin.config.js, or pass --no-astro and start astro dev yourself.`;
+  let url;
+  try {
+    url = new URL(previewUrl);
+  } catch {
+    return { port: DEFAULT_ASTRO_PORT, warning: `preview.url (${previewUrl}) is not a URL, so Astro starts on port ${DEFAULT_ASTRO_PORT} and the preview will not reach it. ${fix}` };
+  }
+  if (!LOCAL_HOSTS.has(url.hostname)) {
+    return { port: DEFAULT_ASTRO_PORT, warning: `preview.url (${previewUrl}) is not on this machine, so Astro starts on port ${DEFAULT_ASTRO_PORT}; the preview shows only if ${url.origin} reaches it (through a proxy, say). ${fix}` };
+  }
+  if (!url.port) {
+    return { port: DEFAULT_ASTRO_PORT, warning: `preview.url (${previewUrl}) names no port, so Astro starts on port ${DEFAULT_ASTRO_PORT} and the preview will not reach it. ${fix}` };
+  }
+  return { port: Number(url.port), warning: null };
+}
+
 // Export default config for synchronous access
 // Note: This won't include user overrides until getConfig() is called
 export const config = defaultConfig;

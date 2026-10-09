@@ -21,6 +21,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import matter from 'gray-matter';
 import { getConfig } from '../config.js';
+import { dateFieldsFromSchema, orderLike, serializeJson, serializeMarkdown } from './content-format.js';
 import { loadSchemas } from './collections.js';
 import {
   getGlobBaseDirectory,
@@ -64,6 +65,8 @@ async function getCollectionLoaderInfo(collection) {
     baseDirectory: getGlobBaseDirectory(collection, schema),
     patterns: getGlobPatterns(schema),
     type: schema.type || 'content',
+    // The parsed JSON schema: which fields are dates, for the serialiser.
+    jsonSchema: schema.schema || null,
   };
 }
 
@@ -140,18 +143,23 @@ async function atomicWriteFile(filePath, content) {
  * and lookups report "not found" rather than ENOENT.
  */
 async function readFileCollectionArray(filePath, { missingOk = false } = {}) {
+  return (await readFileCollection(filePath, { missingOk })).array;
+}
+
+/** The array and the text it was read from (null for a missing file). */
+async function readFileCollection(filePath, { missingOk = false } = {}) {
   let raw;
   try {
     raw = await fs.readFile(filePath, 'utf-8');
   } catch (error) {
-    if (missingOk && error.code === 'ENOENT') return [];
+    if (missingOk && error.code === 'ENOENT') return { array: [], raw: null };
     throw error;
   }
-  const arr = JSON.parse(raw);
-  if (!Array.isArray(arr)) {
+  const array = JSON.parse(raw);
+  if (!Array.isArray(array)) {
     throw new Error(`File collection is not an array: ${filePath}`);
   }
-  return arr;
+  return { array, raw };
 }
 
 /** Entry identity within a file() collection array: id, falling back to slug. */
@@ -159,8 +167,23 @@ function findEntryIndex(arr, entryId) {
   return arr.findIndex((item) => item.id === entryId || item.slug === entryId);
 }
 
-function serializeFileCollection(arr) {
-  return `${JSON.stringify(arr, null, 2)}\n`;
+/**
+ * The array as file text. Given the text it replaces, unchanged entries keep
+ * their original text and changed ones follow the file's style
+ * (content-format.js); without it, plain two-space JSON.
+ */
+function serializeFileCollection(arr, originalText = null) {
+  return serializeJson(arr, originalText);
+}
+
+/** The current text of a file, or null if it does not exist. */
+async function readExistingText(filePath) {
+  try {
+    return await fs.readFile(filePath, 'utf-8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,14 +224,15 @@ async function readFileCollectionEntry(filePath, entryId) {
 }
 
 /**
- * Extension for a brand-new entry: data is always JSON; content gets whatever
- * markdown flavour the collection's loader pattern expects (.mdx only when the
- * pattern excludes .md, e.g. '**' + '/*.mdx').
+ * Extension for a brand-new entry: one the collection's loader pattern can
+ * read, preferring JSON for data and markdown (.md, then .mdx) for content.
+ * The pattern wins over the type: the editor sends type 'content' for any
+ * glob() collection, and a .md file in a '**' + '/*.json' collection is never
+ * loaded.
  */
 function newEntryExtension(effectiveType, allowedExtensions) {
-  if (effectiveType === 'data') return '.json';
-  if (!allowedExtensions.includes('.md') && allowedExtensions.includes('.mdx')) return '.mdx';
-  return '.md';
+  const preference = effectiveType === 'data' ? ['.json', '.md', '.mdx'] : ['.md', '.mdx', '.json'];
+  return preference.find((extension) => allowedExtensions.includes(extension)) || preference[0];
 }
 
 export async function writeContent(collection, slug, { data, body, type }, locale = null) {
@@ -243,21 +267,34 @@ export async function writeContent(collection, slug, { data, body, type }, local
     );
   }
 
-  let content;
-  if (path.extname(filePath).toLowerCase() === '.json') {
-    // A JSON file can't hold a markdown body — fail loudly rather than
-    // silently dropping it.
-    if (typeof body === 'string' && body.trim() !== '') {
-      throw new Error(
-        `Entry ${collection}/${slug} is stored as JSON (${filePath}); a markdown body cannot be saved into it`
-      );
-    }
-    content = `${JSON.stringify(data, null, 2)}\n`;
-  } else {
-    content = matter.stringify(body || '', data);
+  const isJson = path.extname(filePath).toLowerCase() === '.json';
+  // A JSON file can't hold a markdown body — fail loudly rather than
+  // silently dropping it.
+  if (isJson && typeof body === 'string' && body.trim() !== '') {
+    throw new Error(
+      `Entry ${collection}/${slug} is stored as JSON (${filePath}); a markdown body cannot be saved into it`
+    );
   }
 
-  await withFileWriteQueue(filePath, () => atomicWriteFile(filePath, content));
+  // Serialised against the file it replaces, inside the queue so the original
+  // is the latest write: existing keys keep their place, unchanged values their
+  // text, and dates their type (content-format.js).
+  await withFileWriteQueue(filePath, async () => {
+    const originalText = await readExistingText(filePath);
+    let content;
+    if (isJson) {
+      let original = null;
+      try {
+        original = originalText === null ? null : JSON.parse(originalText);
+      } catch {
+        original = null;
+      }
+      content = serializeJson(orderLike(original, data), originalText);
+    } else {
+      content = serializeMarkdown(body || '', data, originalText, { dateFields: dateFieldsFromSchema(info.jsonSchema) });
+    }
+    await atomicWriteFile(filePath, content);
+  });
   return { filePath, locale };
 }
 
@@ -273,15 +310,17 @@ export async function writeFileCollectionArray(filePath, array) {
 
 async function writeFileCollectionEntry(filePath, entryId, entryData) {
   await withFileWriteQueue(filePath, async () => {
-    const arr = await readFileCollectionArray(filePath, { missingOk: true });
+    const { array: arr, raw } = await readFileCollection(filePath, { missingOk: true });
     const index = findEntryIndex(arr, entryId);
     const next = { ...entryData, id: entryId };
     if (index >= 0) {
-      arr[index] = next; // preserve array order (position)
+      // Preserve array order (position), and the entry's own key order: the
+      // editor sends `id` last and keys in form order.
+      arr[index] = orderLike(arr[index], next);
     } else {
       arr.push(next);
     }
-    await atomicWriteFile(filePath, serializeFileCollection(arr));
+    await atomicWriteFile(filePath, serializeFileCollection(arr, raw));
   });
   return { filePath, locale: null };
 }
@@ -310,13 +349,13 @@ export async function deleteContent(collection, slug, locale = null) {
 
 async function deleteFileCollectionEntry(filePath, entryId) {
   await withFileWriteQueue(filePath, async () => {
-    const arr = await readFileCollectionArray(filePath, { missingOk: true });
+    const { array: arr, raw } = await readFileCollection(filePath, { missingOk: true });
     const index = findEntryIndex(arr, entryId);
     if (index < 0) {
       throw new Error(`Content not found: ${entryId}`);
     }
     arr.splice(index, 1);
-    await atomicWriteFile(filePath, serializeFileCollection(arr));
+    await atomicWriteFile(filePath, serializeFileCollection(arr, raw));
   });
   return { deleted: filePath, locale: null };
 }

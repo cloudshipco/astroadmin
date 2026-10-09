@@ -1,0 +1,129 @@
+/**
+ * The integration's /component-preview/[block]/[...slug] route
+ * (integration/preview-route.astro), in a real `astro dev` of a scratch site
+ * started through Astro's own dev() API:
+ *
+ * - a site with no src/styles/global.css still gets the preview (the route
+ *   imported that file unconditionally and answered 500 without it);
+ * - the block component receives the synthetic block both as `block` and
+ *   spread as props (docs/blocks.md's components take the fields as props);
+ * - `?field=` names the block field that carries the ids, for a block type
+ *   whose field is not `<singular type>Ids`.
+ *
+ *   bun tests/component-preview.test.js     (~10 s; port 4728)
+ */
+
+import assert from 'assert';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+const repoRoot = path.resolve(import.meta.dir, '..');
+const siteDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-component-preview-')));
+const PORT = 4728;
+
+function writeFile(relativePath, content) {
+  const fullPath = path.join(siteDir, relativePath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, content);
+}
+
+writeFile('package.json', JSON.stringify({ name: 'example-site', type: 'module' }));
+writeFile('astro.config.mjs', `import { defineConfig } from 'astro/config';
+import astroadmin from 'astroadmin/integration';
+export default defineConfig({ integrations: [astroadmin()] });
+`);
+writeFile('src/content.config.ts', `import { defineCollection } from 'astro:content';
+import { glob, file } from 'astro/loaders';
+import { z } from 'astro/zod';
+export const collections = {
+  pages: defineCollection({ loader: glob({ pattern: '**/*.md', base: './src/content/pages' }), schema: z.object({ title: z.string() }) }),
+  team: defineCollection({ loader: file('src/content/team.json'), schema: z.object({ name: z.string() }) }),
+  testimonials: defineCollection({ loader: file('src/content/testimonials.json'), schema: z.object({ quote: z.string() }) }),
+};
+`);
+writeFile('src/content/pages/home.md', '---\ntitle: Home\n---\n');
+writeFile('src/content/team.json', JSON.stringify([{ id: 'ada', name: 'Ada from the team' }]));
+writeFile('src/content/testimonials.json', JSON.stringify([{ id: 'sue', quote: 'A quote from Sue' }]));
+writeFile('src/pages/index.astro', '<h1>Home</h1>\n');
+// Spread props, as docs/blocks.md writes components.
+writeFile('src/components/blocks/TeamBlock.astro', `---
+import { getEntry } from 'astro:content';
+const { teamIds = [] } = Astro.props;
+const members = (await Promise.all(teamIds.map((id) => getEntry('team', id)))).filter(Boolean);
+---
+<ul>{members.map((member) => <li class="member">{member.data.name}</li>)}</ul>
+`);
+// The \`block\` prop, reading a field named by ?field=.
+writeFile('src/components/blocks/FeaturedQuotesBlock.astro', `---
+import { getEntry } from 'astro:content';
+const { block } = Astro.props;
+const quotes = (await Promise.all((block.testimonialIds || []).map((id) => getEntry('testimonials', id)))).filter(Boolean);
+---
+<ul>{quotes.map((item) => <li class="quote">{item.data.quote}</li>)}</ul>
+`);
+fs.mkdirSync(path.join(siteDir, 'node_modules'));
+for (const name of fs.readdirSync(path.join(repoRoot, 'node_modules'))) {
+  fs.symlinkSync(path.join(repoRoot, 'node_modules', name), path.join(siteDir, 'node_modules', name));
+}
+// A copy, as an install has it: the integration inside the site's node_modules
+// (a symlink out of the site root makes Vite mis-key the route's own <style>).
+fs.mkdirSync(path.join(siteDir, 'node_modules', 'astroadmin'));
+fs.copyFileSync(path.join(repoRoot, 'package.json'), path.join(siteDir, 'node_modules', 'astroadmin', 'package.json'));
+fs.cpSync(path.join(repoRoot, 'integration'), path.join(siteDir, 'node_modules', 'astroadmin', 'integration'), { recursive: true });
+
+let passed = 0;
+async function check(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`✅ ${name}`);
+  } catch (error) {
+    console.error(`❌ ${name}\n   ${error.stack || error.message}`);
+    process.exitCode = 1;
+  }
+}
+
+let server = null;
+try {
+  console.log('\n🧪 Component preview route\n' + '='.repeat(40));
+  const { dev } = await import(path.join(siteDir, 'node_modules/astro/dist/core/index.js')).catch(() => import('astro'));
+  server = await dev({ root: siteDir, logLevel: 'error', server: { port: PORT, host: 'localhost' } });
+  const get = async (pathname) => {
+    const response = await fetch(`http://localhost:${PORT}${pathname}`);
+    return { status: response.status, text: await response.text() };
+  };
+
+  await check('the dev server is up (positive control)', async () => {
+    const home = await get('/');
+    assert.equal(home.status, 200);
+    assert.match(home.text, /<h1[^>]*>Home<\/h1>/);
+  });
+
+  await check('a site with no src/styles/global.css gets the preview, its component given the block as props', async () => {
+    assert.ok(!fs.existsSync(path.join(siteDir, 'src/styles/global.css')));
+    const preview = await get('/component-preview/team/ada');
+    assert.equal(preview.status, 200, preview.text.slice(0, 400));
+    assert.match(preview.text, /<li class="member"[^>]*>Ada from the team<\/li>/);
+  });
+
+  await check('?field= names the ids field; the component also gets `block`; a multi-word type finds FeaturedQuotesBlock', async () => {
+    const preview = await get('/component-preview/featuredquotes/sue?field=testimonialIds');
+    assert.equal(preview.status, 200, preview.text.slice(0, 400));
+    assert.match(preview.text, /<li class="quote"[^>]*>A quote from Sue<\/li>/);
+  });
+
+  await check('a global.css, when the site has one, is still loaded', async () => {
+    writeFile('src/styles/global.css', '.member { color: rgb(1, 2, 3); }\n');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const preview = await get('/component-preview/team/ada');
+    assert.equal(preview.status, 200);
+    assert.match(preview.text, /global\.css|rgb\(1, 2, 3\)/, 'the stylesheet is linked or inlined');
+  });
+
+  console.log('='.repeat(40));
+  console.log(`\n📊 ${passed} checks passed.\n`);
+} finally {
+  if (server) await server.stop();
+  fs.rmSync(siteDir, { recursive: true, force: true });
+}

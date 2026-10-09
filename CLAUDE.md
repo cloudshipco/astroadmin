@@ -169,6 +169,24 @@ runner aggregating them). Most run server-less and need env vars:
   and the origin rule behind a proxy (Host + X-Forwarded-Proto, or ALLOWED_ORIGINS).
   `server/utils/same-origin.js`. SameSite=Strict is per SITE: the hosted preview subdomain
   receives the session cookie.
+- `bun tests/content-round-trip.test.js` — a save changes only what the editor changed
+  (`server/utils/content-format.js`): existing keys keep their place (a file() entry's `id`
+  too), untouched file() entries and frontmatter keys stay byte-identical, inline JSON
+  arrays stay inline, an unquoted YAML date stays an unquoted Date (a quoted one stays a
+  string), a NEW value in a schema date field is written as an unquoted date, and a new
+  entry in a JSON-only glob() collection is a `.json` file. Every preserved rendering is
+  parsed back and compared; on any mismatch the plain serialisation is written.
+- `bun tests/cli-dev.test.js` — `astroadmin dev` starts Astro on the port in
+  `preview.url` (warning when it cannot), and stopping it frees that port even when
+  Astro 7 detects an agent and would daemonise (`--ignore-lock`). ~15 s; ports 3727,
+  3728, 4727, 4729.
+- `bun tests/doctor-cross-device.test.js` — the doctor's build with TMPDIR on another
+  filesystem (an hdiutil disk image; macOS only, says NOT RUN elsewhere): no EXDEV. ~15 s.
+- `bun tests/route-detection.test.js` — auto-detected preview routes are only declared
+  collections (no `slugs -> /{slug}` guesses), and `teamIds` finds a collection named `team`.
+- `bun tests/component-preview.test.js` — the integration's `/component-preview/` route in
+  a real `astro dev` (Astro's dev() API, port 4728): no `src/styles/global.css` needed,
+  props spread and as `block`, `?field=`. ~10 s.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 

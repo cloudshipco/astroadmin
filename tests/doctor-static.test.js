@@ -157,6 +157,34 @@ try {
     assert.equal((await staticResults(siteDir))['committed-lockfile'].severity, 'warn');
   });
 
+  await check('lockfile: the site\'s own package manager\'s lockfile passes (package-lock.json, yarn.lock, pnpm-lock.yaml)', async () => {
+    for (const name of ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml']) {
+      const siteDir = makeSite((dir) => {
+        fs.rmSync(path.join(dir, 'bun.lock'));
+        writeFile(dir, name, '{}\n');
+      });
+      const result = (await staticResults(siteDir))['committed-lockfile'];
+      assert.equal(result.severity, 'pass', `${name}: ${JSON.stringify(result)}`);
+      assert.match(result.message, new RegExp(name.replace('.', '\\.')));
+    }
+  });
+
+  await check('lockfile MUTATION: no lockfile at all warns, and the warning\'s title states the problem', async () => {
+    const siteDir = makeSite((dir) => fs.rmSync(path.join(dir, 'bun.lock')));
+    const result = (await staticResults(siteDir))['committed-lockfile'];
+    assert.equal(result.severity, 'warn');
+    assert.equal(result.title, 'No lockfile committed');
+    assert.equal(healthy['committed-lockfile'].title, 'Committed lockfile', 'a pass keeps the neutral title');
+  });
+
+  await check('preview config: a plain local config (neither setting) is skipped as hosted-editor-only, not warned', async () => {
+    const local = `import { defineConfig } from 'astro/config';\nimport astroadmin from 'astroadmin/integration';\nexport default defineConfig({ integrations: [astroadmin()] });\n`;
+    const result = (await staticResults(makeSite((dir) => writeFile(dir, 'astro.config.mjs', local))))['hosted-preview-config'];
+    assert.equal(result.severity, 'skip', JSON.stringify(result));
+    assert.match(result.message, /hosted editor/i);
+    assert.match(result.title, /hosted/i);
+  });
+
   await check('submodule MUTATION: a gitlink (mode 160000) fails', async () => {
     const siteDir = makeSite();
     // After the first commit: `git add -A` would stage the missing path's removal.

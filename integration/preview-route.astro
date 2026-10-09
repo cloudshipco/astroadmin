@@ -7,47 +7,65 @@
  *
  * Route: /component-preview/[block]/[...slug]
  * Example: /component-preview/testimonials/sue-altarelli
+ *          /component-preview/featuredquotes/sue?field=testimonialIds
  *
- * The route creates a synthetic block object and renders the matching component.
+ * The convention:
+ * - The component is the file in src/components/blocks/ whose name, less a
+ *   `Block` suffix, matches the block type ignoring case and punctuation:
+ *   `team` -> TeamBlock.astro (or Team.astro); `featured-quotes` ->
+ *   FeaturedQuotesBlock.astro. A *Block.astro file wins over a plain one.
+ * - It receives a synthetic block `{ type, <field>: [ids] }` both as the
+ *   `block` prop and spread as props (so `const { teamIds } = Astro.props`
+ *   works as well as `Astro.props.block.teamIds`), with `index` 0.
+ * - <field> is `?field=` when given (the editor knows the block field that
+ *   refers to the collection), else the type made singular plus `Ids`
+ *   (`testimonials` -> `testimonialIds`, `team` -> `teamIds`).
+ * - The site's src/styles/global.css is loaded when it exists; nothing else is
+ *   assumed about the site's styles.
  */
 
 // Server-render this route (can't enumerate all possible preview paths)
 export const prerender = false;
 
-// Import site's global styles - Vite resolves from project root
-import '/src/styles/global.css';
+// The site's global styles, when it has that file. A glob, not an import, so a
+// site without it still gets the preview (an import 500s the route).
+import.meta.glob('/src/styles/global.css', { eager: true });
 
 // Get route params
 const { block, slug } = Astro.params;
 
-// Parse slug (might be comma-separated for multiple IDs)
+// Parse slug (might be several ids, slash-separated)
 const slugs = slug?.split('/').filter(Boolean) || [];
 
 // Dynamically discover block components from the site
 // Use Vite's glob import - the leading slash means project root
-const blockModules = import.meta.glob('/src/components/blocks/*Block.astro', { eager: true });
+const blockModules = import.meta.glob('/src/components/blocks/*.astro', { eager: true });
 
-// Build component map: testimonials -> TestimonialsBlock
+/** `FeaturedQuotesBlock`, `featured-quotes`, `featuredQuotes` -> `featuredquotes`. */
+function normaliseType(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 /** @type {Record<string, any>} */
 const blockComponents: Record<string, any> = {};
+const fromBlockSuffix = new Set<string>();
 
 for (const [modulePath, moduleExports] of Object.entries(blockModules)) {
-  // Extract block type from filename: TestimonialsBlock.astro -> testimonials
-  const filename = modulePath.split('/').pop()?.replace('.astro', '') || '';
-
-  // Convert TestimonialsBlock -> testimonials (lowercase, remove 'Block' suffix)
-  let blockType = filename.replace(/Block$/i, '').toLowerCase();
-
+  const filename = modulePath.split('/').pop()?.replace(/\.astro$/, '') || '';
+  const hasSuffix = /Block$/i.test(filename);
+  const blockType = normaliseType(filename.replace(/Block$/i, ''));
+  // TeamBlock.astro wins over Team.astro.
+  if (blockComponents[blockType] && fromBlockSuffix.has(blockType) && !hasSuffix) continue;
   blockComponents[blockType] = (moduleExports as any).default;
+  if (hasSuffix) fromBlockSuffix.add(blockType);
 }
 
 // Build synthetic block data for the component
-// Maps: testimonials -> testimonialIds (singular + "Ids")
-function buildSyntheticBlock(blockType: string, ids: string[]) {
+function buildSyntheticBlock(blockType: string, ids: string[], field: string | null) {
   // Convert plural block type to singular field name
-  // testimonials -> testimonial, team -> team
+  // testimonials -> testimonialIds, team -> teamIds
   const singular = blockType.endsWith('s') ? blockType.slice(0, -1) : blockType;
-  const fieldName = `${singular}Ids`;
+  const fieldName = field && /^[A-Za-z_$][\w$]*$/.test(field) ? field : `${singular}Ids`;
 
   return {
     type: blockType,
@@ -55,8 +73,9 @@ function buildSyntheticBlock(blockType: string, ids: string[]) {
   };
 }
 
-const syntheticBlock = buildSyntheticBlock(block || '', slugs);
-const Component = block ? blockComponents[block] : null;
+const field = Astro.url.searchParams.get('field');
+const syntheticBlock = buildSyntheticBlock(block || '', slugs, field);
+const Component = block ? blockComponents[normaliseType(block)] : null;
 
 // Generate expected component path for error message
 const expectedPath = block
@@ -93,7 +112,7 @@ const expectedPath = block
 <body>
   <main>
     {Component ? (
-      <Component block={syntheticBlock} />
+      <Component {...syntheticBlock} block={syntheticBlock} index={0} />
     ) : (
       <div class="component-preview-error">
         <p>No component found for block type: <strong>{block}</strong></p>

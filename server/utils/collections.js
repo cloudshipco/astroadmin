@@ -236,7 +236,12 @@ function buildCollectionBlockMap(schemas) {
   for (const [schemaName, schemaInfo] of Object.entries(schemas)) {
     const refs = schemaInfo.blockCollectionRefs || {};
 
-    for (const [collectionName, blockRefs] of Object.entries(refs)) {
+    for (const [inferredName, blockRefs] of Object.entries(refs)) {
+      // The schema parser pluralises a field's base (`teamIds` -> `teams`);
+      // a collection named in the singular (`team`) is the one meant when it
+      // is declared and the plural is not.
+      const singular = inferredName.endsWith('s') ? inferredName.slice(0, -1) : null;
+      const collectionName = !schemas[inferredName] && singular && schemas[singular] ? singular : inferredName;
       if (!collectionBlockMap[collectionName]) {
         collectionBlockMap[collectionName] = [];
       }

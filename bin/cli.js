@@ -88,9 +88,11 @@ process.on('SIGTERM', cleanup);
  * @returns {Promise<void>}
  */
 async function maybeStartAstro(projectRoot, previewUrl) {
-  // Extract port from preview URL
-  const portMatch = previewUrl.match(/:(\d+)/);
-  const previewPort = portMatch ? parseInt(portMatch[1], 10) : 4321;
+  // Start Astro where preview.url says the preview is, so the URL printed at
+  // startup (and loaded in the editor's iframe) is the server we started.
+  const { astroDevPortFor } = await import('../server/config.js');
+  const { port: previewPort, warning } = astroDevPortFor(previewUrl);
+  if (warning) console.warn(`\n⚠️  ${warning}\n`);
 
   // Check if Astro is already running
   const isRunning = await checkPort(previewPort);
@@ -111,7 +113,12 @@ async function maybeStartAstro(projectRoot, previewUrl) {
     console.error(`❌ Not starting the Astro dev server: ${ASTRO_NOT_INSTALLED_MESSAGE}`);
     return;
   }
-  astroProcess = spawn(bunExecutable(), ['--no-install', '--bun', astroBin, 'dev', '--port', String(previewPort)], {
+  // --ignore-lock keeps Astro in the foreground, as our child: Astro 7's
+  // `astro dev` otherwise daemonises itself when it detects an AI agent
+  // (CLAUDECODE and the like), and stopping astroadmin left it serving. The
+  // lock it skips only guards against a second dev server, and the port check
+  // above already found none. Older Astro ignores the unknown flag.
+  astroProcess = spawn(bunExecutable(), ['--no-install', '--bun', astroBin, 'dev', '--port', String(previewPort), '--ignore-lock'], {
     cwd: projectRoot,
     stdio: ['inherit', 'pipe', 'pipe'],
   });
@@ -184,7 +191,7 @@ program
       console.log(`\n📁 Project root: ${projectRoot}`);
 
       // Dynamic import to ensure PROJECT_ROOT is set before config loads
-      const { validateProject, config } = await import('../server/config.js');
+      const { validateProject, getConfig } = await import('../server/config.js');
 
       // Validate project structure
       const validation = await validateProject();
@@ -201,9 +208,10 @@ program
         process.exit(1);
       }
 
-      // Start Astro dev server if --no-astro was not specified
+      // Start Astro dev server if --no-astro was not specified. The MERGED
+      // config: preview.url usually comes from astroadmin.config.js.
       if (options.astro !== false) {
-        await maybeStartAstro(projectRoot, config.preview.url);
+        await maybeStartAstro(projectRoot, (await getConfig()).preview.url);
       }
 
       // Start server
@@ -233,7 +241,7 @@ program
     console.log(`\n📁 Project root: ${projectRoot}`);
 
     try {
-      const { validateProject, config } = await import('../server/config.js');
+      const { validateProject, getConfig } = await import('../server/config.js');
 
       const validation = await validateProject();
       if (!validation.valid) {
@@ -251,7 +259,7 @@ program
 
       // Start Astro dev server if --no-astro was not specified
       if (options.astro !== false) {
-        await maybeStartAstro(projectRoot, config.preview.url);
+        await maybeStartAstro(projectRoot, (await getConfig()).preview.url);
       }
 
       const { startServer } = await import('../server/index.js');

@@ -6,6 +6,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { config } from '../config.js';
+import { getCollectionNames } from './collections.js';
 
 // Cache for detected routes
 let cachedRoutes = null;
@@ -62,10 +63,15 @@ export async function detectPreviewRoutes() {
   }
 
   const pagesDir = path.join(config.paths.projectRoot, 'src/pages');
-  const routes = {};
+  const candidates = {};
 
   try {
-    await scanDirectory(pagesDir, '', routes);
+    await scanDirectory(pagesDir, '', candidates);
+    // The scan guesses collection names from each dynamic route's parameter
+    // and directory ([slug] -> slugs, slug); keep only the guesses that ARE
+    // collections, or the log reports routes for collections that do not exist.
+    const declared = new Set(await getCollectionNames());
+    const routes = Object.fromEntries(Object.entries(candidates).filter(([name]) => declared.has(name)));
     cachedRoutes = routes;
 
     if (Object.keys(routes).length > 0) {

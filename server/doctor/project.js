@@ -19,7 +19,9 @@ const execFileAsync = promisify(execFile);
 
 const ASTRO_CONFIG_NAMES = ['astro.config.mjs', 'astro.config.js', 'astro.config.ts', 'astro.config.mts', 'astro.config.cjs'];
 const INTEGRATION_MODULE = 'astroadmin/integration';
-const LOCKFILE_NAMES = ['bun.lock', 'bun.lockb'];
+// Any package manager's: Bun reads its own, and `bun install` migrates the
+// others (verified for package-lock.json with --frozen-lockfile, Bun 1.3.4).
+const LOCKFILE_NAMES = ['bun.lock', 'bun.lockb', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml'];
 const SOURCE_EXTENSIONS = new Set(['.astro', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.mts', '.md', '.mdx']);
 const SHARP_TIMEOUT_MS = 20_000;
 
@@ -261,7 +263,7 @@ export async function isGitRepository(projectRoot) {
 }
 
 /**
- * The committed Bun lockfile (in the site's directory or at the repo root, for
+ * The committed lockfile, the first of LOCKFILE_NAMES found (in the site's directory or at the repo root, for
  * a site in a subdirectory), relative to the repo root, or null. Read from
  * HEAD, not the index: a lockfile that is only staged is not in what a hosted
  * editor clones. A repository with no commits has none.

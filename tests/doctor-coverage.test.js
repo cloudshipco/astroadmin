@@ -404,6 +404,13 @@ await check('runDoctor MUTATION: data-aa-entry turns click-to-edit-names into a 
     const names = await namesFor(HOME_WITH_CARDS);
     assert.equal(names.severity, 'warn', JSON.stringify(names));
     assert.match(names.message, /data-aa-entry is not supported in this version; it is ignored on 1 page/);
+    // The editor notice lists a failing check by its title, so a warning's
+    // title states the problem; a pass keeps the neutral one.
+    assert.equal(names.title, 'data-aa-entry is not supported');
+    assert.equal(control.title, 'data-aa-field names');
+    const unknown = await namesFor('<html><body><h1 data-aa-field="nonsense">Hi</h1></body></html>');
+    assert.equal(unknown.severity, 'warn', JSON.stringify(unknown));
+    assert.equal(unknown.title, 'data-aa-field names that match no field');
     assert.deepEqual(names.details, ['/: 2 data-aa-entry elements']);
   } finally {
     fs.rmSync(distDir, { recursive: true, force: true });
