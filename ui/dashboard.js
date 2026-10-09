@@ -4,7 +4,16 @@
 
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
 import { resolvePreviewTarget, previewPathToSitePath } from './preview-routes.js';
-import { entryApiPath, entryDashboardPath, entryFromDashboardPath, splitEntryValue } from './entry-urls.js';
+import {
+  collectionApiPath,
+  entryApiPath,
+  entryDashboardPath,
+  entryFromDashboardPath,
+  entryValue,
+  splitEntryValue,
+  virtualPageDashboardPath,
+  virtualPageFromDashboardPath,
+} from './entry-urls.js';
 import { registerReferenceFieldHandlers } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
@@ -168,7 +177,7 @@ function populatePageSelector(collections, i18nInfo = null, staticPages = []) {
 
     collection.entries.forEach(slug => {
       const option = document.createElement('option');
-      option.value = `${collection.name}/${slug}`;
+      option.value = entryValue(collection.name, slug);
       // Show the entry's title (e.g. "Journal") rather than its slug ("blog").
       // The slug is kept as the option value and in `allPages` for URL matching.
       option.textContent = collection.entryTitles?.[slug] || slug;
@@ -211,7 +220,7 @@ function updateEntryTitleCache(collection, slug, data) {
   const title = data?.title || data?.name || data?.heading || humaniseSlug(slug);
   coll.entryTitles[slug] = title;
   const selector = document.getElementById('pageSelector');
-  const option = [...selector.options].find(o => o.value === `${collection}/${slug}`);
+  const option = [...selector.options].find(o => o.value === entryValue(collection, slug));
   if (option) option.textContent = title;
 }
 
@@ -270,7 +279,7 @@ async function loadEntryLocales(collection, slug) {
   if (!i18nConfig.enabled) return [];
 
   try {
-    const response = await fetch(`/api/collections/${collection}/entries-with-locales`);
+    const response = await fetch(collectionApiPath(collection, '/entries-with-locales'));
     const data = await response.json();
     if (data.success) {
       const entry = data.entries.find(e => e.slug === slug);
@@ -291,7 +300,7 @@ async function createTranslation(collection, slug, ctx) {
   updateSaveStatus('New translation - unsaved');
 
   try {
-    const schemaResponse = await fetch(`/api/collections/${collection}`);
+    const schemaResponse = await fetch(collectionApiPath(collection));
     const schemaData = await schemaResponse.json();
     if (ctx && ctx.myLoad !== loadSeq) return; // superseded during the schema fetch
 
@@ -404,11 +413,11 @@ document.getElementById('pageSelector').addEventListener('change', (e) => {
 
   if (value.startsWith('__page__:')) {
     // Virtual page selected
-    const pageSlug = value.split(':')[1];
+    const pageSlug = value.slice('__page__:'.length);
     loadVirtualPage(pageSlug);
   } else if (value.startsWith('new:')) {
     // Reset dropdown to previous value (don't keep "New..." selected)
-    e.target.value = currentCollection && currentSlug ? `${currentCollection}/${currentSlug}` : '';
+    e.target.value = currentCollection && currentSlug ? entryValue(currentCollection, currentSlug) : '';
     // Open new item modal
     const collectionName = value.split(':')[1];
     openNewItemModal(collectionName);
@@ -568,7 +577,7 @@ async function createNewEntry(collection, slug) {
 
   try {
     // Get schema for this collection
-    const schemaResponse = await fetch(`/api/collections/${collection}`);
+    const schemaResponse = await fetch(collectionApiPath(collection));
     const schemaData = await schemaResponse.json();
 
     if (!schemaData.success) {
@@ -686,7 +695,7 @@ async function loadEntry(collection, slug, updateUrl = true) {
 
   // Update dropdown to match
   const selector = document.getElementById('pageSelector');
-  selector.value = `${collection}/${slug}`;
+  selector.value = entryValue(collection, slug);
   syncEntryPickerLabel(document.getElementById('pageSelector'));
 
   // Fetch available locales for this entry (if i18n enabled)
@@ -775,7 +784,7 @@ function loadVirtualPage(pageSlug) {
   setLivePagePath(page.url);
 
   // Update URL
-  const newUrl = `/dashboard/__page__/${pageSlug}`;
+  const newUrl = virtualPageDashboardPath(pageSlug);
   history.pushState({ virtualPage: pageSlug }, '', newUrl);
 
   // Update UI
@@ -874,7 +883,7 @@ function navigateToCollection(collectionName) {
   if (collection.entries && collection.entries.length > 0) {
     // Load first entry
     const firstEntry = collection.entries[0];
-    document.getElementById('pageSelector').value = `${collectionName}/${firstEntry}`;
+    document.getElementById('pageSelector').value = entryValue(collectionName, firstEntry);
     syncEntryPickerLabel(document.getElementById('pageSelector'));
     loadEntry(collectionName, firstEntry);
   } else {
@@ -925,9 +934,9 @@ function getEntryFromUrl() {
   const path = window.location.pathname;
 
   // Check for virtual page URL pattern
-  const virtualMatch = path.match(/^\/dashboard\/__page__\/(.+)$/);
-  if (virtualMatch) {
-    return { virtualPage: virtualMatch[1] };
+  if (path.startsWith('/dashboard/__page__/')) {
+    const virtualPage = virtualPageFromDashboardPath(path);
+    return virtualPage === null ? null : { virtualPage };
   }
 
   return entryFromDashboardPath(path);
@@ -950,7 +959,7 @@ async function renderEditor(entryData, ctx) {
 
   // Get schema for this collection (from the load's collection, not a global
   // that a newer navigation may already have changed).
-  const schemaResponse = await fetch(`/api/collections/${ctx.collection}`);
+  const schemaResponse = await fetch(collectionApiPath(ctx.collection));
   const schemaData = await schemaResponse.json();
   if (ctx.myLoad !== loadSeq) return; // superseded during the schema fetch
 
@@ -1125,7 +1134,7 @@ async function loadReferenceFieldPreviews(field) {
   if (!collectionName) return;
 
   try {
-    const response = await fetch(`/api/collections/${collectionName}/entries?preview=true`);
+    const response = await fetch(collectionApiPath(collectionName, '/entries?preview=true'));
     const data = await response.json();
 
     if (data.success && data.entries) {
@@ -1460,7 +1469,7 @@ function makeSaver(target) {
           const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
           document.getElementById('editorTitle').textContent =
             `Editing: ${entryDisplayTitle(target.collection, target.slug)}${localeLabel}`;
-          document.getElementById('pageSelector').value = `${target.collection}/${target.slug}`;
+          document.getElementById('pageSelector').value = entryValue(target.collection, target.slug);
           syncEntryPickerLabel(document.getElementById('pageSelector'));
           if (i18nConfig.enabled) {
             const locales = await loadEntryLocales(target.collection, target.slug);

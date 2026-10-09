@@ -15,7 +15,16 @@ import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { entryApiPath, entryDashboardPath, entryFromDashboardPath, splitEntryValue } from '../ui/entry-urls.js';
+import {
+  collectionApiPath,
+  entryApiPath,
+  entryDashboardPath,
+  entryFromDashboardPath,
+  entryValue,
+  splitEntryValue,
+  virtualPageDashboardPath,
+  virtualPageFromDashboardPath,
+} from '../ui/entry-urls.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-entry-urls-'));
@@ -124,6 +133,38 @@ await check('dashboard.js builds content and dashboard URLs only through entry-u
   assert.ok((dashboardSource.match(/entryApiPath\(/g) || []).length >= 3, 'loadEntry, the saver and delete use entryApiPath');
   assert.equal(dashboardSource.includes('/api/content/'), false, 'a hand-built content API URL');
   assert.equal(dashboardSource.includes('`/dashboard/${'), false, 'a hand-built dashboard URL');
+  // Picker values, virtual-page URLs and collection API URLs too.
+  assert.ok((dashboardSource.match(/entryValue\(/g) || []).length >= 6, 'the picker values use entryValue');
+  assert.ok(dashboardSource.includes('virtualPageDashboardPath(') && dashboardSource.includes('virtualPageFromDashboardPath('), 'virtual pages use the helpers');
+  assert.ok((dashboardSource.match(/collectionApiPath\(/g) || []).length >= 5, 'collection API URLs use collectionApiPath');
+  const handBuiltValues = dashboardSource.split('\n').filter((line) => /\.value\b/.test(line) && /\$\{[^}]+\}\/\$\{/.test(line));
+  assert.deepEqual(handBuiltValues, [], 'a hand-built <collection>/<slug> picker value');
+  assert.equal(dashboardSource.includes('`/dashboard/__page__/'), false, 'a hand-built virtual-page URL');
+  assert.equal(dashboardSource.includes('\\/dashboard\\/__page__'), false, 'a virtual-page URL parsed by hand');
+  assert.equal(dashboardSource.includes('`/api/collections/${'), false, 'a hand-built collection API URL');
+});
+
+await check('virtual pages: a slug with non-ASCII and escaped characters survives a reload parse', async () => {
+  for (const pageSlug of ['über_café', '100%_done', 'a#b?c', 'spaced name', 'colon:slug', 'docs_intro']) {
+    const dashboardPath = virtualPageDashboardPath(pageSlug);
+    // A reload: the browser hands back the pathname as it holds it.
+    const reloaded = new URL(dashboardPath, 'http://admin.example.com').pathname;
+    assert.equal(virtualPageFromDashboardPath(reloaded), pageSlug, `${pageSlug} -> ${reloaded}`);
+    const page = await (await request(dashboardPath)).text();
+    assert.ok(page.includes('id="pageSelector"'), `${pageSlug}: the virtual-page link serves the dashboard`);
+  }
+  // The old hand-built form loses a non-ASCII slug on reload (the bug): control.
+  assert.notEqual(new URL('/dashboard/__page__/über_café', 'http://admin.example.com').pathname.slice('/dashboard/__page__/'.length), 'über_café');
+  assert.equal(virtualPageFromDashboardPath('/dashboard/__page__/%E0%A4%A'), null, 'a malformed escape names nothing');
+  assert.equal(virtualPageFromDashboardPath('/dashboard/__page__/'), null);
+  assert.equal(virtualPageFromDashboardPath('/dashboard/pages/home'), null);
+});
+
+await check('entryValue is the inverse of splitEntryValue, and collectionApiPath encodes', () => {
+  assert.equal(entryValue(NESTED.collection, NESTED.slug), 'articles/2024/first-post');
+  assert.deepEqual(splitEntryValue(entryValue(NESTED.collection, NESTED.slug)), NESTED);
+  assert.equal(collectionApiPath('articles'), '/api/collections/articles');
+  assert.equal(collectionApiPath('a#b', '/entries?preview=true'), '/api/collections/a%23b/entries?preview=true');
 });
 
 await check('picker: choosing "pages/team/jane" loads collection pages, slug team/jane (the real change handler)', () => {
