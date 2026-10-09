@@ -170,6 +170,32 @@ await check('dashboard: a virtual page with a hostile file name renders it as te
   assert.deepEqual(codes, [`src/pages/${HOSTILE.replace('.md', '.astro')}`, `/${HOSTILE}`]);
 });
 
+await check('dashboard: the markdown body textarea holds the file body byte for byte', async () => {
+  // The real renderEditor, run with the loaders it calls stubbed: what the
+  // editor shows (textarea.value) is what the next save writes back.
+  const fnSrc = dashboardSrc.match(/async function renderEditor\(entryData, ctx\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(fnSrc, 'renderEditor not found');
+  const schemaResponse = { json: async () => ({ collection: { schema: { type: 'object', properties: { title: { type: 'string' } } } } }) };
+  const render = new Function('document', 'fetch', 'collectionApiPath', 'generateForm', 'installSaver', 'showEntryProblems',
+    'collapseAllBlocks', 'setupBlockFocus', 'loadSeq',
+    `${escapeSrc}\n${fnSrc}\nreturn renderEditor;`)(
+    document, async () => schemaResponse, (name) => `/api/collections/${name}`, () => '<input name="title">',
+    () => {}, () => {}, () => {}, () => {}, 1,
+  );
+  const bodies = [
+    'Literal &lt;b&gt; in prose, and &amp; an ampersand entity.\n\n</textarea><script>alert(1)</script>\n\nAfter the close tag.\n',
+    'Plain markdown with **bold** & a bare ampersand.\n',
+  ];
+  for (const body of bodies) {
+    document.body.innerHTML = '<div id="editorForm"></div>';
+    await render({ type: 'content', data: { title: 'T' }, body }, { collection: 'posts', slug: 'p', locale: null, myLoad: 1 });
+    const textarea = document.getElementById('markdown-body');
+    assert.ok(textarea, 'markdown body textarea rendered');
+    assert.equal(textarea.value, body, 'textarea value differs from the file body');
+    assert.equal(document.querySelectorAll('#editorForm script').length, 0, 'a <script> escaped the textarea');
+  }
+});
+
 await check('dashboard: no error message or markdown body is interpolated unescaped', () => {
   // Source-level: these sit inside the big async loaders. An error message can
   // echo a slug or a server path; the body is the editor's own markdown, which in

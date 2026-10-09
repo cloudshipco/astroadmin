@@ -144,7 +144,9 @@ runner aggregating them). Most run server-less and need env vars:
   injects no element, in the changes panel, diff modal, image library, reference picker,
   number field and the dashboard's virtual-page panel. Every interpolation of such data goes
   through `escapeHtml` (`ui/escape-html.js`); the markdown body textarea too, or `&lt;`
-  in a body is decoded to `<` and `</textarea>` truncates it on the next save.
+  in a body is decoded to `<` and `</textarea>` truncates it on the next save. Pinned by behaviour: the real
+  `renderEditor` (extracted, loaders stubbed) must leave `textarea.value` byte-identical to a body
+  holding `&lt;b&gt;`, `&amp;`, `</textarea>` and `<script>`.
 - `bun tests/git-paths-scope.test.js` — `git.paths` entries that mean the project root (`''`,
   `./`, `.`, `src/..`) are dropped by `getAllowedGitPaths`, so they scope nothing, like `[]`:
   empty changes diff, package.json refused for diff and revert, absent from status; a real
