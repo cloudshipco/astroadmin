@@ -44,6 +44,7 @@ import {
   findAstroAssetsUse,
   findCommittedLockfile,
   isGitRepository,
+  LOCKFILE_NAMES,
   probeSharp,
 } from './project.js';
 
@@ -152,7 +153,7 @@ export const CHECKS = [
     async run(context) {
       if (!(await isGitRepository(context.projectRoot))) return { severity: 'warn', title: 'Not a git repository', message: 'The project is not a git repository.' };
       const lockfile = await findCommittedLockfile(context.projectRoot);
-      if (!lockfile) return { severity: 'warn', message: 'No lockfile (bun.lock, package-lock.json, yarn.lock or pnpm-lock.yaml) is committed (in HEAD), so an install, a hosted editor\'s included, gets whatever versions resolve today.' };
+      if (!lockfile) return { severity: 'warn', message: `No lockfile (${LOCKFILE_NAMES.slice(0, -1).join(', ')} or ${LOCKFILE_NAMES[LOCKFILE_NAMES.length - 1]}) is committed (in HEAD), so an install, a hosted editor\'s included, gets whatever versions resolve today.` };
       return { severity: 'pass', message: `${lockfile} is committed.` };
     },
   },

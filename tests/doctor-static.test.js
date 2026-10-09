@@ -174,6 +174,9 @@ try {
     const result = (await staticResults(siteDir))['committed-lockfile'];
     assert.equal(result.severity, 'warn');
     assert.equal(result.title, 'No lockfile committed');
+    for (const name of ['bun.lock', 'bun.lockb', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml']) {
+      assert.ok(result.message.includes(name), `the warning names every accepted lockfile; missing ${name}: ${result.message}`);
+    }
     assert.equal(healthy['committed-lockfile'].title, 'Committed lockfile', 'a pass keeps the neutral title');
   });
 
