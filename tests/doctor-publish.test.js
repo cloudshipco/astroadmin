@@ -155,28 +155,92 @@ try {
 
   const fullConfig = await getConfig();
 
-  await check('a scan that exceeds its cap is "unavailable" and the check still passes', async () => {
+  // A scan stand-in that never yields: a synchronous loop, which no timer in
+  // the same thread could interrupt.
+  const busyScan = path.join(tempRoot, 'busy-scan.js');
+  fs.writeFileSync(busyScan, 'while (true) {}\n');
+  const isRunning = (pattern) => {
+    try {
+      return execFileSync('/usr/bin/pgrep', ['-f', pattern], { encoding: 'utf-8' }).trim() !== '';
+    } catch {
+      return false;
+    }
+  };
+
+  await check('a scan stuck in a synchronous loop is cut off at its cap, the hook returns, and cleanup runs', async () => {
     resetLatestDoctorResult();
-    const startedAt = Date.now();
+    const checkDirsBefore = checkDirsNow();
+    let hookMs = null;
     const result = await checkHeadWithAstro(fullConfig, {
-      onBuilt: (build) => recordDoctorAfterCheck(fullConfig, build, {
-        timeoutMs: 50,
-        loadEntries: () => new Promise(() => {}), // never settles
-      }),
+      onBuilt: async (build) => {
+        const hookStartedAt = Date.now();
+        await recordDoctorAfterCheck(fullConfig, build, { timeoutMs: 300, scanScript: busyScan });
+        hookMs = Date.now() - hookStartedAt;
+      },
     });
     assert.equal(result.success, true, result.output);
-    assert.equal(getLatestDoctorResult().status, 'unavailable');
-    assert.match(getLatestDoctorResult().reason, /50 ms/);
-    assert.ok(Date.now() - startedAt < 60_000);
+    assert.equal(getLatestDoctorResult().status, 'unavailable', JSON.stringify(getLatestDoctorResult()));
+    assert.match(getLatestDoctorResult().reason, /300 ms/);
+    assert.ok(hookMs !== null && hookMs < 300 + 700, `the hook took ${hookMs} ms against a 300 ms cap`);
+    assert.deepEqual(checkDirsNow(), checkDirsBefore, 'the check\'s worktree was cleaned up');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(isRunning(busyScan), false, 'the stuck scan was killed');
   });
 
-  await check('an error in the scan is "unavailable", never a failed check', async () => {
+  await check('the real scan under a 10 ms cap is cut off too (the cap covers config reading and scanning)', async () => {
     resetLatestDoctorResult();
+    let hookMs = null;
     const result = await checkHeadWithAstro(fullConfig, {
-      onBuilt: (build) => recordDoctorAfterCheck(fullConfig, build, { loadEntries: async () => { throw new Error('store unreadable'); } }),
+      onBuilt: async (build) => {
+        const hookStartedAt = Date.now();
+        await recordDoctorAfterCheck(fullConfig, build, { timeoutMs: 10 });
+        hookMs = Date.now() - hookStartedAt;
+      },
     });
     assert.equal(result.success, true, result.output);
-    assert.deepEqual({ status: getLatestDoctorResult().status, reason: getLatestDoctorResult().reason }, { status: 'unavailable', reason: 'store unreadable' });
+    assert.equal(getLatestDoctorResult().status, 'unavailable', JSON.stringify(getLatestDoctorResult()));
+    assert.ok(hookMs < 10 + 500, `the hook took ${hookMs} ms against a 10 ms cap`);
+  });
+
+  await check('an error in the scan is "unavailable" with a short reason that names no server path, never a failed check', async () => {
+    resetLatestDoctorResult();
+    // The real scan, against a build directory whose site has no content config.
+    const bareSite = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-bare-'));
+    try {
+      writeFile(bareSite, 'astro.config.mjs', 'export default {};\n');
+      writeFile(bareSite, 'dist/index.html', '<h1>Home</h1>');
+      await recordDoctorAfterCheck(fullConfig, { siteDir: bareSite, commit: 'abc', command: 'astro build' });
+      const { status, reason } = getLatestDoctorResult();
+      assert.equal(status, 'unavailable');
+      assert.ok(reason.length <= 300, `reason is ${reason.length} characters`);
+      for (const serverPath of [bareSite, fs.realpathSync(bareSite), os.tmpdir(), fs.realpathSync(os.tmpdir()), tempRoot, repoRoot]) {
+        assert.ok(!reason.includes(serverPath), `the reason names ${serverPath}: ${reason}`);
+      }
+      assert.doesNotMatch(reason, /\/(?:private|var|tmp|Users|home|srv)\//, reason);
+      assert.match(reason, /content config/i, reason);
+    } finally {
+      fs.rmSync(bareSite, { recursive: true, force: true });
+    }
+  });
+
+  await check('the scan reads the commit it built, not an edit made since (an autosave mid-publish)', async () => {
+    resetLatestDoctorResult();
+    const committed = fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf-8');
+    try {
+      // On disk only: the build is of HEAD, whose blurb is what the page shows.
+      writeFile(projectRoot, 'src/content/pages/home.md', committed.replace(/blurb: .*/, 'blurb: Typed after the commit and never built.'));
+      writeFile(projectRoot, 'src/content/pages/about.md', '---\ntitle: About\nheadline: An uncommitted page\nblurb: Not in the commit.\n---\n');
+      const result = await checkHeadWithAstro(fullConfig, { onBuilt: (build) => recordDoctorAfterCheck(fullConfig, build) });
+      assert.equal(result.success, true, result.output);
+      const recorded = getLatestDoctorResult();
+      assert.equal(recorded.status, 'ok', JSON.stringify(recorded));
+      assert.deepEqual({ covered: recorded.coverage.covered, total: recorded.coverage.total }, { covered: 1, total: 2 });
+      const coverage = recorded.results.find((item) => item.id === 'click-to-edit-coverage');
+      assert.doesNotMatch(coverage.details.join('\n'), /not built|no built page/, 'the uncommitted entry is not part of the snapshot');
+    } finally {
+      fs.writeFileSync(path.join(projectRoot, 'src/content/pages/home.md'), committed);
+      fs.rmSync(path.join(projectRoot, 'src/content/pages/about.md'), { force: true });
+    }
   });
 
   await check('even a hook that throws cannot fail the check', async () => {

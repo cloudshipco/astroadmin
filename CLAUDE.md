@@ -120,8 +120,11 @@ runner aggregating them). Most run server-less and need env vars:
 `astroadmin doctor` (`server/doctor/`, docs/doctor.md) has five test files:
 `doctor-coverage` (built-HTML checks on a fixture page, each shown red on a mutated copy),
 `doctor-static` (config, lockfile, submodule, workspace and sharp checks on throwaway repos),
-`doctor-cli` (exit codes, `--json`, `--build`), `doctor-publish` (the editor scans the publish
-check's own build; a slow or failing scan is "unavailable", never a failed publish; ~15 s) and
+`doctor-cli` (exit codes, `--json`, `--build`, the site's installed astro and never a fetched
+one; ~10 s), `doctor-publish` (the editor scans the publish check's own build in a child
+process rooted at the check's worktree, so it reads the commit's entries; a scan stuck in a
+synchronous loop is killed at its cap; an error is "unavailable" with a reason naming no
+server path, never a failed publish; ~15 s) and
 `doctor-notice` (the editor notice, happy-dom). Run each with `bun tests/doctor-<name>.test.js`.
 
 **Storage modes:** the content store is selected by `config.content.store`

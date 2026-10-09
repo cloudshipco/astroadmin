@@ -4,17 +4,30 @@
  * checks, keep the latest result, and serve it to the editor's notice.
  *
  * It costs no extra build. It can never fail or noticeably slow a publish:
- * the scan is capped, and any error becomes an "unavailable" result.
+ * the scan runs in a child process (./editor-scan.js) against the check's
+ * worktree, the deadline is enforced here by killing that process, and any
+ * error becomes an "unavailable" result. The API's `reason` is short and names
+ * no server path; the full error goes to the server log.
  * The result lives in memory, so it is empty again after a restart until the
  * next publish.
  */
 
 import express from 'express';
+import { spawn } from 'child_process';
+import os from 'os';
 import path from 'path';
-import { runDoctor } from './index.js';
-import { readAstroConfigFacts } from './project.js';
+import { fileURLToPath } from 'url';
+import { cleanCheckOutput } from '../utils/astro-check.js';
+import { RESULT_MARKER, outDirFor } from './editor-scan.js';
+import { bunExecutable } from './project.js';
+
+export { outDirFor };
 
 const DEFAULT_SCAN_TIMEOUT_MS = 3000;
+const SCAN_SCRIPT = fileURLToPath(new URL('./editor-scan.js', import.meta.url));
+const PACKAGE_ROOT = path.resolve(path.dirname(SCAN_SCRIPT), '../..');
+const MAX_REASON_LENGTH = 300;
+const MAX_TEXT_LENGTH = 1000;
 
 /**
  * @typedef {Object} EditorDoctorResult
@@ -22,7 +35,7 @@ const DEFAULT_SCAN_TIMEOUT_MS = 3000;
  * @property {string} commit
  * @property {string} checkedAt - ISO time
  * @property {number} durationMs - how long the scan held up the publish
- * @property {string} [reason] - why it is unavailable
+ * @property {string} [reason] - why it is unavailable (short, no server paths)
  * @property {{covered: number, total: number, byCollection: Array}|null} [coverage]
  * @property {Array} [results] - the built-HTML checks' results
  */
@@ -41,40 +54,82 @@ export function resetLatestDoctorResult() {
   latestResult = null;
 }
 
-/**
- * The build's output directory: an explicit --outDir in the check command,
- * else astro.config's outDir, else Astro's default.
- * @param {string} command
- * @param {string|null} configOutDir
- */
-export function outDirFor(command, configOutDir) {
-  const match = command.match(/--outDir(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/);
-  if (match) return match[1] || match[2] || match[3];
-  return configOutDir || 'dist';
+function bounded(text, maxLength) {
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-function summarise(report) {
-  const coverageResult = report.results.find((result) => result.id === 'click-to-edit-coverage');
-  const coverageData = coverageResult?.data;
-  return {
-    coverage: coverageData && coverageData.totalFields > 0
-      ? { covered: coverageData.coveredFields, total: coverageData.totalFields, byCollection: coverageData.byCollection }
-      : null,
-    // The per-entry lists can be long; the notice links to the CLI for those.
-    results: report.results.map(({ data, ...rest }) => rest),
-  };
+/**
+ * An error for the API: the given server directories made relative, any other
+ * absolute path reduced to its last segment, whitespace collapsed, bounded.
+ */
+function reasonForApi(text, serverPaths) {
+  return bounded(cleanCheckOutput(String(text), serverPaths)
+    .replace(/(^|[\s"'(=:])\/(?:[^\s"'()/]+\/)+([^\s"'()/]*)/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim(), MAX_REASON_LENGTH);
+}
+
+/**
+ * A check's message or detail for the API: the server directories made
+ * relative (page paths such as /services/a are the site's, and stay), bounded.
+ */
+function textForApi(text, serverPaths) {
+  return bounded(cleanCheckOutput(String(text), serverPaths), MAX_TEXT_LENGTH);
+}
+
+/**
+ * Run the scan script in a child process and settle by the deadline, killing
+ * the child if it has not finished.
+ * @returns {Promise<{timedOut: true}|{outcome: {ok?: Object, error?: string}}|{crashed: string}>}
+ */
+function runScanProcess(scanScript, input, env, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let stdout = '';
+    let stderr = '';
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    // --no-install: a missing import must fail, never be fetched. The cwd is
+    // this package, so a site's bunfig.toml (preloads) does not apply.
+    const child = spawn(bunExecutable(), ['--no-install', scanScript, JSON.stringify(input)], { cwd: PACKAGE_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      child.stdout.destroy();
+      child.stderr.destroy();
+      settle({ timedOut: true });
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => { if (stdout.length < 5_000_000) stdout += chunk; });
+    child.stderr.on('data', (chunk) => { if (stderr.length < 100_000) stderr += chunk; });
+    child.on('error', (error) => settle({ crashed: error.message }));
+    child.on('close', (exitCode) => {
+      const line = stdout.split('\n').reverse().find((candidate) => candidate.startsWith(RESULT_MARKER));
+      if (!line) {
+        settle({ crashed: `exit code ${exitCode}: ${stderr.trim().split('\n').slice(-5).join(' | ')}` });
+        return;
+      }
+      try {
+        settle({ outcome: JSON.parse(line.slice(RESULT_MARKER.length)) });
+      } catch (error) {
+        settle({ crashed: `unreadable result: ${error.message}` });
+      }
+    });
+  });
 }
 
 /**
  * Run the built-HTML checks on a publish check's build and record the result.
- * Never throws.
+ * Never throws, and returns within `timeoutMs` (plus process start-up).
  * @param {Object} fullConfig - getConfig() result
  * @param {{siteDir: string, commit: string, command: string}} build
  * @param {Object} [options]
  * @param {number} [options.timeoutMs]
- * @param {() => Promise<{entries: Array}>} [options.loadEntries]
+ * @param {string} [options.scanScript] - for tests: the script the child runs
  */
-export async function recordDoctorAfterCheck(fullConfig, build, { timeoutMs = DEFAULT_SCAN_TIMEOUT_MS, loadEntries = null } = {}) {
+export async function recordDoctorAfterCheck(fullConfig, build, { timeoutMs = DEFAULT_SCAN_TIMEOUT_MS, scanScript = SCAN_SCRIPT } = {}) {
   if (fullConfig.doctor?.enabled === false) return;
   const generation = ++scanGeneration;
   const startedAt = Date.now();
@@ -82,34 +137,47 @@ export async function recordDoctorAfterCheck(fullConfig, build, { timeoutMs = DE
   const record = (result) => {
     if (generation === scanGeneration) latestResult = { commit: build.commit, checkedAt, durationMs: Date.now() - startedAt, ...result };
   };
-  let timer;
+  const serverPaths = [build.siteDir, fullConfig.paths?.projectRoot, os.tmpdir(), PACKAGE_ROOT];
+  const unavailable = (logMessage, reason) => {
+    console.warn(`Doctor scan unavailable: ${logMessage}`);
+    record({ status: 'unavailable', reason: reasonForApi(reason, serverPaths) });
+  };
   try {
-    const facts = await readAstroConfigFacts(build.siteDir);
-    const distDir = path.resolve(build.siteDir, outDirFor(build.command, facts.outDir));
-    // Entries are loaded up front so a store or schema error makes the result
-    // unavailable, rather than a report of checks that could not run.
-    const scan = (async () => {
-      const loaded = await (loadEntries || (async () => (await import('./entries.js')).collectEntries()))();
-      return runDoctor({ projectRoot: fullConfig.paths.projectRoot, distDir, build: false, phases: ['built'], loadEntries: async () => loaded });
-    })();
-    const timeout = new Promise((resolve) => {
-      timer = setTimeout(() => resolve(null), timeoutMs);
-    });
-    const report = await Promise.race([scan, timeout]);
-    // A scan that outlives the cap keeps running against a directory about to
-    // be deleted; whatever it then produces is discarded, errors included.
-    scan.catch(() => {});
-    if (!report) {
-      console.warn(`Doctor scan skipped: it did not finish within ${timeoutMs} ms`);
-      record({ status: 'unavailable', reason: `The scan did not finish within ${timeoutMs} ms.` });
+    const { realpath } = await import('fs/promises');
+    for (const directory of [...serverPaths]) {
+      if (directory) serverPaths.push(await realpath(directory).catch(() => null));
+    }
+    const env = {
+      ...process.env,
+      ASTROADMIN_PROJECT_ROOT: build.siteDir,
+      ASTROADMIN_CONTENT_STORE: process.env.ASTROADMIN_CONTENT_STORE || fullConfig.content?.store || 'files',
+    };
+    const remaining = Math.max(1, timeoutMs - (Date.now() - startedAt));
+    const run = await runScanProcess(scanScript, { siteDir: build.siteDir, command: build.command }, env, remaining);
+    if (run.timedOut) {
+      unavailable(`it did not finish within ${timeoutMs} ms`, `The scan did not finish within ${timeoutMs} ms.`);
       return;
     }
-    record({ status: 'ok', ...summarise(report) });
+    if (run.crashed) {
+      unavailable(`the scan process stopped without a result (${run.crashed})`, 'The scan stopped without a result.');
+      return;
+    }
+    if (run.outcome.error) {
+      unavailable(run.outcome.error, `The scan could not run: ${run.outcome.error}`);
+      return;
+    }
+    const { coverage, results } = run.outcome.ok;
+    record({
+      status: 'ok',
+      coverage,
+      results: results.map((result) => ({
+        ...result,
+        message: textForApi(result.message, serverPaths),
+        details: result.details.map((detail) => textForApi(detail, serverPaths)),
+      })),
+    });
   } catch (error) {
-    console.warn('Doctor scan unavailable:', error.message);
-    record({ status: 'unavailable', reason: error.message });
-  } finally {
-    clearTimeout(timer);
+    unavailable(error.stack || error.message, 'The scan could not run.');
   }
 }
 
