@@ -202,10 +202,14 @@ try {
     assert.equal(reread.data.name, 'New Author');
   });
 
-  await check('a new entry is written as before (no original to follow)', async () => {
+  await check('a new entry follows the schema: its z.date() field is an unquoted date', async () => {
+    // No original to follow, so key order is the editor's. publishDate is z.date()
+    // in this collection, and the schema parser marks it a date, so the new value
+    // must be a YAML date: a quoted string would fail z.date() at build time.
     await writeContent('pages', 'fresh', { data: { title: 'Fresh', draft: true, publishDate: '2026-04-01', tags: [] }, body: 'Hi', type: 'content' });
     const written = fsSync.readFileSync(path.join(tmpRoot, 'src/content/pages/fresh.md'), 'utf-8');
-    assert.equal(written, matter.stringify('Hi', { title: 'Fresh', draft: true, publishDate: '2026-04-01', tags: [] }));
+    assert.equal(written, '---\ntitle: Fresh\ndraft: true\npublishDate: 2026-04-01\ntags: []\n---\nHi\n');
+    assert.ok(matter(written, {}).data.publishDate instanceof Date, 'publishDate reads back as a Date');
   });
 
   // Fields the collection's schema says are dates (format date / date-time in
