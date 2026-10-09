@@ -116,6 +116,12 @@ runner aggregating them). Most run server-less and need env vars:
   header's "View live site" link and the server's live-status check: base paths, query/hash,
   and escape attempts (`//host`, `/\host`, `javascript:`, and paths that only normalise to
   `//host`, such as `/.//host`) falling back to the site root.
+- `bun tests/preview-cache-bust.test.js` — preview reloads and polls add `t=<timestamp>` through
+  `withCacheBuster` (`ui/cache-bust.js`), never `'?t='` by hand: a URL that already has a query
+  (the component preview's `?field=`) must keep it, or the block renders empty.
+- `bun tests/publish-failure.test.js` — a publish that fails outright (500) tells the editor why:
+  a real "Author identity unknown" from git becomes the fix (set user.name/user.email), other
+  errors keep git's text with server paths stripped, and the toast shows that message.
 - `bun tests/preview-live-link.test.js` — the preview's pageNavigation message -> live link and
   entry, with and without a base path (the iframe reports its pathname WITH the preview base,
   which must be stripped before the live link adds publicUrl's).

@@ -19,7 +19,7 @@ import { recordDoctorAfterCheck } from '../doctor/editor.js';
 import { getConfig } from '../config.js';
 import { deploy, validateDeployConfig } from '../utils/deploy.js';
 import { runProductionBuild } from '../utils/build.js';
-import { checkHeadWithAstro } from '../utils/astro-check.js';
+import { checkHeadWithAstro, cleanCheckOutput } from '../utils/astro-check.js';
 import { listSlugs } from '../utils/content.js';
 // Shared with the editor's "View live site" link (ui/ is served to the browser).
 import { resolveLiveUrl } from '../../ui/live-url.js';
@@ -324,12 +324,32 @@ export async function publishHandler(req, res) {
     });
   } catch (error) {
     console.error('Error publishing:', error);
+    const projectRoot = (await getConfig().catch(() => null))?.paths?.projectRoot;
+    const serverPaths = [projectRoot, process.env.HOME];
     res.status(500).json({
       success: false,
       error: 'Failed to publish',
-      message: error.message,
+      message: publishFailureMessage(error, serverPaths),
     });
   }
+}
+
+/**
+ * What the editor is told when publishing fails outright. A missing git
+ * identity (the first publish on a fresh machine or container) gets the fix;
+ * anything else keeps git's text with server paths stripped.
+ * @param {Error} error
+ * @param {string[]} serverPaths - absolute paths to strip from the text
+ * @returns {string}
+ */
+export function publishFailureMessage(error, serverPaths = []) {
+  const text = String(error?.message || error || '');
+  if (/Author identity unknown|Please tell me who you are|unable to auto-detect email/i.test(text)) {
+    return 'Git on this server has no author identity, so the commit was refused. '
+      + 'Set one in the site repository (git config user.name "Your Name" and git config user.email you@example.com), '
+      + 'or set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL for AstroAdmin, then publish again.';
+  }
+  return cleanCheckOutput(text, serverPaths) || 'Publishing failed.';
 }
 
 /**
