@@ -180,7 +180,10 @@ Two layers, deliberately unequal:
    these sites the build costs about the same (~1.5 s).
 
 **Trust boundary:** the site's code (config, integrations, build scripts) is trusted; it
-is ours, and editors change content only. The worktree stops an honest build reading the
+is ours, and editors change content only. One exception to "content only": an `.mdx` body is code
+(imports, JSX expressions, `export` statements), and the publish check's build runs it on
+the host, so an editor who can save an `.mdx` entry can run code there. Treat MDX editing
+as code access when deciding who gets an editor login. The worktree stops an honest build reading the
 live checkout's uncommitted state or overwriting its caches, and the admin's own
 variables (`ASTROADMIN_*`, `ADMIN_*`, `SESSION_SECRET`) are removed from its environment.
 It is NOT a sandbox against hostile site code: that is the hosted platform's isolation
