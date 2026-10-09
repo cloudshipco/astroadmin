@@ -330,6 +330,34 @@ program
   });
 
 program
+  .command('doctor')
+  .description('Check a site\'s setup and click-to-edit coverage (exit 1 if any check fails)')
+  .option('--project <path>', 'Astro project root directory', process.cwd())
+  .option('--build <distDir>', 'Check this existing build instead of building into a temp dir')
+  .option('--json', 'Print the report as JSON')
+  .action(async (options) => {
+    const projectRoot = path.resolve(options.project);
+    process.env.ASTROADMIN_PROJECT_ROOT = projectRoot;
+    // Keep stdout for the JSON alone: the store and schema loader log progress.
+    const printReport = console.log;
+    if (options.json) console.log = (...args) => console.error(...args);
+    try {
+      const { runDoctor, formatReport } = await import('../server/doctor/index.js');
+      const report = await runDoctor({
+        projectRoot,
+        distDir: options.build ? path.resolve(options.build) : null,
+      });
+      if (options.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      else printReport(formatReport(report));
+      process.exit(report.ok ? 0 : 1);
+    } catch (error) {
+      console.error('❌ doctor failed:', error.message);
+      if (process.env.DEBUG) console.error(error.stack);
+      process.exit(1);
+    }
+  });
+
+program
   .command('hash-password [password]')
   .description('Generate an argon2 hash to set as ADMIN_PASSWORD_HASH')
   .action(async (password) => {

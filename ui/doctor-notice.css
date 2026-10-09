@@ -1,0 +1,37 @@
+/* The click-to-edit notice (ui/doctor-notice.js). Plain CSS in its own file so
+   the notice stays self-contained; values follow the editor's gray/primary
+   palette in ui/input.css. */
+.aa-doctor-notice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 2rem 0.5rem 1rem;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #4b5563;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.aa-doctor-notice-text a {
+  color: #2563eb;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.aa-doctor-notice-close {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.5rem;
+  border: 0;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.aa-doctor-notice-close:hover {
+  color: #374151;
+}

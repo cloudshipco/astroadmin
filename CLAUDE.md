@@ -103,6 +103,13 @@ runner aggregating them). Most run server-less and need env vars:
 `tests/git-api.test.js` used to be a known red; it passes as of 2026-10-08 (checked at
 `74609bd` in a clean worktree).
 
+`astroadmin doctor` (`server/doctor/`, docs/doctor.md) has five test files:
+`doctor-coverage` (built-HTML checks on a fixture page, each shown red on a mutated copy),
+`doctor-static` (config, lockfile, submodule, workspace and sharp checks on throwaway repos),
+`doctor-cli` (exit codes, `--json`, `--build`), `doctor-publish` (the editor scans the publish
+check's own build; a slow or failing scan is "unavailable", never a failed publish; ~15 s) and
+`doctor-notice` (the editor notice, happy-dom). Run each with `bun tests/doctor-<name>.test.js`.
+
 **Storage modes:** the content store is selected by `config.content.store`
 (`files` default | `db`), env `ASTROADMIN_CONTENT_STORE`. Tests that exercise the
 DB store **must pin db mode** (a `process.env.ASTROADMIN_CONTENT_STORE = 'db'` line

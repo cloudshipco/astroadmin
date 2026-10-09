@@ -1,0 +1,252 @@
+/**
+ * The doctor's checks. ONE ENTRY PER CHECK: to check a new feature, add an
+ * entry here (and a section in docs/doctor.md whose anchor is the id).
+ *
+ * Each check names the astroadmin version that introduced the feature it
+ * checks, so a site owner can read "this version added X; your site does not
+ * use it yet". Phases run in order: `static` (no build), `build` (makes or
+ * accepts the build), `built` (reads the built HTML).
+ *
+ * run(context) returns { severity, message, details? } where severity is
+ * 'pass' | 'warn' | 'fail' | 'skip' (not applicable here). Only 'fail' makes the
+ * CLI exit non-zero, so reserve it for what stops a publish or the editor.
+ */
+
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import {
+  buildEnvironment,
+  cleanCheckOutput,
+  findWorkspaceLinkForProject,
+  listGitlinks,
+  runCommand,
+} from '../utils/astro-check.js';
+import {
+  computeFieldCoverage,
+  findAnnotatedLinks,
+  findUnindexedBlocks,
+  findUnknownFieldNames,
+} from './coverage.js';
+import {
+  findAstroAssetsUse,
+  findCommittedLockfile,
+  isGitRepository,
+  probeSharp,
+} from './project.js';
+
+/** @typedef {'pass'|'warn'|'fail'|'skip'} Severity */
+
+export const DOCS_BASE = 'https://github.com/cloudshipco/astroadmin/blob/main/docs/doctor.md';
+const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
+// Below this share of text fields reachable by a click, coverage warns.
+export const COVERAGE_PASS_SHARE = 0.8;
+const MAX_LISTED = 10;
+
+const percent = (part, whole) => `${Math.round((part / whole) * 100)}%`;
+const listSome = (items) => items.slice(0, MAX_LISTED).concat(items.length > MAX_LISTED ? [`… and ${items.length - MAX_LISTED} more`] : []);
+
+/** Built checks have nothing to read when there is no build. */
+function noBuild(context) {
+  return { severity: 'skip', message: context.buildSkippedReason || 'No build to check.' };
+}
+
+export const CHECKS = [
+  {
+    id: 'astro-integration',
+    since: '0.2.0',
+    phase: 'static',
+    title: 'Astro integration',
+    async run(context) {
+      const facts = await context.astroConfig();
+      if (!facts.file) return { severity: 'fail', message: 'No astro.config file found in the project.' };
+      if (facts.parseError) return { severity: 'warn', message: `Could not parse ${facts.file}: ${facts.parseError}` };
+      if (!facts.integrationImported) return { severity: 'fail', message: `${facts.file} does not import astroadmin/integration, so the preview has no click-to-edit, block focus or component previews.` };
+      if (!facts.integrationCalled) return { severity: 'fail', message: `${facts.file} imports astroadmin/integration but never calls it; add it to integrations: [astroadmin()].` };
+      return { severity: 'pass', message: `astroadmin() is in ${facts.file}.` };
+    },
+  },
+  {
+    id: 'hosted-preview-config',
+    since: '1.3.0',
+    phase: 'static',
+    title: 'Hosted preview config',
+    async run(context) {
+      const facts = await context.astroConfig();
+      if (!facts.file || facts.parseError) return { severity: 'skip', message: 'No readable astro.config.' };
+      const problems = [];
+      if (facts.allowedHosts === 'missing') problems.push('vite.server.allowedHosts is not set, so Vite refuses the proxied preview host');
+      if (facts.hmr === 'enabled') problems.push('vite.server.hmr is not false; the editor refreshes the preview itself and HMR cannot cross the preview proxy');
+      if (problems.length > 0) return { severity: 'warn', message: `${problems.join('; ')}.` };
+      if (facts.allowedHosts === 'unknown' || facts.hmr === 'unknown') {
+        return { severity: 'warn', message: 'vite.server is not a plain object literal, so allowedHosts and hmr could not be read; check them by hand.' };
+      }
+      return { severity: 'pass', message: 'vite.server.allowedHosts is set and hmr is false.' };
+    },
+  },
+  {
+    id: 'committed-lockfile',
+    since: '1.3.0',
+    phase: 'static',
+    title: 'Committed bun.lock',
+    async run(context) {
+      if (!(await isGitRepository(context.projectRoot))) return { severity: 'warn', message: 'The project is not a git repository.' };
+      const lockfile = await findCommittedLockfile(context.projectRoot);
+      if (!lockfile) return { severity: 'warn', message: 'No bun.lock is committed, so a hosted editor installs whatever versions resolve today.' };
+      return { severity: 'pass', message: `${lockfile} is committed.` };
+    },
+  },
+  {
+    id: 'no-submodules',
+    since: '1.4.8',
+    phase: 'static',
+    title: 'No git submodules',
+    async run(context) {
+      if (!(await isGitRepository(context.projectRoot))) return { severity: 'skip', message: 'The project is not a git repository.' };
+      let gitlinks;
+      try {
+        gitlinks = await listGitlinks(context.projectRoot, 'HEAD');
+      } catch {
+        return { severity: 'skip', message: 'The repository has no commits yet.' };
+      }
+      if (gitlinks.length > 0) {
+        return { severity: 'fail', message: `The publish check refuses sites with git submodules: ${gitlinks.join(', ')}.` };
+      }
+      return { severity: 'pass', message: 'No submodules.' };
+    },
+  },
+  {
+    id: 'no-workspace-links',
+    since: '1.4.8',
+    phase: 'static',
+    title: 'No workspace packages linked into the repo',
+    async run(context) {
+      if (!(await isGitRepository(context.projectRoot))) return { severity: 'skip', message: 'The project is not a git repository.' };
+      const workspaceLink = await findWorkspaceLinkForProject(context.projectRoot);
+      if (workspaceLink) {
+        return { severity: 'fail', message: `The publish check refuses a workspace package linked back into the repository (${workspaceLink}), because it would build the uncommitted copy.` };
+      }
+      return { severity: 'pass', message: 'No node_modules package links back into the repository.' };
+    },
+  },
+  {
+    id: 'sharp-loads',
+    since: '1.4.8',
+    phase: 'static',
+    title: 'sharp loads',
+    async run(context) {
+      const usedIn = await findAstroAssetsUse(context.projectRoot);
+      if (!usedIn) return { severity: 'skip', message: 'The site does not use astro:assets or image(), so it does not need sharp.' };
+      const probe = await probeSharp(context.projectRoot);
+      if (!probe.ok) {
+        return { severity: 'fail', message: `The site uses Astro images (${usedIn}) but sharp does not load here, so a build that optimises images fails: ${probe.error}` };
+      }
+      return { severity: 'pass', message: `sharp loads (the site uses Astro images in ${usedIn}).` };
+    },
+  },
+  {
+    id: 'build-runs',
+    since: '1.4.8',
+    phase: 'build',
+    title: 'The build runs',
+    async run(context) {
+      if (context.distDir) return { severity: 'skip', message: `Using the existing build in ${context.distDir}.` };
+      if (!context.build) {
+        context.buildSkippedReason = 'Not built (pass --build <distDir> to check an existing build).';
+        return { severity: 'skip', message: context.buildSkippedReason };
+      }
+      const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astroadmin-doctor-'));
+      context.cleanups.push(() => fs.rm(outDir, { recursive: true, force: true }));
+      const command = `bunx --bun astro build --outDir ${JSON.stringify(outDir)}`;
+      const result = await runCommand(command, context.projectRoot, BUILD_TIMEOUT_MS, buildEnvironment());
+      if (result.timedOut || result.exitCode !== 0) {
+        context.buildSkippedReason = 'The build failed, so the built HTML could not be checked.';
+        const output = cleanCheckOutput(result.output, [context.projectRoot, outDir]).slice(-2000);
+        return { severity: 'fail', message: result.timedOut ? `The build did not finish within ${BUILD_TIMEOUT_MS / 1000} seconds.` : 'The build failed.', details: [output] };
+      }
+      context.distDir = outDir;
+      return { severity: 'pass', message: `${command.replace(JSON.stringify(outDir), '<temp dir>')} succeeded.` };
+    },
+  },
+  {
+    id: 'block-index',
+    since: '0.2.0',
+    phase: 'built',
+    title: 'Block roots carry data-block-index',
+    async run(context) {
+      if (!context.distDir) return noBuild(context);
+      const { entries, pages } = await context.built();
+      const report = findUnindexedBlocks(entries, pages);
+      if (report.totalBlocks === 0) return { severity: 'skip', message: 'No built page renders a block list.' };
+      const message = `${report.indexedBlocks} of ${report.totalBlocks} rendered blocks carry data-block-index.`;
+      if (report.pages.length === 0) return { severity: 'pass', message };
+      return {
+        severity: 'warn',
+        message: `${message} Without it the editor guesses blocks by counting <section>s and can highlight the wrong one.`,
+        details: listSome(report.pages.map((page) => `${page.pagePath} (${page.collection}/${page.slug}): ${page.field} ${page.missing.join(', ')} of ${page.blocks}`)),
+        data: report,
+      };
+    },
+  },
+  {
+    id: 'click-to-edit-coverage',
+    since: '1.4.1',
+    phase: 'built',
+    title: 'Click-to-edit coverage',
+    async run(context) {
+      if (!context.distDir) return noBuild(context);
+      const { entries, pages } = await context.built();
+      const report = computeFieldCoverage(entries, pages);
+      if (report.totalFields === 0) {
+        return { severity: 'skip', message: 'No built page renders an entry with text fields.', data: report };
+      }
+      const share = report.coveredFields / report.totalFields;
+      const perCollection = report.byCollection.map((summary) => `${summary.collection} ${summary.covered}/${summary.fields}`).join(', ');
+      const message = `Click-to-edit reaches ${report.coveredFields} of ${report.totalFields} text fields (${percent(report.coveredFields, report.totalFields)}): ${perCollection}.`;
+      const details = [];
+      for (const summary of report.byCollection) {
+        const gaps = report.entries.filter((entry) => entry.collection === summary.collection && entry.covered < entry.fields);
+        if (gaps.length === 0) continue;
+        const example = gaps[0];
+        details.push(`${summary.collection}: ${gaps.length} of ${summary.entries} entries have gaps, e.g. ${example.slug} on ${example.pagePath} misses ${listSome(example.missing).join(', ')}`);
+      }
+      if (report.notRendered > 0) details.push(`${report.notRendered} text fields are not counted: their text is not visible outside a link on the page (page titles, link labels, metadata, reformatted dates).`);
+      if (report.unchecked.length > 0) details.push(`${report.unchecked.length} entries had no built page and were not checked.`);
+      return { severity: share >= COVERAGE_PASS_SHARE ? 'pass' : 'warn', message, details, data: report };
+    },
+  },
+  {
+    id: 'click-to-edit-names',
+    since: '1.4.1',
+    phase: 'built',
+    title: 'data-aa-field names match a field',
+    async run(context) {
+      if (!context.distDir) return noBuild(context);
+      const { entries, pages } = await context.built();
+      const unknown = findUnknownFieldNames(entries, pages);
+      if (unknown.length === 0) return { severity: 'pass', message: 'Every data-aa-field names a field of an entry on its page.' };
+      return {
+        severity: 'warn',
+        message: `${unknown.length} data-aa-field value(s) name no field of the entries on their page, so clicking them does nothing.`,
+        details: listSome(unknown.map((item) => `${item.pagePath}: "${item.name}"`)),
+      };
+    },
+  },
+  {
+    id: 'click-to-edit-links',
+    since: '1.4.1',
+    phase: 'built',
+    title: 'No data-aa-field on links',
+    async run(context) {
+      if (!context.distDir) return noBuild(context);
+      const { pages } = await context.built();
+      const found = findAnnotatedLinks(pages);
+      if (found.length === 0) return { severity: 'pass', message: 'No annotated element is, or holds, a link.' };
+      return {
+        severity: 'warn',
+        message: `${found.length} annotated element(s) are or hold a link: a click there focuses the field and then navigates the preview away.`,
+        details: listSome(found.map((item) => `${item.pagePath}: "${item.name}" ${item.problem}`)),
+      };
+    },
+  },
+];

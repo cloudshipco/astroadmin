@@ -11,6 +11,7 @@ AstroAdmin is a visual admin interface for [Astro Content Collections](https://d
 - [Inline Editing](./inline-editing.md) - Convert template pages to editable content
 - [Configuration](./configuration.md) - Customize AstroAdmin behavior
 - [Requirements](./requirements.md) - What your Astro project needs
+- [Doctor](./doctor.md) - Check a site's setup and click-to-edit coverage
 
 ## Features
 

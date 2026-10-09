@@ -717,7 +717,7 @@ function countImageFields(siblingProps) {
 /**
  * Check if a field is an image field based on name and schema
  */
-function isImageField(name, schema) {
+export function isImageField(name, schema) {
   // Field names that indicate an image
   const imageFieldNames = ['image', 'logo', 'ogImage', 'src', 'icon', 'avatar', 'photo', 'thumbnail', 'banner', 'background'];
   const lowerName = name.toLowerCase();
