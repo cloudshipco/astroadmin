@@ -144,6 +144,27 @@ await check('dashboard.js builds content and dashboard URLs only through entry-u
   assert.equal(dashboardSource.includes('`/api/collections/${'), false, 'a hand-built collection API URL');
 });
 
+await check('no ui/*.js file builds an entry, dashboard or collection URL by hand', () => {
+  const uiFiles = fs.readdirSync(path.join(repoRoot, 'ui')).filter((name) => name.endsWith('.js') && name !== 'entry-urls.js');
+  // Positive control: the listing is the real ui folder, and it holds the files the rule is about.
+  for (const expected of ['dashboard.js', 'reference-picker.js', 'entry-picker.js']) {
+    assert.ok(uiFiles.includes(expected), `${expected} not found in ui/ (${uiFiles.length} files)`);
+  }
+  const offences = [];
+  for (const name of uiFiles) {
+    const source = fs.readFileSync(path.join(repoRoot, 'ui', name), 'utf8');
+    for (const [needle, what] of [
+      ['`/api/collections/${', 'collection API URL'],
+      ['/api/content/', 'content API URL'],
+      ['`/dashboard/${', 'dashboard URL'],
+      ['`/dashboard/__page__/', 'virtual-page URL'],
+    ]) {
+      if (source.includes(needle)) offences.push(`${name}: hand-built ${what}`);
+    }
+  }
+  assert.deepEqual(offences, []);
+});
+
 await check('virtual pages: a slug with non-ASCII and escaped characters survives a reload parse', async () => {
   for (const pageSlug of ['über_café', '100%_done', 'a#b?c', 'spaced name', 'colon:slug', 'docs_intro']) {
     const dashboardPath = virtualPageDashboardPath(pageSlug);
@@ -183,6 +204,21 @@ await check('picker: choosing "pages/team/jane" loads collection pages, slug tea
   handler({ target: { value: 'pages/team/jane' } });
   handler({ target: { value: 'pages/about' } });
   assert.deepEqual(loads, [['pages', 'team/jane'], ['pages', 'about']]);
+});
+
+await check('picker: "New..." passes the whole collection name after the first colon', () => {
+  const dashboardSource = fs.readFileSync(path.join(repoRoot, 'ui/dashboard.js'), 'utf8');
+  const handlerSource = dashboardSource.match(/document\.getElementById\('pageSelector'\)\.addEventListener\('change', \(e\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(handlerSource, 'pageSelector change handler not found in dashboard.js');
+  const opened = [];
+  let handler = null;
+  const documentStub = { getElementById: (id) => (id === 'pageSelector' ? { addEventListener: (type, fn) => { if (type === 'change') handler = fn; } } : null) };
+  new Function('document', 'loadEntry', 'loadVirtualPage', 'openNewItemModal', 'splitEntryValue', 'entryValue', 'currentCollection', 'currentSlug', handlerSource)(
+    documentStub, () => {}, () => {}, (collection) => opened.push(collection), splitEntryValue, entryValue, null, null,
+  );
+  handler({ target: { value: 'new:articles' } });
+  handler({ target: { value: 'new:docs:v2' } });
+  assert.deepEqual(opened, ['articles', 'docs:v2']);
 });
 
 await check('splitEntryValue splits at the first slash only', () => {

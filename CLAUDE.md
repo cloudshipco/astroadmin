@@ -116,7 +116,9 @@ runner aggregating them). Most run server-less and need env vars:
   nested slug (`2024/first-post`) travels as ONE encoded segment, so reads, saves and dashboard
   links reach `/:collection/:slug`; and dashboard.js builds no such URL by hand, nor a picker
   value (`entryValue`), a collection API URL or a virtual-page URL (whose slug, from a file
-  name, must survive a reload's percent-encoded pathname).
+  name, must survive a reload's percent-encoded pathname). No `ui/*.js` file hand-builds a content,
+  dashboard, collection API or virtual-page URL; a "New..." choice keeps a collection name
+  with a colon whole.
 - `bun tests/content-traversal.test.js` — path traversal through the real `createServer()` app,
   as a logged-in editor: encoded collections (`%2F..`, double-encoded, backslashes, absolute,
   unicode dots, NUL, `__proto__`), hostile slugs, symlinks out of a collection, image filenames

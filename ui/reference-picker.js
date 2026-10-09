@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml } from './escape-html.js';
+import { collectionApiPath } from './entry-urls.js';
 
 let currentCallback = null;
 let currentCollection = null;
@@ -153,7 +154,7 @@ async function loadEntries(excludeIds = []) {
   empty.classList.add('hidden');
 
   try {
-    const response = await fetch(`/api/collections/${currentCollection}/entries?preview=true`);
+    const response = await fetch(collectionApiPath(currentCollection, '/entries?preview=true'));
     const data = await response.json();
 
     loading.classList.add('hidden');

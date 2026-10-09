@@ -419,7 +419,7 @@ document.getElementById('pageSelector').addEventListener('change', (e) => {
     // Reset dropdown to previous value (don't keep "New..." selected)
     e.target.value = currentCollection && currentSlug ? entryValue(currentCollection, currentSlug) : '';
     // Open new item modal
-    const collectionName = value.split(':')[1];
+    const collectionName = value.slice('new:'.length);
     openNewItemModal(collectionName);
   } else {
     const entry = splitEntryValue(value);
