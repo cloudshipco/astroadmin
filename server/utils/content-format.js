@@ -108,15 +108,17 @@ export function restoreDates(previous, next) {
 }
 
 /**
- * Top-level fields a collection's parsed JSON schema marks as dates
- * (`format: 'date'` or `'date-time'`, directly or in an anyOf/oneOf branch, as
- * optional and nullable fields come out).
+ * Top-level fields a collection's parsed JSON schema marks as dates: the
+ * schema parser's `'x-astroadmin-date': true` on z.date() / z.coerce.date(),
+ * directly or in an anyOf/oneOf branch, as optional and nullable fields come
+ * out. `format: 'date'` alone is not enough: z.iso.date() and zod 3's
+ * z.string().date() emit it too, and those are strings.
  * @param {Object|null} jsonSchema
  * @returns {Set<string>}
  */
 export function dateFieldsFromSchema(jsonSchema) {
   const fields = new Set();
-  const isDate = (node) => Boolean(node) && (node.format === 'date' || node.format === 'date-time'
+  const isDate = (node) => Boolean(node) && (node['x-astroadmin-date'] === true
     || [...(node.anyOf || []), ...(node.oneOf || []), ...(node.allOf || [])].some(isDate));
   for (const [name, property] of Object.entries(jsonSchema?.properties || {})) {
     if (isDate(property)) fields.add(name);

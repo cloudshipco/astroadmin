@@ -250,33 +250,30 @@ try {
     assert.equal(matter(noSchema, {}).data.publishDate, '2026-02-01', 'no schema information: no guessing from the string');
   });
 
-  await check('dateFieldsFromSchema reads top-level format date / date-time (through anyOf for optional/nullable)', () => {
+  await check('dateFieldsFromSchema reads the parser\'s x-astroadmin-date marker, not format alone', () => {
+    // z.date()/z.coerce.date() carry 'x-astroadmin-date'; z.iso.date() and zod 3's
+    // z.string().date() also emit format: 'date' but are STRINGS and must stay so.
     const fields = dateFieldsFromSchema({ type: 'object', properties: {
-      a: { type: 'string', format: 'date' },
-      b: { type: 'string', format: 'date-time' },
-      c: { anyOf: [{ type: 'string', format: 'date' }, { type: 'null' }] },
+      a: { type: 'string', format: 'date', 'x-astroadmin-date': true },
+      b: { type: 'string', format: 'date-time', 'x-astroadmin-date': true },
+      c: { anyOf: [{ type: 'string', format: 'date', 'x-astroadmin-date': true }, { type: 'null' }] },
       d: { type: 'string' },
-      e: { type: 'string', format: 'email' },
+      isoString: { type: 'string', format: 'date' },
+      isoDateTime: { type: 'string', format: 'date-time' },
     } });
     assert.deepEqual([...fields].sort(), ['a', 'b', 'c']);
     assert.equal(dateFieldsFromSchema(null).size, 0);
   });
 
-  await check('the files store hands the collection schema\'s date fields to the serialiser', async () => {
-    // What the schema parser emits for a date field (zod 3 does natively; the
-    // zod 4 path is the parser's job). Set on the cached parse, as the parser
-    // would produce it.
+  await check('the files store hands the parsed schema\'s date fields to the serialiser', async () => {
+    // publishDate is z.date() in this collection's real content.config.ts; the
+    // parser marks it, so a new value is written as a YAML date.
     const { loadSchemas } = await import('../server/utils/collections.js');
     const schemas = await loadSchemas();
-    const original = schemas.pages.schema.properties.publishDate;
-    schemas.pages.schema.properties.publishDate = { type: 'string', format: 'date' };
-    try {
-      await writeContent('pages', 'dated', { data: { title: 'Dated', draft: false, publishDate: '2026-05-01', tags: [] }, body: 'Hi', type: 'content' });
-      const written = fsSync.readFileSync(path.join(tmpRoot, 'src/content/pages/dated.md'), 'utf-8');
-      assert.match(written, /^publishDate: 2026-05-01$/m, written);
-    } finally {
-      schemas.pages.schema.properties.publishDate = original;
-    }
+    assert.equal(schemas.pages.schema.properties.publishDate['x-astroadmin-date'], true, 'positive control: the parser marks z.date()');
+    await writeContent('pages', 'dated', { data: { title: 'Dated', draft: false, publishDate: '2026-05-01', tags: [] }, body: 'Hi', type: 'content' });
+    const written = fsSync.readFileSync(path.join(tmpRoot, 'src/content/pages/dated.md'), 'utf-8');
+    assert.match(written, /^publishDate: 2026-05-01$/m, written);
   });
 
   console.log('='.repeat(40));
