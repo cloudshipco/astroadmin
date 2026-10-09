@@ -41,7 +41,7 @@ export async function loadSchemas() {
   // Start loading
   schemasLoading = (async () => {
     try {
-      console.log('🔄 Parsing content schemas from config.ts...');
+      console.log('🔄 Parsing content schemas from content.config.ts...');
       cachedSchemas = await parseAstroSchemas(config.paths.projectRoot);
       console.log(`✅ Loaded ${Object.keys(cachedSchemas).length} collection schemas`);
       return cachedSchemas;
