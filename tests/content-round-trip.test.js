@@ -226,6 +226,20 @@ try {
     assert.equal(added, '---\ntitle: T\npublishDate: 2026-02-01\n---\nHi\n');
   });
 
+  await check('a date-time edited without a zone or seconds stays a Date, read as UTC like YAML', () => {
+    // A datetime-local input sends 2026-01-16T09:30 (no seconds, no zone). YAML reads
+    // a zoneless timestamp as UTC; JavaScript's Date() would read it as local time.
+    const original = '---\nwhen: 2026-01-15T10:00:00.000Z\n---\nHi\n';
+    for (const sent of ['2026-01-16T09:30', '2026-01-16 09:30:00']) {
+      const out = serializeMarkdown('Hi', { when: sent }, original);
+      const when = matter(out, {}).data.when;
+      assert.ok(when instanceof Date, `${sent}: must stay a Date, got ${JSON.stringify(when)} in ${out}`);
+      assert.equal(when.toISOString(), '2026-01-16T09:30:00.000Z', sent);
+    }
+    const fresh = serializeMarkdown('Hi', { when: '2026-01-16T09:30' }, null, { dateFields: new Set(['when']) });
+    assert.equal(matter(fresh, {}).data.when.toISOString(), '2026-01-16T09:30:00.000Z', fresh);
+  });
+
   await check('schema date field: an existing quoted (string) value stays a string; a non-date field is never converted', () => {
     const dateFields = new Set(['publishDate']);
     const kept = serializeMarkdown('Hi', { publishDate: '2026-03-01' }, "---\npublishDate: '2026-01-15'\n---\nHi\n", { dateFields });

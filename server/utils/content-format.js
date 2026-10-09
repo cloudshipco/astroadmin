@@ -25,9 +25,32 @@
 import matter from 'gray-matter';
 
 const DEFAULT_INDENT = '  ';
-// A YAML 1.1 timestamp as js-yaml reads it: date-only, or date and time.
+// A YAML 1.1 timestamp as js-yaml reads it: date-only, or date and time. Seconds
+// are optional here because a datetime-local input sends none (2026-01-16T09:30).
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
-const TIMESTAMP = /^\d{4}-\d{1,2}-\d{1,2}(?:[Tt]|[ \t]+)\d{1,2}:\d{2}:\d{2}(?:\.\d*)?(?:[ \t]*(?:Z|[-+]\d{1,2}(?::?\d{2})?))?$/;
+const TIMESTAMP = /^(\d{4}-\d{1,2}-\d{1,2})(?:[Tt]|[ \t]+)(\d{1,2}:\d{2}(?::\d{2}(?:\.\d*)?)?)[ \t]*(Z|[-+]\d{1,2}(?::?\d{2})?)?$/;
+
+/**
+ * A Date from a TIMESTAMP string, read as YAML reads it: no zone means UTC.
+ * (new Date() would read '2026-01-16T09:30' as local time.)
+ * @returns {Date|null}
+ */
+function parseTimestamp(text) {
+  const match = text.match(TIMESTAMP);
+  if (!match) return null;
+  const [, day, time, zone] = match;
+  const [year, month, dayOfMonth] = day.split('-').map((part) => part.padStart(2, '0'));
+  const [hours, ...rest] = time.split(':');
+  let offset = 'Z';
+  if (zone && zone !== 'Z') {
+    const sign = zone[0];
+    const digits = zone.slice(1).replace(':', '');
+    offset = `${sign}${digits.slice(0, 2).padStart(2, '0')}:${(digits.slice(2) || '00').padEnd(2, '0')}`;
+  }
+  const iso = `${year.padStart(4, '0')}-${month}-${dayOfMonth}T${hours.padStart(2, '0')}:${rest.join(':')}${rest.length === 1 ? ':00' : ''}${offset}`;
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
 
 export function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date);
@@ -81,11 +104,7 @@ export function restoreDates(previous, next) {
     dateOnlyDates.add(date);
     return date;
   }
-  if (TIMESTAMP.test(next)) {
-    const date = new Date(next);
-    return Number.isNaN(date.getTime()) ? next : date;
-  }
-  return next;
+  return parseTimestamp(next) ?? next;
 }
 
 /**
@@ -123,9 +142,9 @@ function datesForNewValues(originalData, data, dateFields) {
       if (Number.isNaN(date.getTime())) continue;
       dateOnlyDates.add(date);
       converted[key] = date;
-    } else if (TIMESTAMP.test(value)) {
-      const date = new Date(value);
-      if (!Number.isNaN(date.getTime())) converted[key] = date;
+    } else {
+      const date = parseTimestamp(value);
+      if (date) converted[key] = date;
     }
   }
   return converted;
