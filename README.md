@@ -21,7 +21,9 @@ still builds. Publishing is a git commit and push.
 - The preview iframe is your site running under `astro dev`, with your
   styles and components.
 - With `data-aa-field` attributes on your templates, a click on text in the
-  preview opens its field, and focusing a field outlines its text.
+  preview opens its field, and focusing a field outlines its text. Name the
+  field as the form does (`title`, `blocks[0].heading`); for a list of
+  objects, annotate the list (`blocks[0].items`).
   See [inline editing](./docs/inline-editing.md).
 - Edits save automatically; there is no Save button. A save writes the file
   atomically and keeps its key order, comments and formatting. If the entry
@@ -68,8 +70,8 @@ The default login is `admin` / `admin`. Before the editor is reachable from
 the internet, set `NODE_ENV=production`, `ADMIN_USERNAME`,
 `ADMIN_PASSWORD_HASH` (from `npx astroadmin hash-password`) and
 `SESSION_SECRET`. Production mode turns on secure cookies and login rate
-limiting, and AstroAdmin prints a warning at startup if it runs with weak
-auth settings.
+limiting, and in production AstroAdmin prints a warning at startup if it runs
+with weak auth settings.
 
 ## Requirements
 
@@ -94,6 +96,11 @@ Markdown with frontmatter is used for `glob()` collections and JSON for
 collections yet? See the [setup guide](./docs/content-collections.md).
 
 ## Publishing
+
+Saves change files only; nothing is committed until someone presses Publish
+(the startup line "Git: manual commits"). The machine running AstroAdmin needs
+a git author (`git config user.name` and `user.email` in the site repository)
+and push access to `origin`.
 
 Publish commits the configured paths (`src/content/`, styles and images, set
 by `config.git.paths`) and pushes. A host that builds on push, such as Netlify,
@@ -136,7 +143,7 @@ A collection such as `team` has no URL of its own. If a block lists its
 entries (a `team` block with `teamIds: z.array(z.string())`, or
 `z.array(reference('team'))`), editing a team member previews it inside
 `src/components/blocks/TeamBlock.astro` (or `Team.astro`), which receives the
-block's fields as props. Otherwise, point the collection at a page that shows
+block as a `block` prop and its fields as props. Otherwise, point the collection at a page that shows
 it:
 
 ```javascript
