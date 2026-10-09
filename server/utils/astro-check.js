@@ -126,7 +126,7 @@ async function linkNodeModules(sourceDir, targetDir) {
  * workspace package) would resolve to the live checkout's UNCOMMITTED copy,
  * so the check would not be of the commit. Returns the first one found.
  */
-export async function findWorkspaceLink(nodeModulesDir, realRepoTop) {
+async function findWorkspaceLink(nodeModulesDir, realRepoTop) {
   const candidates = [];
   for (const entry of await fs.readdir(nodeModulesDir)) {
     if (entry.startsWith('.')) continue;
@@ -235,7 +235,7 @@ export async function listGitlinks(projectRoot, revision) {
  * @param {string} siteSubdir - the site's directory relative to the repo root
  * @returns {Array<{relativeDir: string, liveNodeModules: string}>}
  */
-export function nodeModulesLevels(realRepoTop, siteSubdir) {
+function nodeModulesLevels(realRepoTop, siteSubdir) {
   const levels = siteSubdir ? siteSubdir.split(path.sep) : [];
   const result = [];
   for (let depth = 0; depth <= levels.length; depth++) {
