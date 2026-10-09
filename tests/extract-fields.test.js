@@ -399,5 +399,31 @@ check('a realistic page with blocks: [] round-trips through extractFormData unch
   equal(extractFormData(form, schema), page);
 });
 
+// --- Integers read back as numbers --------------------------------------------
+// z.number().int() is JSON Schema `integer`. Rendered as anything but
+// type="number" it reads back as the string "2" and fails validation.
+
+const INT = { type: 'integer', minimum: -9007199254740991, maximum: 9007199254740991 };
+
+check('integer fields (plain, default, nullable, nested, array) read back as numbers', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      order: { default: 0, ...INT },
+      rank: { anyOf: [INT, { type: 'null' }] },
+      stats: { type: 'object', properties: { visits: INT } },
+      sizes: { type: 'array', items: INT },
+    },
+    required: ['order', 'stats', 'sizes'],
+  };
+  const entry = { order: 2, rank: 7, stats: { visits: 40 }, sizes: [3, 5] };
+  equal(extractFormData(render(schema, entry), schema), entry);
+});
+
+check('a date-format field reads back as the YYYY-MM-DD string the schema coerces', () => {
+  const schema = { type: 'object', properties: { joined: { type: 'string', format: 'date' } }, required: ['joined'] };
+  equal(extractFormData(render(schema, { joined: '2020-04-02' }), schema), { joined: '2020-04-02' });
+});
+
 console.log(`\n${passed} checks passed, ${failures.length} failed, ${assertions} assertions run`);
 if (failures.length > 0) process.exit(1);

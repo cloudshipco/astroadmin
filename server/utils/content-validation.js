@@ -46,6 +46,75 @@ export function formatIssuePath(issuePath) {
   return formatted;
 }
 
+/** The description the schema bundler gives Astro's image() (see schema-parser.js). */
+const IMAGE_DESCRIPTION = 'Image path';
+
+/**
+ * The one member of a nullable union (`{anyOf: [X, {type: 'null'}]}`), or the
+ * node itself.
+ * @param {Object} node - a JSON Schema node
+ * @returns {Object}
+ */
+function nonNullMember(node) {
+  const union = node?.anyOf || node?.oneOf;
+  if (!Array.isArray(union)) return node;
+  const nonNull = union.filter((member) => member?.type !== 'null');
+  return nonNull.length === 1 ? nonNull[0] : node;
+}
+
+/**
+ * The schema of one item of an array, resolving a block union by the item's
+ * `type` discriminator (a block array's items are `oneOf` the block schemas).
+ */
+function itemSchemaFor(itemsNode, item) {
+  const union = itemsNode?.anyOf || itemsNode?.oneOf;
+  if (!Array.isArray(union)) return itemsNode;
+  if (item && typeof item === 'object' && typeof item.type === 'string') {
+    const match = union.find((option) => option?.properties?.type?.const === item.type);
+    if (match) return match;
+  }
+  return nonNullMember(itemsNode);
+}
+
+/**
+ * Find REQUIRED image() fields whose stored value is the empty string.
+ *
+ * The bundled schema stands image() in as `z.string()`, so '' passes it, while
+ * the site's own build refuses an empty image path. An empty OPTIONAL image is
+ * not reported: the editor drops empty optionals before saving.
+ *
+ * @param {Object} node - JSON Schema for `value`
+ * @param {*} value - the stored data at this level
+ * @param {Array<string|number>} issuePath - path of `value`
+ * @param {Array<{path: Array<string|number>, message: string}>} found - collects issues
+ */
+function findEmptyRequiredImages(node, value, issuePath, found) {
+  const schema = nonNullMember(node);
+  if (!schema || value === null || value === undefined) return;
+
+  if (Array.isArray(value)) {
+    if (!schema.items) return;
+    value.forEach((item, index) => {
+      findEmptyRequiredImages(itemSchemaFor(schema.items, item), item, [...issuePath, index], found);
+    });
+    return;
+  }
+
+  if (typeof value !== 'object' || !schema.properties) return;
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  for (const [key, propertyNode] of Object.entries(schema.properties)) {
+    const property = nonNullMember(propertyNode);
+    const fieldValue = value[key];
+    if (property?.description === IMAGE_DESCRIPTION) {
+      if (required.has(key) && fieldValue === '') {
+        found.push({ path: [...issuePath, key], message: 'An image is required' });
+      }
+      continue;
+    }
+    findEmptyRequiredImages(property, fieldValue, [...issuePath, key], found);
+  }
+}
+
 /**
  * Validate entry data against an already-loaded collection schema entry.
  * @param {Object|undefined} collectionSchema - one value of loadSchemas()
@@ -64,17 +133,23 @@ export async function validateAgainstSchema(collectionSchema, data) {
   }
 
   const result = await zodSchema.safeParseAsync(data);
-  if (result.success) {
-    return { status: 'valid', issues: [] };
-  }
-
-  return {
-    status: 'invalid',
-    issues: result.error.issues.map((issue) => ({
+  const issues = result.success
+    ? []
+    : result.error.issues.map((issue) => ({
       path: formatIssuePath(issue.path),
       message: issue.message,
-    })),
-  };
+    }));
+
+  const emptyImages = [];
+  findEmptyRequiredImages(collectionSchema.schema, data, [], emptyImages);
+  for (const emptyImage of emptyImages) {
+    const issuePath = formatIssuePath(emptyImage.path);
+    if (!issues.some((issue) => issue.path === issuePath)) {
+      issues.push({ path: issuePath, message: emptyImage.message });
+    }
+  }
+
+  return issues.length === 0 ? { status: 'valid', issues: [] } : { status: 'invalid', issues };
 }
 
 /**

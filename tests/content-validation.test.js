@@ -52,7 +52,33 @@ const notes = defineCollection({
   loader: glob({ pattern: '**/*.md', base: './src/content/notes' }),
 });
 
-export const collections = { pages, clients, notes };
+// image() and z.coerce.date() in both a glob() markdown collection and a
+// file() JSON collection.
+const team = defineCollection({
+  loader: file('src/content/team.json'),
+  schema: ({ image }) => z.object({
+    id: z.string(),
+    name: z.string(),
+    joined: z.coerce.date(),
+    photo: image(),
+    avatar: image().optional(),
+  }),
+});
+
+const posts = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/content/posts' }),
+  schema: ({ image }) => z.object({
+    title: z.string(),
+    joined: z.coerce.date(),
+    cover: image(),
+    thumb: image().optional(),
+    blocks: z.array(z.discriminatedUnion('type', [
+      z.object({ type: z.literal('figure'), picture: image(), caption: z.string().optional() }),
+    ])).default([]),
+  }),
+});
+
+export const collections = { pages, clients, notes, team, posts };
 `;
 
 function git(...args) {
@@ -88,6 +114,8 @@ writeProjectFile('src/content.config.ts', CONTENT_CONFIG);
 writeProjectFile('src/content/pages/home.md', '---\ntitle: Home\nblocks:\n  - type: hero\n    title: Welcome\n---\n');
 writeProjectFile('src/content/clients.json', `${JSON.stringify([{ id: 'acme', name: 'Acme', url: 'https://example.com/' }], null, 2)}\n`);
 writeProjectFile('src/content/notes/free-form.md', '---\nanything: [1, 2]\n---\n');
+writeProjectFile('src/content/team.json', `${JSON.stringify([{ id: 'ada', name: 'Ada', joined: '2020-04-02', photo: '../assets/ada.png' }], null, 2)}\n`);
+writeProjectFile('src/content/posts/first.md', '---\ntitle: First\njoined: 2020-04-02\ncover: ../../assets/cover.png\n---\nBody.\n');
 
 git('init', '-q');
 git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'add', '-A');
@@ -108,9 +136,9 @@ function routeHandler(router, routePath, method) {
 const saveHandler = routeHandler(contentRouter, '/:collection/:slug', 'post');
 const updateHandler = routeHandler(contentRouter, '/:collection/:slug', 'put');
 
+// Every check runs even after one fails, so a red run names every broken case.
 let passed = 0;
-// Failure sentinel: already reported by check(), unwinds to the finally cleanup.
-class CheckFailed extends Error {}
+const failures = [];
 async function check(name, fn) {
   try {
     await fn();
@@ -118,7 +146,7 @@ async function check(name, fn) {
     console.log(`✅ ${name}`);
   } catch (error) {
     console.error(`❌ ${name}\n   ${error.stack || error.message}`);
-    throw new CheckFailed(name);
+    failures.push(name);
   }
 }
 
@@ -227,11 +255,92 @@ await check('an update (PUT) also reports validation', async () => {
   assert.equal(res.body.validation.status, 'invalid');
 });
 
+// --- image(): an empty REQUIRED image is a warning, an empty optional is not --
+
+const issuePaths = (validation) => validation.issues.map((issue) => issue.path);
+
+await check('control: the image entries are valid as stored', async () => {
+  assert.equal((await validateStoredEntry('team', 'ada')).status, 'valid');
+  assert.equal((await validateStoredEntry('posts', 'first')).status, 'valid');
+});
+
+await check('an empty required image() in a file() collection is invalid', async () => {
+  await writeContent('team', 'ada', {
+    data: { id: 'ada', name: 'Ada', joined: '2020-04-02', photo: '' }, body: null, type: 'data',
+  });
+  const validation = await validateStoredEntry('team', 'ada');
+  assert.equal(validation.status, 'invalid');
+  assert.deepEqual(issuePaths(validation), ['photo']);
+  assert.ok(fs.readFileSync(path.join(projectRoot, 'src/content/team.json'), 'utf-8').includes('"photo": ""'),
+    'the save still wrote the empty image');
+});
+
+await check('an empty or absent OPTIONAL image() stays valid', async () => {
+  await writeContent('team', 'ada', {
+    data: { id: 'ada', name: 'Ada', joined: '2020-04-02', photo: '../assets/ada.png', avatar: '' }, body: null, type: 'data',
+  });
+  assert.equal((await validateStoredEntry('team', 'ada')).status, 'valid');
+  await writeContent('team', 'ada', {
+    data: { id: 'ada', name: 'Ada', joined: '2020-04-02', photo: '../assets/ada.png' }, body: null, type: 'data',
+  });
+  assert.equal((await validateStoredEntry('team', 'ada')).status, 'valid');
+});
+
+await check('an empty required image() in markdown frontmatter and inside a block is invalid', async () => {
+  await writeContent('posts', 'first', {
+    data: { title: 'First', joined: '2020-04-02', cover: '', thumb: '', blocks: [{ type: 'figure', picture: '' }] },
+    body: 'Body.\n',
+    type: 'content',
+  });
+  const validation = await validateStoredEntry('posts', 'first');
+  assert.equal(validation.status, 'invalid');
+  assert.deepEqual(issuePaths(validation).sort(), ['blocks[0].picture', 'cover']);
+});
+
+await check('the save response carries the empty-image warning', async () => {
+  const res = createJsonResponse();
+  await saveHandler({
+    params: { collection: 'team', slug: 'ada' },
+    query: {},
+    body: { data: { id: 'ada', name: 'Ada', joined: '2020-04-02', photo: '' }, type: 'data' },
+  }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.validation.status, 'invalid');
+  assert.deepEqual(issuePaths(res.body.validation), ['photo']);
+});
+
+// --- z.coerce.date(): a date control in both a file() and a glob() collection --
+
+const { loadSchemas } = await import('../server/utils/collections.js');
+const { generateForm } = await import('../ui/form-generator.js');
+
+await check('z.coerce.date() is a date in the JSON Schema of a file() and a glob() collection', async () => {
+  const schemas = await loadSchemas();
+  for (const collection of ['team', 'posts']) {
+    const joined = schemas[collection].schema.properties.joined;
+    assert.equal(joined.format, 'date', `${collection}.joined: ${JSON.stringify(joined)}`);
+    const html = generateForm(schemas[collection].schema, { joined: '2020-04-02' });
+    assert.ok(/<input\s+type="date"\s+name="joined"/s.test(html), `${collection}.joined is not a date input`);
+  }
+});
+
+await check('a date saved from the date input validates in both collections', async () => {
+  await writeContent('team', 'ada', {
+    data: { id: 'ada', name: 'Ada', joined: '2021-01-31', photo: '../assets/ada.png' }, body: null, type: 'data',
+  });
+  assert.equal((await validateStoredEntry('team', 'ada')).status, 'valid');
+  await writeContent('posts', 'first', {
+    data: { title: 'First', joined: '2021-01-31', cover: '../../assets/cover.png', blocks: [] }, body: 'Body.\n', type: 'content',
+  });
+  assert.equal((await validateStoredEntry('posts', 'first')).status, 'valid');
+});
+
 console.log('='.repeat(40));
-console.log(`\n📊 ${passed} checks passed.\n`);
+console.log(`\n📊 ${passed} checks passed, ${failures.length} failed.\n`);
+if (failures.length > 0) process.exitCode = 1;
 
 } catch (error) {
-  if (!(error instanceof CheckFailed)) console.error(error);
+  console.error(error);
   process.exitCode = 1;
 } finally {
   fs.rmSync(projectRoot, { recursive: true, force: true });

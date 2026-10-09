@@ -292,10 +292,26 @@ export async function parseAstroSchemas(projectRoot) {
  *   - unrepresentable: 'any'  emit {} for JSON-unrepresentable types (e.g.
  *                             z.coerce.date()) instead of throwing
  *   - io: 'input'             describe the editable INPUT shape (defaults optional)
+ *   - override                a date (z.date(), z.coerce.date()) becomes
+ *                             {type: 'string', format: 'date'}. Left as {} it
+ *                             rendered as a date input only when its NAME looked
+ *                             like a date (`publishDate`), and as a textarea
+ *                             otherwise (`joined`). zod 3's serializer already
+ *                             emits a date format.
  */
 function toJsonSchema(zodSchema) {
   if (typeof zodSchema?.toJSONSchema === 'function') {
-    return zodSchema.toJSONSchema({ reused: 'inline', unrepresentable: 'any', io: 'input' });
+    return zodSchema.toJSONSchema({
+      reused: 'inline',
+      unrepresentable: 'any',
+      io: 'input',
+      override: (ctx) => {
+        if (ctx.zodSchema?._zod?.def?.type === 'date') {
+          ctx.jsonSchema.type = 'string';
+          ctx.jsonSchema.format = 'date';
+        }
+      },
+    });
   }
   return zodToJsonSchema(zodSchema, { $refStrategy: 'none', errorMessages: true });
 }

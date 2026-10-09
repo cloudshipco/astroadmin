@@ -124,6 +124,42 @@ function generateTopLevelArrayForm(schema, data) {
 }
 
 /**
+ * Render a nullable field as its non-null type.
+ *
+ * zod 4 serialises `.nullable()` as `{anyOf: [<type>, {type: 'null'}]}`, which
+ * carries no top-level `type`, so a nullable integer, boolean or date fell
+ * through to the textarea. Any other union is returned unchanged.
+ * @param {object} schema - a field's JSON Schema
+ * @returns {object}
+ */
+export function unwrapNullable(schema) {
+  const union = schema?.anyOf || schema?.oneOf;
+  if (!Array.isArray(union) || schema.type !== undefined) return schema || {};
+  const nonNull = union.filter((member) => member?.type !== 'null');
+  if (nonNull.length !== 1 || nonNull.length === union.length) return schema;
+  const { anyOf, oneOf, ...rest } = schema;
+  return { ...nonNull[0], ...rest };
+}
+
+/** JSON Schema numeric types: zod's z.number() is 'number', .int() is 'integer'. */
+function isNumericType(type) {
+  return type === 'number' || type === 'integer';
+}
+
+/**
+ * A value as the text a textarea or text input shows. Anything that is not a
+ * string (a number in a field the schema calls text, an object in a field whose
+ * type the parser could not represent) must not crash the whole entry.
+ */
+function displayText(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : value.toISOString();
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+/**
  * Generate a single field
  * @param {string} name - Field name
  * @param {object} schema - Field schema
@@ -134,8 +170,9 @@ function generateTopLevelArrayForm(schema, data) {
  * @param {object} [ctx.siblingProps] - Schema of the sibling fields (e.g. to detect an explicit alt field)
  * @param {string} [ctx.idPrefix] - Prefix for the element id
  */
-function generateField(name, schema, value, path = '', ctx = {}) {
+function generateField(name, rawSchema, value, path = '', ctx = {}) {
   const { siblingData = {}, siblingProps = null, idPrefix = '', pickerVariant = '' } = ctx;
+  const schema = unwrapNullable(rawSchema);
   const fullPath = path ? `${path}.${name}` : name;
   const id = idPrefix + fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
 
@@ -262,7 +299,9 @@ function generateField(name, schema, value, path = '', ctx = {}) {
     `;
   }
 
-  if (schema.type === 'number') {
+  // `integer` (z.number().int()) as well as `number`: the element must be
+  // type="number" for extractFields to save a number rather than the string "4".
+  if (isNumericType(schema.type)) {
     return `
       <div class="form-group">
         <label for="${id}" class="form-label">${getFieldLabel(name, schema)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
@@ -272,6 +311,7 @@ function generateField(name, schema, value, path = '', ctx = {}) {
           id="${id}"
           value="${escapeHtml(value ?? schema.default ?? '')}"
           class="form-input"
+          ${schema.type === 'integer' ? 'step="1"' : 'step="any"'}
           ${schema.min !== undefined ? `min="${schema.min}"` : ''}
           ${schema.max !== undefined ? `max="${schema.max}"` : ''}
           ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
@@ -317,9 +357,10 @@ function generateField(name, schema, value, path = '', ctx = {}) {
   const isDateByName = dateFieldNames.some(d => lowerName === d || lowerName.endsWith(d));
   const isDateField = schema.format === 'date' || schema.format === 'date-time' || isDateByName;
 
-  // Default: string input (with date detection)
+  // Default: string input (with date detection). zod 4 serialises .url() as
+  // format 'uri'.
   const inputType = schema.format === 'email' ? 'email' :
-                    schema.format === 'url' ? 'url' :
+                    (schema.format === 'url' || schema.format === 'uri') ? 'url' :
                     isDateField ? 'date' : 'text';
 
   // Date fields should use date input, not textarea
@@ -354,19 +395,29 @@ function generateField(name, schema, value, path = '', ctx = {}) {
   // Large text field for long content
   // Default to textarea unless:
   // - maxLength is short (under 100 chars), OR
-  // - field name suggests it's a short field (title, link, etc.)
-  const shortFieldNames = ['text', 'link', 'href', 'url', 'title', 'heading', 'name', 'label', 'icon', 'value', 'number', 'alt'];
+  // - the format is a one-line one (an email address or a URL), OR
+  // - field name suggests it's a short field (title, link, etc.). A name
+  //   matches exactly or as a suffix (`jobTitle`, `contactEmail`, `homeCity`).
+  // The default for any other string stays a textarea: making it an input
+  // would shrink long-text fields on existing sites.
+  const shortFieldNames = [
+    'text', 'link', 'href', 'url', 'title', 'heading', 'name', 'label', 'icon', 'value', 'number', 'alt',
+    // One-line values: people, places, contact details, identifiers.
+    'role', 'position', 'company', 'organisation', 'organization', 'location', 'city', 'country',
+    'email', 'phone', 'website', 'slug', 'author', 'tag', 'category',
+  ];
   const isShortByName = shortFieldNames.some(short => lowerName === short || lowerName.endsWith(short));
   const isShortByLength = schema.maxLength && schema.maxLength < 100;
+  const isShortByFormat = ['email', 'url', 'uri'].includes(schema.format);
   const isLongByName = lowerName.includes('description') || lowerName.includes('content') || lowerName.includes('subheading');
   // An explicit `.describe('textarea')` forces a textarea even for a normally
   // short-named field (e.g. a long `title`). This only ever adds a textarea, so
   // it can't shrink a field that was one before.
   const wantsTextarea = /\btextarea\b/i.test(schema.description || '');
 
-  if (wantsTextarea || (!isShortByLength && !isShortByName) || isLongByName) {
+  if (wantsTextarea || (!isShortByLength && !isShortByName && !isShortByFormat) || isLongByName) {
     // Calculate initial rows based on content length
-    const content = value ?? '';
+    const content = displayText(value);
     const lineCount = (content.match(/\n/g) || []).length + 1;
     const charBasedRows = Math.ceil(content.length / 60); // ~60 chars per line
     const initialRows = Math.max(4, Math.min(16, Math.max(lineCount, charBasedRows)));
@@ -404,7 +455,7 @@ function generateField(name, schema, value, path = '', ctx = {}) {
         type="${inputType}"
         name="${fullPath}"
         id="${id}"
-        value="${escapeHtml(value ?? '')}"
+        value="${escapeHtml(displayText(value))}"
         class="form-input"
         ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
         ${schema.required ? 'required' : ''}
@@ -535,8 +586,9 @@ function getBlockPreview(block) {
 /**
  * Generate array item fields
  */
-function generateArrayItem(arrayPath, itemSchema, value, index) {
+function generateArrayItem(arrayPath, rawItemSchema, value, index) {
   const path = `${arrayPath}[${index}]`;
+  const itemSchema = unwrapNullable(rawItemSchema);
   const itemData = value || {};
 
   if (itemSchema?.type === 'object') {
@@ -569,9 +621,10 @@ function generateArrayItem(arrayPath, itemSchema, value, index) {
 
   return `
     <input
-      type="${itemSchema?.type === 'number' ? 'number' : 'text'}"
+      type="${isNumericType(itemSchema?.type) ? 'number' : 'text'}"
+      ${itemSchema?.type === 'integer' ? 'step="1"' : isNumericType(itemSchema?.type) ? 'step="any"' : ''}
       name="${path}"
-      value="${escapeHtml(value ?? '')}"
+      value="${escapeHtml(isNumericType(itemSchema?.type) ? (value ?? '') : displayText(value))}"
       class="array-item-input form-input"
       placeholder="Enter value..."
     >
@@ -1958,7 +2011,7 @@ export function createEmptyArrayItem(schema) {
       item[key] = propSchema.default;
     } else if (propSchema.type === 'string') {
       item[key] = '';
-    } else if (propSchema.type === 'number') {
+    } else if (isNumericType(propSchema.type)) {
       item[key] = 0;
     } else if (propSchema.type === 'boolean') {
       item[key] = false;
@@ -2074,7 +2127,7 @@ export function createEmptyBlock(blockType, blockSchema) {
         block[key] = [];
       } else if (schema.type === 'object') {
         block[key] = {};
-      } else if (schema.type === 'number') {
+      } else if (isNumericType(schema.type)) {
         block[key] = schema.default ?? 0;
       } else if (schema.type === 'boolean') {
         block[key] = schema.default ?? false;

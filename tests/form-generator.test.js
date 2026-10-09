@@ -14,11 +14,18 @@
 import assert from 'node:assert';
 import { generateForm, generateFields, cleanEmptyValues } from '../ui/form-generator.js';
 
+// Every check runs even after one fails, so a red run names every broken case.
 let passed = 0;
+const failures = [];
 function check(name, fn) {
-  fn();
-  console.log(`✅ ${name}`);
-  passed++;
+  try {
+    fn();
+    console.log(`✅ ${name}`);
+    passed++;
+  } catch (error) {
+    console.log(`❌ ${name}\n   ${String(error.message).split('\n').join('\n   ')}`);
+    failures.push(name);
+  }
 }
 
 // --- Input type carries the schema type ------------------------------------
@@ -386,5 +393,144 @@ check('a non-const field of the same shape stays editable', () => {
   assert.ok(!/\breadonly\b/.test(control[0]), 'a field without const must remain editable');
 });
 
+// --- Integers (z.number().int() is JSON Schema `integer`) --------------------
+// There was no integer case, so an integer fell through to the textarea branch,
+// whose `content.match` threw on a number and broke the whole entry.
+
+/** The <input> (or textarea/select) element rendered for `name`, or null. */
+function controlFor(html, name) {
+  const escaped = name.replace(/[[\]]/g, '\\$&');
+  return html.match(new RegExp(`<(input|textarea|select)\\b[^>]*name="${escaped}"[^>]*>`, 's'))?.[0] ?? null;
+}
+function assertIntegerInput(html, name, value) {
+  const control = controlFor(html, name);
+  assert.ok(control, `no control rendered for ${name}`);
+  assert.ok(/^<input\b/.test(control) && /type="number"/.test(control), `${name} must be <input type="number">: ${control}`);
+  assert.ok(/step="1"/.test(control), `${name} must have step="1": ${control}`);
+  if (value !== undefined) assert.ok(control.includes(`value="${value}"`), `${name} must show ${value}: ${control}`);
+}
+const INT = { type: 'integer', minimum: -9007199254740991, maximum: 9007199254740991 };
+
+check('an integer field renders a number input with step 1', () => {
+  assertIntegerInput(generateForm({ type: 'object', properties: { order: INT } }, { order: 2 }), 'order', 2);
+});
+
+check('a default-wrapped integer renders a number input', () => {
+  const html = generateForm({ type: 'object', properties: { order: { default: 0, ...INT } } }, {});
+  assertIntegerInput(html, 'order', 0);
+});
+
+check('a nullable (anyOf with null) optional integer renders a number input', () => {
+  const html = generateForm({ type: 'object', properties: { rank: { anyOf: [INT, { type: 'null' }] } } }, { rank: 7 });
+  assertIntegerInput(html, 'rank', 7);
+});
+
+check('an integer inside a nested object renders a number input', () => {
+  const html = generateForm(
+    { type: 'object', properties: { stats: { type: 'object', properties: { visits: INT } } } },
+    { stats: { visits: 40 } },
+  );
+  assertIntegerInput(html, 'stats.visits', 40);
+});
+
+check('an array of integers renders number inputs with step 1', () => {
+  const html = generateForm({ type: 'object', properties: { sizes: { type: 'array', items: INT } } }, { sizes: [3, 5] });
+  assertIntegerInput(html, 'sizes[0]', 3);
+  assertIntegerInput(html, 'sizes[1]', 5);
+});
+
+check('an integer inside a block renders a number input', () => {
+  const html = generateForm(
+    { type: 'object', properties: { blocks: { type: 'array', blockTypes: {
+      grid: { type: 'object', properties: { type: { type: 'string', const: 'grid' }, columns: INT } },
+    } } } },
+    { blocks: [{ type: 'grid', columns: 3 }] },
+  );
+  const control = html.match(/<input\b[^>]*name="blocks\[0\]\.columns"[^>]*>/s)?.[0];
+  assert.ok(control, 'no control for blocks[0].columns');
+  assert.ok(/type="number"/.test(control) && /step="1"/.test(control), control);
+});
+
+check('an integer in the array item modal (generateFields) renders a number input', () => {
+  const html = generateFields({ name: { type: 'string' }, years: INT }, { name: 'A', years: 8 }, { idPrefix: 'modal-' });
+  assertIntegerInput(html, 'years', 8);
+});
+
+check('a plain number keeps step="any" so decimals stay valid', () => {
+  const control = controlFor(generateForm({ type: 'object', properties: { price: { type: 'number' } } }, { price: 4.5 }), 'price');
+  assert.ok(/type="number"/.test(control) && /step="any"/.test(control), control);
+});
+
+// --- No value of an unexpected type can crash an entry -----------------------
+
+check('a textarea field given a non-string value renders it as text instead of throwing', () => {
+  for (const [value, shown] of [[42, '42'], [true, 'true'], [{ a: 1 }, '{&quot;a&quot;:1}'], [[1, 2], '[1,2]']]) {
+    const html = generateForm({ type: 'object', properties: { summary: { type: 'string' } } }, { summary: value });
+    assert.ok(/<textarea[^>]*name="summary"[^>]*>/.test(html), 'still a textarea');
+    assert.ok(html.includes(`>${shown}</textarea>`), `expected ${shown} in ${html}`);
+  }
+});
+
+check('a field the parser could not type ({}) with a number value renders instead of throwing', () => {
+  const html = generateForm({ type: 'object', properties: { extra: {} } }, { extra: 12 });
+  assert.ok(html.includes('>12</textarea>'), html);
+});
+
+// --- Dates --------------------------------------------------------------------
+
+check('a date-format field renders a date input whatever its name', () => {
+  const control = controlFor(generateForm(
+    { type: 'object', properties: { joined: { type: 'string', format: 'date' } } },
+    { joined: '2020-04-02' },
+  ), 'joined');
+  assert.ok(/type="date"/.test(control) && /value="2020-04-02"/.test(control), control);
+});
+
+check('a nullable date renders a date input', () => {
+  const control = controlFor(generateForm(
+    { type: 'object', properties: { joined: { anyOf: [{ type: 'string', format: 'date' }, { type: 'null' }] } } },
+    { joined: '2020-04-02' },
+  ), 'joined');
+  assert.ok(/type="date"/.test(control), control);
+});
+
+// --- Short one-line strings are inputs, long ones stay textareas --------------
+
+const ADDED_SHORT_NAMES = ['role', 'position', 'company', 'organisation', 'organization', 'location', 'city',
+  'country', 'email', 'phone', 'website', 'slug', 'author', 'tag', 'category'];
+
+check('common one-line string names render as a text input', () => {
+  for (const name of [...ADDED_SHORT_NAMES, 'jobRole', 'contactEmail', 'firstName', 'jobTitle']) {
+    const control = controlFor(generateForm({ type: 'object', properties: { [name]: { type: 'string' } } }, { [name]: 'x' }), name);
+    assert.ok(control && /^<input\b/.test(control), `${name} should be an input: ${control}`);
+  }
+});
+
+check('an email or URL format is a one-line input whatever its name', () => {
+  const html = generateForm(
+    { type: 'object', properties: { contact: { type: 'string', format: 'email' }, homepage: { type: 'string', format: 'uri' } } },
+    { contact: 'a@example.com', homepage: 'https://example.com/' },
+  );
+  assert.ok(/type="email"/.test(controlFor(html, 'contact')), controlFor(html, 'contact'));
+  assert.ok(/type="url"/.test(controlFor(html, 'homepage')), controlFor(html, 'homepage'));
+});
+
+check('other strings keep the textarea default', () => {
+  for (const name of ['bio', 'summary', 'body', 'excerpt', 'description', 'content', 'notes']) {
+    const control = controlFor(generateForm({ type: 'object', properties: { [name]: { type: 'string' } } }, { [name]: 'x' }), name);
+    assert.ok(control && /^<textarea\b/.test(control), `${name} should stay a textarea: ${control}`);
+  }
+});
+
+check(".describe('textarea') still forces a textarea on a short-named field", () => {
+  const control = controlFor(generateForm(
+    { type: 'object', properties: { role: { type: 'string', description: 'textarea' } } },
+    { role: 'x' },
+  ), 'role');
+  assert.ok(control && /^<textarea\b/.test(control), control);
+});
+
 console.log('\n========================================\n');
-console.log(`📊 ${passed} checks passed.`);
+console.log(`📊 ${passed} checks passed, ${failures.length} failed.`);
+if (failures.length > 0) process.exit(1);
+

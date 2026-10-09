@@ -68,6 +68,21 @@ async function validateSavedEntry(collection, slug, locale) {
 }
 
 /**
+ * The body to write for a save. A request with NO `body` key says nothing
+ * about the body, so the stored one is kept (an explicit `body: ''` still
+ * clears it). Without this a client that omitted the body, as the editor did
+ * for a schema with `blocks`, deleted the entry's markdown on every save.
+ * @param {Object} requestBody - the parsed request body
+ * @returns {Promise<string|null|undefined>}
+ */
+async function bodyToWrite(requestBody, collection, slug, locale) {
+  if (Object.prototype.hasOwnProperty.call(requestBody, 'body')) return requestBody.body;
+  if (!(await contentExists(collection, slug, locale))) return undefined;
+  const stored = await readContent(collection, slug, locale);
+  return stored.body ?? undefined;
+}
+
+/**
  * GET /api/content/:collection/:slug
  * Read a content entry
  * Query params: ?locale=en (optional, uses default locale if i18n enabled)
@@ -116,7 +131,7 @@ router.get('/:collection/:slug', async (req, res) => {
 router.post('/:collection/:slug', async (req, res) => {
   try {
     const { collection, slug } = req.params;
-    const { data, body, type } = req.body;
+    const { data, type } = req.body;
     const locale = await getLocaleFromRequest(req);
 
     // Validate request
@@ -128,6 +143,7 @@ router.post('/:collection/:slug', async (req, res) => {
     }
 
     // Write content
+    const body = await bodyToWrite(req.body, collection, slug, locale);
     const result = await writeContent(collection, slug, {
       data,
       body,
@@ -162,7 +178,7 @@ router.post('/:collection/:slug', async (req, res) => {
 router.put('/:collection/:slug', async (req, res) => {
   try {
     const { collection, slug } = req.params;
-    const { data, body, type } = req.body;
+    const { data, type } = req.body;
     const locale = await getLocaleFromRequest(req);
 
     // Check if content exists
@@ -177,6 +193,7 @@ router.put('/:collection/:slug', async (req, res) => {
     }
 
     // Write content
+    const body = await bodyToWrite(req.body, collection, slug, locale);
     const result = await writeContent(collection, slug, {
       data,
       body,

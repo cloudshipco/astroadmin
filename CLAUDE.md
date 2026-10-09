@@ -76,7 +76,10 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/auth.test.js` — auth helpers (needs Bun for `Bun.password`).
 - `bun tests/form-generator.test.js` — the field renderer. No DOM needed: it asserts on the
   HTML string `generateForm`/`generateFields` return. Covers hostile content (apostrophes,
-  quotes, markup), the input-type-carries-schema-type rule, and the alt-collision rules.
+  quotes, markup), the input-type-carries-schema-type rule (including `integer`, nullable
+  `anyOf` members, and integers in arrays, objects, blocks and the item modal), that a value
+  of an unexpected type renders as text rather than crashing the entry, which string names
+  are one-line inputs, and the alt-collision rules.
   The read-back half (`extractFields`/`extractFormData`) is covered separately, below.
 - `bun tests/extract-fields.test.js` — the read-back half, in a happy-dom `<form>` rendered by
   the real `generateForm`. Covers zero-item arrays (blocks, references, inline arrays) saving
@@ -86,7 +89,15 @@ runner aggregating them). Most run server-less and need env vars:
   inside block items too.
 - `bun tests/content-validation.test.js` — the editor's schema WARNINGS: what a stored entry
   is judged as (dropped required array, nested block field, quoted vs unquoted YAML date,
-  `file()` items), and that a save still writes invalid content and reports why.
+  `file()` items, an EMPTY required `image()` — the bundled stand-in is `z.string()`, so ''
+  passes it while the build refuses it; an empty optional image is not reported), that
+  `z.coerce.date()` is `format: 'date'` in a `glob()` and a `file()` collection, and that a
+  save still writes invalid content and reports why.
+- `bun tests/save-body.test.js` — a markdown entry's body survives a save: the editor shows
+  the body whatever the schema (it used to hide it when the schema had `blocks`, and the save
+  then wrote `body: ''`), the save payload carries `body` only when the form shows one
+  (`ui/save-payload.js`), and the API keeps the stored body when a save has no `body` key
+  (an explicit `''` still clears it). Real `createServer()` app, plus happy-dom.
 - `bun tests/publish-check.test.js` — the publish gate, against this repo's real Astro: a
   throwaway site with a bare remote; invalid content is committed but not pushed, the commit
   (not the working tree) is what is checked, a rebase onto the remote is checked as

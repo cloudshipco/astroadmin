@@ -20,6 +20,7 @@ import { toggleChangesPanel, getChangesCount, showPublishDialog } from './change
 import { initEntryPicker, syncEntryPickerLabel } from './entry-picker.js';
 
 import { escapeHtml } from './escape-html.js';
+import { savePayload } from './save-payload.js';
 import { liveSiteHref } from './live-url.js';
 import { showEntryProblems, renderPublishProblems } from './content-problems.js';
 
@@ -618,18 +619,20 @@ function renderEditorForNewEntry(schema, contentType, ctx) {
   // Generate form from schema with empty data
   const formHtml = generateForm(schema, {});
 
-  // Only show markdown body editor for content types that DON'T use blocks.
+  // Every markdown entry gets a body editor, blocks or not: a page can have
+  // both, and a body the editor does not show must never be saved as ''.
+  // Compact when the schema has blocks (they usually carry the content).
   // Markup matches the edit view (wrapper + data-markdown) so the formatting
   // toolbar (setupFieldWidgets → enhanceMarkdownEditor) attaches here too.
   const hasBlocks = schema?.properties?.blocks;
-  const bodyEditor = (contentType === 'content' && !hasBlocks) ? `
+  const bodyEditor = contentType === 'content' ? `
     <div class="form-group">
       <label for="markdown-body" class="form-label">Content (Markdown)</label>
       <div class="textarea-wrapper">
         <textarea
           id="markdown-body"
           data-content-field="body"
-          rows="8"
+          rows="${hasBlocks ? 3 : 8}"
           class="form-input textarea-autogrow"
           placeholder="Enter markdown content..."
           data-markdown="true"
@@ -966,14 +969,16 @@ async function renderEditor(entryData, ctx) {
   // Generate form from schema (title/description will be in an SEO block)
   const formHtml = generateForm(schemaData.collection.schema, entryData.data);
 
-  // Only show markdown body editor for content types that DON'T use blocks
-  // Pages use blocks, so they don't need a body field
+  // Every markdown entry gets a body editor, blocks or not. Hiding it for a
+  // schema with `blocks` used to save the body as '' and delete a page's prose.
+  // It is compact only when the schema has blocks AND the body is empty.
   const hasBlocks = schemaData.collection.schema?.properties?.blocks;
   const bodyContent = entryData.body || '';
   const bodyLineCount = (bodyContent.match(/\n/g) || []).length + 1;
   const bodyCharRows = Math.ceil(bodyContent.length / 60);
-  const bodyRows = Math.max(8, Math.min(20, Math.max(bodyLineCount, bodyCharRows)));
-  const bodyEditor = (entryData.type === 'content' && !hasBlocks) ? `
+  const minBodyRows = (hasBlocks && bodyContent.trim() === '') ? 3 : 8;
+  const bodyRows = Math.max(minBodyRows, Math.min(20, Math.max(bodyLineCount, bodyCharRows)));
+  const bodyEditor = entryData.type === 'content' ? `
     <div class="form-group">
       <label for="markdown-body" class="form-label">Content (Markdown)</label>
       <div class="textarea-wrapper">
@@ -1411,13 +1416,10 @@ function makeSaver(target) {
 
   const runOnce = async (silent) => {
     const formData = extractFormData(target.form, target.schema);
-    // The markdown body is the entry's CONTENT, sent separately as `body`. Its
-    // textarea carries no form `name` (only #markdown-body + data-content-field)
-    // precisely so extractFormData/FormData don't sweep it into the frontmatter
-    // `data` — otherwise the file gets a duplicate `body:` key on top of its
-    // real body. A collection that legitimately declares a `body` frontmatter
-    // field keeps it, because that field's own control IS named `body`.
-    const body = target.form.querySelector('#markdown-body')?.value || '';
+    // Read the body with the fields, before any await, so one save is one
+    // snapshot. No body editor on the form means no `body` key, and the API
+    // then keeps the stored body.
+    const payload = savePayload(target.form, formData, target.type);
     const current = isTargetCurrent();
 
     if (current) updateSaveStatus('Saving...');
@@ -1441,7 +1443,7 @@ function makeSaver(target) {
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: formData, body, type: target.type }),
+        body: JSON.stringify(payload),
       });
       const result = await response.json();
 
