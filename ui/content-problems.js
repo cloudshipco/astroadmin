@@ -14,6 +14,7 @@
  */
 
 import { formatLabel } from './form-generator.js';
+import { entryDashboardPath } from './entry-urls.js';
 
 const SUMMARY_CLASS = 'entry-problems';
 const FIELD_MESSAGE_CLASS = 'field-problem';
@@ -132,7 +133,7 @@ export function renderPublishProblems(refusal) {
       // Only an entry the server matched to an editor slug can be opened.
       if (entry.editable) {
         const link = document.createElement('a');
-        link.href = `/dashboard/${encodeURIComponent(entry.collection)}/${encodeURIComponent(entry.slug)}`;
+        link.href = entryDashboardPath(entry.collection, entry.slug);
         link.dataset.collection = entry.collection;
         link.dataset.slug = entry.slug;
         link.textContent = label;
