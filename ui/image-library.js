@@ -9,14 +9,28 @@ let currentCallback = null;
 let currentImages = [];
 let selectedImageUrl = null;
 let isUploading = false;
+// Opened for an Astro image() field: uploads go where Astro can import them,
+// and every image is offered. For any other caller, image() files (source
+// 'assets', served only to the editor) are hidden: a public field storing
+// /assets/images/x.jpg would show in the editor and 404 on the live site.
+let forAstroImage = false;
+
+/** The upload URL for the current caller. */
+function uploadEndpoint(astroImage) {
+  return astroImage ? '/api/images?for=image-field' : '/api/images';
+}
 
 /**
  * Open the image library modal
- * @param {Function} onSelect - Callback when image is selected (receives url)
+ * @param {Function} onSelect - Callback when image is selected (receives the
+ *   url and the library entry: {filename, url, source, ...})
  * @param {string} currentValue - Current value to pre-select
+ * @param {object} [options]
+ * @param {boolean} [options.astroImage] - opened for an Astro image() field
  */
-export async function openImageLibrary(onSelect, currentValue = '') {
+export async function openImageLibrary(onSelect, currentValue = '', { astroImage = false } = {}) {
   currentCallback = onSelect;
+  forAstroImage = astroImage;
   selectedImageUrl = currentValue || null;
 
   // Create modal if it doesn't exist
@@ -161,7 +175,7 @@ function setupModalEvents(modal) {
   // Select button
   modal.querySelector('[data-select]').addEventListener('click', () => {
     if (selectedImageUrl && currentCallback) {
-      currentCallback(selectedImageUrl);
+      currentCallback(selectedImageUrl, currentImages.find(img => img.url === selectedImageUrl) || null);
       closeImageLibrary();
     }
   });
@@ -212,7 +226,9 @@ async function loadImages() {
     const data = await response.json();
 
     if (data.success) {
-      currentImages = data.images;
+      currentImages = forAstroImage
+        ? data.images
+        : data.images.filter(img => img.source !== 'assets');
       renderImages(grid, empty);
     } else {
       console.error('Failed to load images:', data.error);
@@ -342,7 +358,7 @@ async function uploadImage(file) {
     const formData = new FormData();
     formData.append('image', file);
 
-    const response = await fetch('/api/images', {
+    const response = await fetch(uploadEndpoint(forAstroImage), {
       method: 'POST',
       body: formData,
     });
@@ -400,9 +416,12 @@ async function deleteImage(filename) {
 
 /**
  * Direct upload (for "Upload New" button in image picker)
- * @param {Function} onUpload - Callback when upload completes (receives url)
+ * @param {Function} onUpload - Callback when upload completes (receives the url
+ *   and the uploaded image: {filename, url, source, ...})
+ * @param {object} [options]
+ * @param {boolean} [options.astroImage] - for an Astro image() field
  */
-export async function uploadNewImage(onUpload) {
+export async function uploadNewImage(onUpload, { astroImage = false } = {}) {
   // Create a temporary file input
   const input = document.createElement('input');
   input.type = 'file';
@@ -416,7 +435,7 @@ export async function uploadNewImage(onUpload) {
       const formData = new FormData();
       formData.append('image', file);
 
-      const response = await fetch('/api/images', {
+      const response = await fetch(uploadEndpoint(astroImage), {
         method: 'POST',
         body: formData,
       });
@@ -424,7 +443,7 @@ export async function uploadNewImage(onUpload) {
       const data = await response.json();
 
       if (data.success) {
-        onUpload(data.image.url);
+        onUpload(data.image.url, data.image);
       } else {
         alert('Upload failed: ' + data.error);
       }

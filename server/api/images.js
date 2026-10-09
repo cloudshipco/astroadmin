@@ -8,6 +8,16 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../config.js';
+import { loadSchemas } from '../utils/collections.js';
+import {
+  assertDeclaredCollection,
+  assertSafeSlug,
+  getGlobBaseDirectory,
+  isContentPathError,
+  resolveProjectPath,
+  sanitizePath,
+  toPosixPath,
+} from '../utils/glob-files.js';
 
 const router = express.Router();
 
@@ -43,6 +53,28 @@ function getImageMetadata(metadata, filename) {
   return Object.hasOwn(metadata, filename) ? metadata[filename] : {};
 }
 
+/**
+ * Where images for Astro image() fields live: src/content/assets/images.
+ *
+ * An image() field needs a file Astro can IMPORT, by a path relative to the
+ * entry (`../assets/images/x.jpg`); a public `/images/x.jpg` fails the build
+ * with ImageNotFound. This folder is importable, is staged by the default
+ * git.paths (`src/content/`), and is served to the editor at /assets/images
+ * (server/index.js serves src/content/assets at /assets).
+ */
+function assetImagesDirectory() {
+  return path.join(config.paths.projectRoot, 'src/content/assets/images');
+}
+
+/** The image folders by library `source`, in listing (and lookup) order. */
+function imageDirectories() {
+  return [
+    { source: 'source', directory: config.paths.srcImages, urlBase: '/images' }, // src/assets/images
+    { source: 'uploads', directory: config.paths.images, urlBase: '/images' }, // public/images
+    { source: 'assets', directory: assetImagesDirectory(), urlBase: '/assets/images' },
+  ];
+}
+
 // Allowed image extensions
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -72,7 +104,7 @@ function invalidFilename(res) {
  * listing does) in either image directory.
  */
 async function imageExists(filename) {
-  for (const directory of [config.paths.images, config.paths.srcImages]) {
+  for (const { directory } of imageDirectories()) {
     try {
       if ((await fs.stat(path.join(directory, filename))).isFile()) return true;
     } catch {
@@ -85,13 +117,15 @@ async function imageExists(filename) {
 // Configure multer storage
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    // Ensure images directory exists
+    // ?for=image-field: an image for an Astro image() field goes where Astro
+    // can import it; anything else is a public upload, as before.
+    const directory = isImageFieldUpload(req) ? assetImagesDirectory() : config.paths.images;
     try {
-      await fs.mkdir(config.paths.images, { recursive: true });
+      await fs.mkdir(directory, { recursive: true });
     } catch (err) {
       // Directory already exists, ignore
     }
-    cb(null, config.paths.images);
+    cb(null, directory);
   },
   filename: (req, file, cb) => {
     // Generate unique filename while preserving extension
@@ -119,6 +153,10 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
+function isImageFieldUpload(req) {
+  return req.query?.for === 'image-field';
+}
+
 const upload = multer({
   storage,
   fileFilter,
@@ -129,7 +167,7 @@ const upload = multer({
 
 /**
  * GET /api/images
- * List all images from both src/assets/images and public/images
+ * List all images: src/assets/images, public/images and the image() folder
  */
 router.get('/', async (req, res) => {
   try {
@@ -138,7 +176,7 @@ router.get('/', async (req, res) => {
     const metadata = await loadMetadata();
 
     // Helper to get images from a directory
-    async function getImagesFromDir(dirPath, source) {
+    async function getImagesFromDir(dirPath, source, urlBase) {
       try {
         await fs.access(dirPath);
         const files = await fs.readdir(dirPath);
@@ -160,12 +198,12 @@ router.get('/', async (req, res) => {
             seenFilenames.add(file);
             allImages.push({
               filename: file,
-              url: `/images/${file}`,
+              url: `${urlBase}/${file}`,
               size: stats.size,
               sizeFormatted: formatFileSize(stats.size),
               modified: stats.mtime.toISOString(),
               extension: ext.slice(1),
-              source, // 'source' for src/assets/images, 'uploads' for public/images
+              source, // 'source': src/assets/images, 'uploads': public/images, 'assets': image() files
               alt: imageMeta.alt || '',
               focalPoint: imageMeta.focalPoint || null,
             });
@@ -178,11 +216,9 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // Get images from source directory (src/assets/images)
-    await getImagesFromDir(config.paths.srcImages, 'source');
-
-    // Get images from uploads directory (public/images)
-    await getImagesFromDir(config.paths.images, 'uploads');
+    for (const { directory, source, urlBase } of imageDirectories()) {
+      await getImagesFromDir(directory, source, urlBase);
+    }
 
     // Sort by modification date (newest first)
     allImages.sort((a, b) => new Date(b.modified) - new Date(a.modified));
@@ -215,7 +251,8 @@ router.post('/', upload.single('image'), (req, res) => {
       });
     }
 
-    const imageUrl = `/images/${req.file.filename}`;
+    const imageField = isImageFieldUpload(req);
+    const imageUrl = `${imageField ? '/assets/images' : '/images'}/${req.file.filename}`;
 
     console.log(`Image uploaded: ${req.file.filename}`);
 
@@ -224,6 +261,7 @@ router.post('/', upload.single('image'), (req, res) => {
       image: {
         filename: req.file.filename,
         url: imageUrl,
+        source: imageField ? 'assets' : 'uploads',
         size: req.file.size,
         sizeFormatted: formatFileSize(req.file.size),
         mimetype: req.file.mimetype,
@@ -236,6 +274,111 @@ router.post('/', upload.single('image'), (req, res) => {
       error: 'Failed to upload image',
       message: error.message,
     });
+  }
+});
+
+/**
+ * The directory an entry's file lives in: image() paths are relative to it.
+ * Mirrors the files store (content-files.js): a file() collection is one file,
+ * a glob entry is `<base>/<slug>.<ext>` (a locale variant sits beside it).
+ * @returns {Promise<string>}
+ */
+async function entryDirectory(collection, slug) {
+  const schemas = await loadSchemas();
+  assertDeclaredCollection(collection, schemas);
+  const schema = schemas[collection] || {};
+  if (schema.loaderType === 'file' && schema.loaderFilePath) {
+    return path.dirname(resolveProjectPath(schema.loaderFilePath));
+  }
+  if (schema.loaderType === 'db') {
+    const error = new Error('This collection is not stored as files, so an image() path has nothing to be relative to');
+    error.status = 400;
+    throw error;
+  }
+  assertSafeSlug(slug);
+  return path.dirname(path.join(getGlobBaseDirectory(collection, schema), sanitizePath(slug)));
+}
+
+/** Whether two files hold the same bytes. */
+async function sameFileContent(firstPath, secondPath) {
+  const [first, second] = await Promise.all([fs.readFile(firstPath), fs.readFile(secondPath)]);
+  return first.equals(second);
+}
+
+/**
+ * The library image as a file an image() field can import: an image already
+ * in src/content/assets/images or src/assets/images is used where it is; a
+ * public upload is copied into src/content/assets/images (under a new name if
+ * a different file already has its name).
+ * @returns {Promise<{filePath: string, previewUrl: string}|null>}
+ */
+async function importableImage(filename, preferredSource) {
+  const directories = imageDirectories();
+  const ordered = [
+    ...directories.filter((entry) => entry.source === preferredSource),
+    ...directories.filter((entry) => entry.source !== preferredSource),
+  ];
+  for (const { source, directory, urlBase } of ordered) {
+    const candidate = path.join(directory, filename);
+    try {
+      if (!(await fs.stat(candidate)).isFile()) continue;
+    } catch {
+      continue;
+    }
+    if (source !== 'uploads') return { filePath: candidate, previewUrl: `${urlBase}/${filename}` };
+
+    const targetDirectory = assetImagesDirectory();
+    await fs.mkdir(targetDirectory, { recursive: true });
+    let targetName = filename;
+    let targetPath = path.join(targetDirectory, targetName);
+    try {
+      await fs.copyFile(candidate, targetPath, fs.constants.COPYFILE_EXCL);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (!(await sameFileContent(candidate, targetPath))) {
+        const extension = path.extname(filename);
+        targetName = `${path.basename(filename, extension)}-${Date.now()}${extension}`;
+        targetPath = path.join(targetDirectory, targetName);
+        await fs.copyFile(candidate, targetPath, fs.constants.COPYFILE_EXCL);
+      }
+    }
+    return { filePath: targetPath, previewUrl: `/assets/images/${targetName}` };
+  }
+  return null;
+}
+
+/**
+ * POST /api/images/:filename/entry-value
+ * Body: { collection, slug, source? }
+ *
+ * The value to store in an Astro image() field of that entry for this library
+ * image: a path relative to the entry's file (`../assets/images/x.jpg`), which
+ * `astro build` resolves, plus a URL the editor can preview it at. Nothing in
+ * the response names a server path.
+ */
+router.post('/:filename/entry-value', express.json(), async (req, res) => {
+  try {
+    const filename = imageFilenameFromParam(req.params.filename);
+    if (!filename) return invalidFilename(res);
+    const { collection, slug, source } = req.body || {};
+    if (typeof collection !== 'string' || typeof slug !== 'string') {
+      return res.status(400).json({ success: false, error: 'collection and slug are required' });
+    }
+
+    const directory = await entryDirectory(collection, slug);
+    const image = await importableImage(filename, source);
+    if (!image) return res.status(404).json({ success: false, error: 'Image not found' });
+
+    let value = toPosixPath(path.relative(directory, image.filePath));
+    if (!value.startsWith('.')) value = `./${value}`;
+    res.json({ success: true, value, previewUrl: image.previewUrl });
+  } catch (error) {
+    if (isContentPathError(error)) {
+      return res.status(400).json({ success: false, error: 'Invalid entry', message: error.message });
+    }
+    if (error.status === 400) return res.status(400).json({ success: false, error: error.message });
+    console.error('Error resolving image() value:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to resolve the image path' });
   }
 });
 

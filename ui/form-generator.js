@@ -209,13 +209,14 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     `;
   }
 
-  if (schema.type === 'array') {
-    // Check if this is a reference field (array of IDs referencing another collection)
-    const refCollection = detectReferenceCollection(name, schema);
-    if (refCollection) {
-      return generateReferenceField(name, schema, value, fullPath, id, refCollection);
-    }
+  // A reference to another collection: one id (reference('c')) or a list of
+  // them (z.array(reference('c')), `<name>Ids`).
+  const refCollection = detectReferenceCollection(schema);
+  if (refCollection) {
+    return generateReferenceField(name, schema, value, fullPath, id, refCollection);
+  }
 
+  if (schema.type === 'array') {
     // Check if this is a gallery field (array of objects with 'src' property)
     if (isGalleryField(schema)) {
       return generateGalleryField(name, schema, value, fullPath, id);
@@ -406,7 +407,10 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     'role', 'position', 'company', 'organisation', 'organization', 'location', 'city', 'country',
     'email', 'phone', 'website', 'slug', 'author', 'tag', 'category',
   ];
-  const isShortByName = shortFieldNames.some(short => lowerName === short || lowerName.endsWith(short));
+  // An identifier (`id`, `authorId`, `author_id`) is one line too. Matched on
+  // the original case so a word merely ending in "id" (`paid`) is not caught.
+  const isIdentifier = /^id$|Id$|_id$/.test(name);
+  const isShortByName = isIdentifier || shortFieldNames.some(short => lowerName === short || lowerName.endsWith(short));
   const isShortByLength = schema.maxLength && schema.maxLength < 100;
   const isShortByFormat = ['email', 'url', 'uri'].includes(schema.format);
   const isLongByName = lowerName.includes('description') || lowerName.includes('content') || lowerName.includes('subheading');
@@ -480,7 +484,7 @@ function generateBlocksField(name, schema, value, fullPath) {
           <select id="add-block-type" class="form-input form-input-sm">
             <option value="">Add block...</option>
             ${availableTypes.map(type => `
-              <option value="${escapeHtml(type)}">${escapeHtml(formatBlockType(type))}</option>
+              <option value="${escapeHtml(type)}">${escapeHtml(formatBlockType(type, blockTypes[type]))}</option>
             `).join('')}
           </select>
           <button type="button" class="btn btn-primary btn-sm add-block-btn" data-field="${fullPath}">
@@ -521,7 +525,7 @@ function generateBlockItem(arrayPath, blockTypes, block, index) {
     <div class="block-item" data-index="${index}" data-type="${escapeHtml(blockType)}" draggable="true">
       <div class="block-header toggle-block-header">
         <span class="block-drag-handle" title="Drag to reorder">⋮⋮</span>
-        <span class="block-type-badge block-type-${escapeHtml(blockType)}">${escapeHtml(formatBlockType(blockType))}</span>
+        <span class="block-type-badge block-type-${escapeHtml(blockType)}">${escapeHtml(formatBlockType(blockType, blockSchema))}</span>
         <span class="block-preview-text">${escapeHtml(getBlockPreview(block))}</span>
         <span class="block-expand-icon">▶</span>
       </div>
@@ -799,11 +803,21 @@ export function isImageField(name, schema) {
 
   // Astro's image() reaches the editor as the schema parser's stand-in,
   // z.string().describe('Image path') (server/utils/schema-parser.js).
-  if (schema.description === 'Image path') {
+  if (isAstroImageField(schema)) {
     return true;
   }
 
   return false;
+}
+
+/**
+ * Whether a field is Astro's image(), which the schema parser stands in as
+ * z.string().describe('Image path'). Its value must be a path Astro can import
+ * relative to the entry, not a public /images/... URL, so its picker resolves
+ * what it stores through the server (field-widgets.js applyPickedImage).
+ */
+export function isAstroImageField(schema) {
+  return schema?.description === 'Image path';
 }
 
 /**
@@ -863,7 +877,7 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
     <div class="form-group">
       <label for="${id}" class="form-label">${label} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
       ${helpHtml}
-      <div class="image-picker${variant ? ` image-picker--${variant}` : ''}" data-field="${fullPath}">
+      <div class="image-picker${variant ? ` image-picker--${variant}` : ''}" data-field="${fullPath}"${isAstroImageField(schema) ? ' data-astro-image' : ''}>
         <div class="image-picker-preview ${previewClass}" data-preview>
           <img src="${escapeHtml(previewSrc)}" alt="Preview" class="image-picker-img" data-preview-img>
           <button type="button" class="image-picker-clear" data-clear title="Clear image">&times;</button>
@@ -1026,77 +1040,74 @@ function generateGalleryField(name, schema, value, fullPath, id) {
 }
 
 /**
- * Detect if a field is a reference to another collection
- * Returns the collection name if it is, null otherwise
+ * The collection a field references, or null.
+ *
+ * Only the schema says so: the parser marks every reference with
+ * `referenceCollection` (server/utils/schema-parser.js annotateReferences),
+ * for Astro's reference() and for a `<name>Ids` list whose name resolves to a
+ * DECLARED collection. Guessing from the name here could only point at a
+ * collection that may not exist.
  */
-function detectReferenceCollection(name, schema) {
-  // Only check arrays of strings
-  if (schema.type !== 'array' || schema.items?.type !== 'string') {
-    return null;
-  }
-
-  const lowerName = name.toLowerCase();
-
-  // Map of field name patterns to collection names
-  const referencePatterns = {
-    'testimonialids': 'testimonials',
-    'testimonials': 'testimonials',
-    'pageids': 'pages',
-    'pages': 'pages',
-    // Add more patterns as needed
-  };
-
-  // Check direct matches
-  if (referencePatterns[lowerName]) {
-    return referencePatterns[lowerName];
-  }
-
-  // Check if name ends with 'Ids' and derive collection name
-  if (lowerName.endsWith('ids')) {
-    const baseName = name.slice(0, -3); // Remove 'Ids'
-    // Pluralize if needed (simple version)
-    return baseName.endsWith('s') ? baseName.toLowerCase() : baseName.toLowerCase() + 's';
-  }
-
-  // Check schema hints
-  if (schema.referenceCollection) {
-    return schema.referenceCollection;
-  }
-
-  return null;
+function detectReferenceCollection(schema) {
+  if (schema.type === 'string') return schema.referenceCollection || null;
+  if (schema.type !== 'array' || schema.items?.type !== 'string') return null;
+  return schema.referenceCollection || schema.items.referenceCollection || null;
 }
 
 /**
- * Generate a reference picker field (card-style layout with drag handles)
+ * Generate a reference picker field (card-style layout with drag handles).
+ *
+ * A list (z.array(reference('c')), `<name>Ids`) renders one hidden input per
+ * card, `<path>[i]`, and is marked data-array-items so zero cards still save
+ * as []. A single reference (reference('c')) renders ONE hidden input named
+ * `<path>` that holds the id as a string, and at most one card.
  */
 function generateReferenceField(name, schema, value, fullPath, id, collectionName) {
-  const items = Array.isArray(value) ? value : [];
+  const single = schema.type === 'string';
+  const items = single
+    ? (typeof value === 'string' && value !== '' ? [value] : [])
+    : (Array.isArray(value) ? value : []);
   const singularName = collectionName.endsWith('s') ? collectionName.slice(0, -1) : collectionName;
-  // Use collection name as label instead of field name (e.g., "Testimonials" not "Testimonial Ids")
-  const label = formatLabel(collectionName);
+  // A `testimonialIds` list is labelled by its collection ("Testimonials", not
+  // "Testimonial Ids"); any other name is the field's own label.
+  const label = /Ids?$/.test(name) ? formatLabel(collectionName) : getFieldLabel(name, schema);
 
   return `
     <div class="form-group">
-      <label class="form-label">${label}</label>
-      <div class="reference-field" data-field="${fullPath}" data-array-items data-collection="${collectionName}">
+      <label class="form-label">${escapeHtml(label)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
+      <div class="reference-field" data-field="${fullPath}" ${single ? 'data-reference-single' : 'data-array-items'} data-collection="${escapeHtml(collectionName)}">
+        ${single ? `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(items[0] || '')}" data-reference-value>` : ''}
         <div class="reference-cards" data-reference-cards>
-          ${items.length === 0 ? '<div class="reference-empty">No items selected. Click "Add" to select.</div>' : ''}
-          ${items.map((itemId, index) => generateReferenceCard(itemId, index, fullPath)).join('')}
+          ${items.length === 0 ? REFERENCE_EMPTY_HTML : ''}
+          ${items.map((itemId, index) => referenceCardHtml(itemId, { index, fullPath, single })).join('')}
         </div>
-        <button type="button" class="btn btn-secondary btn-sm reference-cards-add add-reference-item" data-field="${fullPath}" data-collection="${collectionName}">
-          + Add ${formatLabel(singularName)}
+        <button type="button" class="btn btn-secondary btn-sm reference-cards-add add-reference-item${single && items.length ? ' hidden' : ''}" data-field="${fullPath}" data-collection="${escapeHtml(collectionName)}">
+          ${single ? 'Choose' : '+ Add'} ${escapeHtml(formatLabel(singularName))}
         </button>
       </div>
     </div>
   `;
 }
 
+/** What an empty reference field shows. */
+export const REFERENCE_EMPTY_HTML = '<div class="reference-empty">No items selected. Click "Add" to select.</div>';
+
 /**
- * Generate a single reference card (matching array-card style)
+ * One reference card. The renderer and the dashboard's add/replace both build
+ * cards here, so there is one markup for a card.
+ *
+ * @param {string} itemId - the referenced entry's id
+ * @param {object} options
+ * @param {number} [options.index] - position in a list
+ * @param {string} options.fullPath - the field's input name
+ * @param {boolean} [options.single] - a single reference: no per-card input
+ *   (the field holds one) and nothing to reorder
+ * @param {string} [options.title] - display title (defaults to the id)
+ * @param {?string} [options.preview] - preview text; null shows "Loading..."
+ *   until the dashboard fills it in
  */
-function generateReferenceCard(itemId, index, fullPath) {
-  return `
-    <div class="reference-card" data-index="${index}" data-id="${escapeHtml(itemId)}" draggable="true">
+export function referenceCardHtml(itemId, { index = 0, fullPath, single = false, title = '', preview = null }) {
+  const handle = single ? '' : `
       <div class="reference-card-handle" title="Drag to reorder">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
           <circle cx="9" cy="5" r="2"/><circle cx="15" cy="5" r="2"/>
@@ -1104,10 +1115,12 @@ function generateReferenceCard(itemId, index, fullPath) {
           <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
         </svg>
       </div>
-      <input type="hidden" name="${fullPath}[${index}]" value="${escapeHtml(itemId)}">
+      <input type="hidden" name="${fullPath}[${index}]" value="${escapeHtml(itemId)}">`;
+  return `
+    <div class="reference-card" data-index="${index}" data-id="${escapeHtml(itemId)}" ${single ? '' : 'draggable="true"'}>${handle}
       <div class="reference-card-content edit-reference-item" title="Click to change">
-        <div class="reference-card-title">${escapeHtml(itemId)}</div>
-        <div class="reference-card-preview" data-preview-for="${escapeHtml(itemId)}">Loading...</div>
+        <div class="reference-card-title">${escapeHtml(title || itemId)}</div>
+        <div class="reference-card-preview" data-preview-for="${escapeHtml(itemId)}">${preview === null ? 'Loading...' : escapeHtml(preview)}</div>
       </div>
       <div class="reference-card-actions">
         <button type="button" class="reference-card-btn reference-card-edit open-reference-editor" title="Edit">
@@ -1146,23 +1159,32 @@ function getFieldLabel(name, schema) {
 }
 
 /**
- * Format block type into readable label
+ * The label for a block type. A site names its own blocks: a `title` in the
+ * block's schema (zod 4: `.meta({ title: 'Call to action' })` on the block
+ * object) wins, else the type is humanised ('hero' -> 'Hero',
+ * 'featureGrid' -> 'Feature grid'). No built-in list renames a site's types.
+ * @param {string} type - the discriminator value
+ * @param {object} [blockSchema] - that block's JSON Schema
  */
-function formatBlockType(type) {
-  const labels = {
-    hero: 'Hero Section',
-    features: 'Features Grid',
-    sectionHeader: 'Section Header',
-    richText: 'Rich Text',
-    textImage: 'Text + Image',
-    stats: 'Statistics',
-    testimonials: 'Testimonials',
-    gallery: 'Image Gallery',
-    cta: 'Call to Action',
-    organizations: 'Organizations',
-    seo: 'SEO & Page Info',
-  };
-  return labels[type] || formatLabel(type);
+export function formatBlockType(type, blockSchema = null) {
+  if (typeof blockSchema?.title === 'string' && blockSchema.title.trim()) return blockSchema.title;
+  return humanizeName(type);
+}
+
+/**
+ * A code name as words, first one capitalised and the rest lower case:
+ * 'featureGrid' -> 'Feature grid', 'call_to-action' -> 'Call to action'.
+ */
+export function humanizeName(value) {
+  if (typeof value !== 'string') return String(value ?? '');
+  const words = value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  if (words.length === 0) return value;
+  words[0] = words[0].charAt(0).toUpperCase() + words[0].slice(1);
+  return words.join(' ');
 }
 
 /**

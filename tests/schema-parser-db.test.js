@@ -40,6 +40,12 @@ const team = defineCollection({
   schema: z.object({ name: z.string() }),
 });
 
+// Block references resolve against declared collections only.
+const testimonials = defineCollection({
+  loader: astroadminLoader({ collection: 'testimonials', type: 'data' }),
+  schema: z.object({ quote: z.string() }),
+});
+
 // Block-based page: a discriminated union drives the block editor UI.
 const heroBlock = z.object({ type: z.literal('hero'), heading: z.string() });
 const featuresBlock = z.object({
@@ -53,11 +59,14 @@ const landing = defineCollection({
   schema: z.object({
     title: z.string(),
     pubDate: z.coerce.date(),
+    updated: z.date().optional(),
+    isoDay: z.iso.date(),
+    stringDay: z.string().date().optional(),
     blocks: z.array(blocks),
   }),
 });
 
-export const collections = { pages, team, landing };
+export const collections = { pages, team, testimonials, landing };
 `
   );
 
@@ -112,6 +121,18 @@ export const collections = { pages, team, landing };
       refs.some((r) => r.blockType === 'features' && r.field === 'testimonialIds'),
       'features block references testimonials via testimonialIds'
     );
+  });
+
+  check('a real date is marked x-astroadmin-date; a date-format string is not', () => {
+    const properties = schemas.landing.schema.properties;
+    assert.equal(properties.pubDate['x-astroadmin-date'], true, 'z.coerce.date()');
+    assert.equal(properties.updated['x-astroadmin-date'], true, 'z.date().optional()');
+    // Control: the string forms carry the same date format, so only the marker
+    // tells them apart.
+    assert.equal(properties.isoDay.format, 'date', 'control: z.iso.date() has a date format');
+    assert.equal(properties.isoDay['x-astroadmin-date'], undefined, 'z.iso.date()');
+    assert.equal(properties.stringDay.format, 'date', 'control: z.string().date() has a date format');
+    assert.equal(properties.stringDay['x-astroadmin-date'], undefined, 'z.string().date()');
   });
 
   console.log('='.repeat(40));

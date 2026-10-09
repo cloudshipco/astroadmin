@@ -176,9 +176,11 @@ check('after deleting an earlier block, a gallery inside a later block saves ont
 });
 
 // --- Other one-input-per-item array kinds ----------------------------------
+// A reference list is marked `referenceCollection` by the schema parser
+// (annotateReferences), which resolves it against the declared collections.
 
 check('reference field with zero items extracts []', () => {
-  const schema = { type: 'object', properties: { testimonialIds: { type: 'array', items: { type: 'string' } } } };
+  const schema = { type: 'object', properties: { testimonialIds: { type: 'array', items: { type: 'string' }, referenceCollection: 'testimonials' } } };
   const form = render(schema, { testimonialIds: [] });
   assertions++;
   assert.ok(form.querySelector('.reference-field'), 'control: rendered as a reference field');
@@ -186,7 +188,7 @@ check('reference field with zero items extracts []', () => {
 });
 
 check('reference field after removing its last card extracts []', () => {
-  const schema = { type: 'object', properties: { testimonialIds: { type: 'array', items: { type: 'string' } } } };
+  const schema = { type: 'object', properties: { testimonialIds: { type: 'array', items: { type: 'string' }, referenceCollection: 'testimonials' } } };
   const form = render(schema, { testimonialIds: ['t-1'] });
   equal(extractFields(form).testimonialIds, ['t-1'], 'control: populated before removal');
   form.querySelector('.reference-card').remove();
@@ -194,7 +196,7 @@ check('reference field after removing its last card extracts []', () => {
 });
 
 check('populated reference field is unchanged', () => {
-  const schema = { type: 'object', properties: { testimonialIds: { type: 'array', items: { type: 'string' } } } };
+  const schema = { type: 'object', properties: { testimonialIds: { type: 'array', items: { type: 'string' }, referenceCollection: 'testimonials' } } };
   const form = render(schema, { testimonialIds: ['t-1', 't-2'] });
   equal(extractFields(form).testimonialIds, ['t-1', 't-2']);
 });

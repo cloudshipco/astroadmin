@@ -2,7 +2,14 @@
  * Dashboard functionality - Shopify-style layout
  */
 
-import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
+import {
+  generateForm,
+  extractFormData,
+  setupFormHandlers,
+  referenceCardHtml,
+  REFERENCE_EMPTY_HTML,
+  formatBlockType,
+} from './form-generator.js';
 import { resolvePreviewTarget, previewPathToSitePath } from './preview-routes.js';
 import {
   collectionApiPath,
@@ -14,7 +21,7 @@ import {
   virtualPageDashboardPath,
   virtualPageFromDashboardPath,
 } from './entry-urls.js';
-import { registerReferenceFieldHandlers } from './field-widgets.js';
+import { registerReferenceFieldHandlers, registerEntryContext } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
 import { initEntryPicker, syncEntryPickerLabel } from './entry-picker.js';
@@ -28,6 +35,10 @@ import { showEntryProblems, renderPublishProblems } from './content-problems.js'
 // modal — so hand their wiring to the shared field layer rather than binding it to
 // the main form here. setupFieldWidgets applies it to every container it sets up.
 registerReferenceFieldHandlers(setupReferencePickers);
+// An image() field stores a path relative to the open entry's file.
+registerEntryContext(() => (currentCollection && currentSlug
+  ? { collection: currentCollection, slug: currentSlug }
+  : null));
 
 let currentCollection = null;
 let currentSlug = null;
@@ -366,7 +377,7 @@ function renderBlockSelector() {
   if (!select) return;
 
   select.innerHTML = usedByBlocks.map(block => {
-    const label = formatBlockLabel(block.type);
+    const label = formatBlockType(block.type);
     return `<option value="${escapeHtml(block.type)}">${escapeHtml(label)}</option>`;
   }).join('');
 
@@ -374,14 +385,6 @@ function renderBlockSelector() {
   if (selectedPreviewBlock) {
     select.value = selectedPreviewBlock;
   }
-}
-
-/**
- * Format block type as a readable label.
- * e.g., 'testimonials' -> 'Testimonials Block'
- */
-function formatBlockLabel(type) {
-  return type.charAt(0).toUpperCase() + type.slice(1) + ' Block';
 }
 
 // Block selector change handler
@@ -1066,7 +1069,11 @@ function setupReferencePickers(form, onChangeCallback) {
       const excludeIds = Array.from(existingItems).map(item => item.dataset.id);
 
       openReferencePicker(collectionName, (selectedId, selectedData) => {
-        addReferenceItem(referenceField, fieldPath, selectedId, selectedData);
+        if (referenceField.hasAttribute('data-reference-single')) {
+          setSingleReference(referenceField, selectedId, selectedData);
+        } else {
+          addReferenceItem(referenceField, fieldPath, selectedId, selectedData);
+        }
         if (onChangeCallback) onChangeCallback();
       }, excludeIds);
       return;
@@ -1088,7 +1095,11 @@ function setupReferencePickers(form, onChangeCallback) {
 
       openReferencePicker(collectionName, (selectedId, selectedData) => {
         // Replace the current item
-        replaceReferenceItem(item, fieldPath, selectedId, selectedData);
+        if (referenceField.hasAttribute('data-reference-single')) {
+          setSingleReference(referenceField, selectedId, selectedData);
+        } else {
+          replaceReferenceItem(item, fieldPath, selectedId, selectedData);
+        }
         if (onChangeCallback) onChangeCallback();
       }, excludeIds);
       return;
@@ -1110,6 +1121,11 @@ function setupReferencePickers(form, onChangeCallback) {
     if (e.target.closest('.remove-reference-item')) {
       const item = e.target.closest('.reference-card');
       const referenceField = e.target.closest('.reference-field');
+      if (referenceField.hasAttribute('data-reference-single')) {
+        setSingleReference(referenceField, '');
+        if (onChangeCallback) onChangeCallback();
+        return;
+      }
       item.remove();
       reindexReferenceItems(referenceField);
 
@@ -1117,7 +1133,7 @@ function setupReferencePickers(form, onChangeCallback) {
       const items = referenceField.querySelectorAll('.reference-card');
       if (items.length === 0) {
         const itemsContainer = referenceField.querySelector('.reference-cards');
-        itemsContainer.innerHTML = '<div class="reference-empty">No items selected. Click "Add" to select.</div>';
+        itemsContainer.innerHTML = REFERENCE_EMPTY_HTML;
       }
 
       if (onChangeCallback) onChangeCallback();
@@ -1178,7 +1194,16 @@ async function loadReferenceFieldPreviews(field) {
 }
 
 /**
- * Add a reference item to the field
+ * A card element built from the renderer's own card markup.
+ */
+function referenceCardElement(itemId, options) {
+  const template = document.createElement('template');
+  template.innerHTML = referenceCardHtml(itemId, options).trim();
+  return template.content.firstElementChild;
+}
+
+/**
+ * Add a reference item to a list field
  */
 function addReferenceItem(referenceField, fieldPath, itemId, itemData = null) {
   const itemsContainer = referenceField.querySelector('.reference-cards');
@@ -1188,51 +1213,37 @@ function addReferenceItem(referenceField, fieldPath, itemId, itemData = null) {
   if (emptyMsg) emptyMsg.remove();
 
   const index = itemsContainer.querySelectorAll('.reference-card').length;
-  const title = itemData?.title || itemId;
-  const preview = itemData?.preview || '';
+  itemsContainer.appendChild(referenceCardElement(itemId, {
+    index,
+    fullPath: fieldPath,
+    title: itemData?.title || itemId,
+    preview: itemData?.preview || '',
+  }));
+}
 
-  const newItem = document.createElement('div');
-  newItem.className = 'reference-card';
-  newItem.dataset.index = index;
-  newItem.dataset.id = itemId;
-  newItem.draggable = true;
-  newItem.innerHTML = `
-    <div class="reference-card-handle" title="Drag to reorder">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-        <circle cx="9" cy="5" r="2"/><circle cx="15" cy="5" r="2"/>
-        <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
-        <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
-      </svg>
-    </div>
-    <input type="hidden" name="${fieldPath}[${index}]" value="${escapeHtml(itemId)}">
-    <div class="reference-card-content edit-reference-item" title="Click to change">
-      <div class="reference-card-title">${escapeHtml(title)}</div>
-      <div class="reference-card-preview">${escapeHtml(preview)}</div>
-    </div>
-    <div class="reference-card-actions">
-      <button type="button" class="reference-card-btn reference-card-edit open-reference-editor" title="Edit">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-        </svg>
-      </button>
-      <button type="button" class="reference-card-btn reference-card-delete remove-reference-item" title="Remove">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="3 6 5 6 21 6"/>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-        </svg>
-      </button>
-    </div>
-  `;
-
-  itemsContainer.appendChild(newItem);
+/**
+ * Set (or, with an empty id, clear) a single reference: its one hidden input
+ * holds the id, and its card and Choose button follow it.
+ */
+function setSingleReference(referenceField, itemId, itemData = null) {
+  referenceField.querySelector('[data-reference-value]').value = itemId;
+  const itemsContainer = referenceField.querySelector('.reference-cards');
+  itemsContainer.innerHTML = itemId ? '' : REFERENCE_EMPTY_HTML;
+  if (itemId) {
+    itemsContainer.appendChild(referenceCardElement(itemId, {
+      fullPath: referenceField.dataset.field,
+      single: true,
+      title: itemData?.title || itemId,
+      preview: itemData?.preview || '',
+    }));
+  }
+  referenceField.querySelector('.add-reference-item')?.classList.toggle('hidden', Boolean(itemId));
 }
 
 /**
  * Replace a reference item with a new selection
  */
 function replaceReferenceItem(item, fieldPath, newId, itemData = null) {
-  const index = item.dataset.index;
   const title = itemData?.title || newId;
   const preview = itemData?.preview || '';
 
@@ -1611,9 +1622,12 @@ function getPreviewPageUrl() {
   const usedByBlocks = collection?.usedByBlocks || [];
 
   if (usedByBlocks.length > 0) {
-    // Use selected block or default to first one
-    const blockType = selectedPreviewBlock || usedByBlocks[0].type;
-    return `${previewUrl}/component-preview/${blockType}/${currentSlug}`;
+    // Use selected block or default to first one. `?field=` names the block
+    // field that carries the ids, so a block whose field is not
+    // `<singular type>Ids` still previews (integration/preview-route.astro).
+    const block = usedByBlocks.find((b) => b.type === selectedPreviewBlock) || usedByBlocks[0];
+    const fieldQuery = block.field ? `?field=${encodeURIComponent(block.field)}` : '';
+    return `${previewUrl}/component-preview/${block.type}/${currentSlug}${fieldQuery}`;
   }
 
   // No preview available for this collection

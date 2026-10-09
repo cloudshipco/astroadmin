@@ -382,8 +382,9 @@ check('a const value survives a form round-trip', () => {
 check('a non-const field of the same shape stays editable', () => {
   // Negative control: without `const` the very same property must stay editable,
   // otherwise the two checks above would pass no matter what this branch did.
-  // A plain string renders as an autogrow textarea, not an input — which is
-  // exactly why a const rendered through the default path was a large box.
+  // (A non-const `id` renders as a one-line input; most other plain strings
+  // are autogrow textareas, which is why a const rendered through the default
+  // path was a large box.)
   const html = generateForm(
     { type: 'object', properties: { id: { type: 'string' } } },
     { id: 'home' },
@@ -556,6 +557,73 @@ check("zod 4's safe-integer bounds are not rendered as min/max", () => {
     { count: 3 },
   ), 'count');
   assert.ok(!/\bmin="/.test(control) && !/\bmax="/.test(control), control);
+});
+
+// --- Identifiers are one-line inputs -----------------------------------------
+// A file() collection's `id` rendered as a textarea.
+
+check('an id field (id, authorId, author_id) renders as a text input', () => {
+  for (const name of ['id', 'authorId', 'author_id']) {
+    const control = controlFor(generateForm({ type: 'object', properties: { [name]: { type: 'string' } } }, { [name]: 'x' }), name);
+    assert.ok(control && /^<input\b/.test(control), `${name} should be an input: ${control}`);
+  }
+});
+
+check('a word merely ending in "id" keeps the textarea default (paid, avoid)', () => {
+  for (const name of ['paid', 'avoid']) {
+    const control = controlFor(generateForm({ type: 'object', properties: { [name]: { type: 'string' } } }, { [name]: 'x' }), name);
+    assert.ok(control && /^<textarea\b/.test(control), `${name} should stay a textarea: ${control}`);
+  }
+});
+
+// --- Site agnosticism: no built-in names ---------------------------------------
+// The editor used to rename some block types (hero -> "Hero Section") and treat
+// fields called `testimonials` / `pages` as references to collections of those
+// names, whatever the site declared.
+
+/** The block selector's option labels for these block types, by type. */
+function blockOptionLabels(blockTypes) {
+  const html = generateForm(
+    { type: 'object', properties: { blocks: { type: 'array', items: {}, blockTypes } } },
+    { blocks: [] },
+  );
+  const labels = {};
+  for (const match of html.matchAll(/<option value="([^"]+)">([^<]*)<\/option>/g)) labels[match[1]] = match[2];
+  return labels;
+}
+
+check('block types are humanised, not renamed from a built-in list', () => {
+  const block = { type: 'object', properties: { heading: { type: 'string' } } };
+  const labels = blockOptionLabels({ hero: block, featureGrid: block, stats: block, cta: block, seo: block });
+  assert.deepEqual(labels, { hero: 'Hero', featureGrid: 'Feature grid', stats: 'Stats', cta: 'Cta', seo: 'Seo' });
+});
+
+check("a block schema's title names it (the site's own label)", () => {
+  const labels = blockOptionLabels({
+    cta: { type: 'object', title: 'Call to action', properties: { heading: { type: 'string' } } },
+  });
+  assert.equal(labels.cta, 'Call to action');
+});
+
+check('the block badge uses the same label', () => {
+  const html = generateForm(
+    { type: 'object', properties: { blocks: { type: 'array', items: {}, blockTypes: { featureGrid: { type: 'object', properties: {} } } } } },
+    { blocks: [{ type: 'featureGrid' }] },
+  );
+  assert.ok(/class="block-type-badge[^"]*">Feature grid<\/span>/.test(html), html.match(/block-type-badge[^<]*<\/span>/)?.[0]);
+});
+
+check('a list named testimonials or pages is not a reference unless the schema says so', () => {
+  for (const name of ['testimonials', 'pages', 'testimonialIds']) {
+    const html = generateForm({ type: 'object', properties: { [name]: { type: 'array', items: { type: 'string' } } } }, { [name]: ['a'] });
+    assert.ok(!html.includes('reference-field'), `${name} rendered a reference picker`);
+    assert.ok(new RegExp(`name="${name}\\[0\\]"`).test(html), `control: ${name} still renders its item`);
+  }
+  const marked = generateForm(
+    { type: 'object', properties: { pages: { type: 'array', items: { type: 'string' }, referenceCollection: 'pages' } } },
+    { pages: ['a'] },
+  );
+  assert.ok(/class="reference-field"[^>]*data-collection="pages"/.test(marked), 'control: a marked list is a reference');
 });
 
 console.log('\n========================================\n');

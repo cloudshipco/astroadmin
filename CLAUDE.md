@@ -189,6 +189,19 @@ runner aggregating them). Most run server-less and need env vars:
   props spread and as `block`, `?field=`. ~10 s.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
+- `bun tests/schema-references.test.js` — Astro's `reference()` parses (a string id;
+  `z.array(reference(c))` a list) carrying `referenceCollection`, and `<base>Ids` resolves
+  against the DECLARED collections (`<base>s`, `<base>`, `<base>es`, y->ies; nothing declared
+  means a plain list). Throwaway project through the real parser, rendered and read back in
+  happy-dom: the picker per reference, a single reference saving as a string.
+- `bun tests/image-field-astro.test.js` — Astro `image()` fields against the real app and a
+  real `astro build` (~10 s): a public `/images/...` value fails the build (control); an
+  upload `?for=image-field` lands in `src/content/assets/images`; `POST
+  /api/images/:filename/entry-value` returns the path relative to the entry's file (flat,
+  nested slug, `file()`), copying a public upload in; the saved entries build.
+- `bun tests/image-picker-astro.test.js` — the editor half (happy-dom): only an image()
+  picker (`data-astro-image`) asks the server for its value, a refusal keeps the old value,
+  and entry-relative paths preview from `/assets`.
 
 `tests/git-api.test.js` used to be a known red; it passes as of 2026-10-08 (checked at
 `74609bd` in a clean worktree).

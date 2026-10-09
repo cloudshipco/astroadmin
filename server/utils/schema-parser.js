@@ -11,14 +11,27 @@ import fs from 'fs/promises';
 import os from 'os';
 import zodToJsonSchema from 'zod-to-json-schema';
 
+/** zod 3 has no .meta(): its reference() stand-in carries this description. */
+const REFERENCE_DESCRIPTION_PREFIX = 'astroadmin-reference:';
+
 /**
  * Minimal shim for astro:content virtual module.
  * astro:content just re-exports zod and provides defineCollection.
  */
 const ASTRO_CONTENT_SHIM = `
-export { z } from 'zod';
+import { z } from 'zod';
+export { z };
 export const defineCollection = (config) => config;
-export const reference = (collection) => ({ _type: 'reference', collection });
+// Astro's reference() is a zod schema over an entry id. It must be one here
+// too: a plain object made toJSONSchema throw for the whole site. The target
+// collection rides along as JSON Schema metadata (zod 4 .meta()), or in the
+// description for zod 3, which has no .meta(); see annotateReferences.
+export const reference = (collection) => {
+  const id = z.string();
+  return typeof id.meta === 'function'
+    ? id.meta({ referenceCollection: collection })
+    : id.describe('${REFERENCE_DESCRIPTION_PREFIX}' + collection);
+};
 `;
 
 /**
@@ -183,6 +196,8 @@ export async function parseAstroSchemas(projectRoot) {
 
     // Convert each collection's Zod schema to JSON Schema
     const schemas = {};
+    // References resolve against the collections this config declares.
+    const declaredCollections = new Set(Object.keys(module.collections));
 
     console.log(`📋 Found ${Object.keys(module.collections).length} collections: ${Object.keys(module.collections).join(', ')}`);
 
@@ -233,10 +248,18 @@ export async function parseAstroSchemas(projectRoot) {
         // Find discriminated unions for block UI
         const discriminatedUnions = findDiscriminatedUnions(zodSchema);
 
+        // Mark every reference field with its target collection, in the
+        // entry schema and in each block's own schema (the block editor
+        // renders from those).
+        annotateReferences(jsonSchema, declaredCollections);
+        for (const union of discriminatedUnions) {
+          for (const option of union.options) annotateReferences(option.schema, declaredCollections);
+        }
+
         // Detect which collections this schema's blocks reference
         const blockCollectionRefs = detectBlockCollectionReferences(
           discriminatedUnions,
-          jsonSchema
+          declaredCollections
         );
 
         schemas[name] = {
@@ -298,6 +321,9 @@ export async function parseAstroSchemas(projectRoot) {
  *                             like a date (`publishDate`), and as a textarea
  *                             otherwise (`joined`). zod 3's serializer already
  *                             emits a date format.
+ *                             It is also marked `x-astroadmin-date: true` (zod 3:
+ *                             markZod3Dates), the only thing that tells it from
+ *                             a string with a date format (z.iso.date()).
  */
 function toJsonSchema(zodSchema) {
   if (typeof zodSchema?.toJSONSchema === 'function') {
@@ -309,11 +335,61 @@ function toJsonSchema(zodSchema) {
         if (ctx.zodSchema?._zod?.def?.type === 'date') {
           ctx.jsonSchema.type = 'string';
           ctx.jsonSchema.format = 'date';
+          ctx.jsonSchema[DATE_MARKER] = true;
         }
       },
     });
   }
-  return zodToJsonSchema(zodSchema, { $refStrategy: 'none', errorMessages: true });
+  const jsonSchema = zodToJsonSchema(zodSchema, { $refStrategy: 'none', errorMessages: true });
+  markZod3Dates(zodSchema, jsonSchema);
+  return jsonSchema;
+}
+
+/**
+ * Marks a REAL date (z.date(), z.coerce.date()) in the JSON Schema, as opposed
+ * to a string that only has a date format (zod 4 z.iso.date(), zod 3
+ * z.string().date()). Both serialise as `format: 'date'`, but only a real date
+ * may be written to frontmatter as an unquoted YAML date: the string forms
+ * refuse a Date.
+ */
+const DATE_MARKER = 'x-astroadmin-date';
+
+/**
+ * zod 3 has no serializer override, so walk the zod schema beside its JSON
+ * Schema and mark the ZodDate nodes (through optional/nullable/default/effects,
+ * objects and arrays).
+ */
+function markZod3Dates(zodSchema, jsonNode) {
+  const def = zodSchema?._def;
+  if (!def || !jsonNode || typeof jsonNode !== 'object') return;
+  switch (def.typeName) {
+    case 'ZodDate':
+      jsonNode[DATE_MARKER] = true;
+      return;
+    case 'ZodOptional':
+    case 'ZodDefault':
+      markZod3Dates(def.innerType, jsonNode);
+      return;
+    case 'ZodNullable': {
+      const member = (jsonNode.anyOf || []).find((m) => m?.type !== 'null');
+      markZod3Dates(def.innerType, member || jsonNode);
+      return;
+    }
+    case 'ZodEffects':
+      markZod3Dates(def.schema, jsonNode);
+      return;
+    case 'ZodObject': {
+      const shape = typeof def.shape === 'function' ? def.shape() : def.shape;
+      for (const [key, child] of Object.entries(shape || {})) {
+        markZod3Dates(child, jsonNode.properties?.[key]);
+      }
+      return;
+    }
+    case 'ZodArray':
+      markZod3Dates(def.type, jsonNode.items);
+      return;
+    default:
+  }
 }
 
 /**
@@ -406,7 +482,7 @@ function findDiscriminatedUnions(schema, currentPath = []) {
 
           options.push({
             value,
-            label: formatLabel(value),
+            label: optionSchema?.title || formatLabel(value),
             schema: optionSchema,
           });
         }
@@ -442,40 +518,33 @@ function findDiscriminatedUnions(schema, currentPath = []) {
 }
 
 /**
- * Detect which blocks reference which collections.
- * Analyzes discriminated union options to find fields like `testimonialIds`
- * that reference other collections.
+ * Detect which blocks reference which collections (for the component preview:
+ * which block types can show an entry of a collection). Reads the
+ * `referenceCollection` marks annotateReferences left on each block's schema,
+ * plus a single `<base>Id` string that names a declared collection.
  *
  * @param {Array} discriminatedUnions - Discriminated unions found in schema
- * @param {Object} jsonSchema - The full JSON Schema
+ * @param {Set<string>} declaredCollections - collection names in the config
  * @returns {Object} - Map of collection -> array of { blockType, field }
  */
-function detectBlockCollectionReferences(discriminatedUnions, jsonSchema) {
+function detectBlockCollectionReferences(discriminatedUnions, declaredCollections) {
   /** @type {Record<string, Array<{blockType: string, field: string}>>} */
   const collectionRefs = {};
 
-  // Check each discriminated union (usually one for "blocks" field)
   for (const union of discriminatedUnions) {
-    // Each option is a block type
     for (const option of union.options) {
       const blockType = option.value;
-      const blockSchema = option.schema;
+      const properties = option.schema?.properties;
+      if (!properties) continue;
 
-      if (!blockSchema?.properties) continue;
-
-      // Look for fields that look like collection references
-      // Pattern: fieldName ends with "Ids" and is an array of strings
-      for (const [fieldName, fieldSchema] of Object.entries(blockSchema.properties)) {
-        const collectionName = inferCollectionFromFieldName(fieldName, fieldSchema);
-        if (collectionName) {
-          if (!collectionRefs[collectionName]) {
-            collectionRefs[collectionName] = [];
-          }
-          collectionRefs[collectionName].push({
-            blockType,
-            field: fieldName,
-          });
+      for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+        let collectionName = fieldSchema?.referenceCollection || null;
+        if (!collectionName && fieldSchema?.type === 'string' && fieldName.endsWith('Id')) {
+          collectionName = resolveCollectionName(fieldName.slice(0, -2), declaredCollections);
         }
+        if (!collectionName) continue;
+        if (!collectionRefs[collectionName]) collectionRefs[collectionName] = [];
+        collectionRefs[collectionName].push({ blockType, field: fieldName });
       }
     }
   }
@@ -484,49 +553,91 @@ function detectBlockCollectionReferences(discriminatedUnions, jsonSchema) {
 }
 
 /**
- * Infer collection name from field name and schema.
- * - testimonialIds → testimonials (array of strings ending in "Ids")
- * - pageId → pages (single string ending in "Id")
+ * The declared collection a field-name stem refers to, or null. Tries
+ * `<base>s`, `<base>`, `<base>es`, then y -> ies (`teamIds` finds a collection
+ * named `teams` or `team`; `categoryIds` finds `categories`). Exact names only.
  *
- * @param {string} fieldName - The field name
- * @param {Object} fieldSchema - The JSON Schema for the field
- * @returns {string|null} - Collection name or null if not a reference
+ * @param {string} base - the field name without its `Ids`/`Id` suffix
+ * @param {Set<string>} declaredCollections
+ * @returns {string|null}
  */
-function inferCollectionFromFieldName(fieldName, fieldSchema) {
-  // Check for array of strings (e.g., testimonialIds: z.array(z.string()))
-  if (
-    fieldSchema.type === 'array' &&
-    fieldSchema.items?.type === 'string' &&
-    fieldName.endsWith('Ids')
-  ) {
-    const base = fieldName.slice(0, -3); // Remove 'Ids'
-    // Pluralize: testimonial → testimonials
-    return base.endsWith('s') ? base : base + 's';
-  }
+export function resolveCollectionName(base, declaredCollections) {
+  if (!base) return null;
+  const candidates = [`${base}s`, base, `${base}es`];
+  if (/[^aeiou]y$/.test(base)) candidates.push(`${base.slice(0, -1)}ies`);
+  return candidates.find((name) => declaredCollections.has(name)) || null;
+}
 
-  // Check for single string reference (e.g., authorId: z.string())
-  if (fieldSchema.type === 'string' && fieldName.endsWith('Id')) {
-    const base = fieldName.slice(0, -2); // Remove 'Id'
-    // Pluralize: author → authors
-    return base.endsWith('s') ? base : base + 's';
+/** The collection a reference() stand-in names: zod 4 metadata, or the zod 3 description. */
+function referenceTarget(node) {
+  if (typeof node.referenceCollection === 'string') return node.referenceCollection;
+  if (typeof node.description === 'string' && node.description.startsWith(REFERENCE_DESCRIPTION_PREFIX)) {
+    return node.description.slice(REFERENCE_DESCRIPTION_PREFIX.length);
   }
-
   return null;
 }
 
 /**
- * Format a value as a human-readable label
- * e.g., 'heroBlock' -> 'Hero Block'
+ * Mark every reference field in a JSON Schema with `referenceCollection`, in
+ * place, so the editor renders the reference picker for it:
+ *   - reference('c')                    -> {type: 'string', referenceCollection: 'c'}
+ *   - z.array(reference('c'))           -> the array node gets it too
+ *   - `<base>Ids: z.array(z.string())`  -> the declared collection
+ *     resolveCollectionName finds; a name that finds nothing is left alone and
+ *     renders as a plain list.
+ * A reference to an undeclared collection is not marked: there is nothing to
+ * pick from, so the field stays a plain input.
+ *
+ * @param {object} node - JSON Schema node (mutated)
+ * @param {Set<string>} declaredCollections
+ * @param {string} [name] - the property name this node is the value of
+ */
+function annotateReferences(node, declaredCollections, name = '') {
+  if (!node || typeof node !== 'object') return;
+
+  const target = referenceTarget(node);
+  if (target) {
+    if (node.description === `${REFERENCE_DESCRIPTION_PREFIX}${target}`) delete node.description;
+    if (declaredCollections.has(target)) node.referenceCollection = target;
+    else delete node.referenceCollection;
+  }
+
+  // A nullable field is {anyOf: [<field>, {type: 'null'}]}.
+  for (const member of [...(node.anyOf || []), ...(node.oneOf || [])]) {
+    annotateReferences(member, declaredCollections, name);
+  }
+
+  if (node.type === 'array' && node.items && typeof node.items === 'object') {
+    annotateReferences(node.items, declaredCollections);
+    if (node.items.type === 'string' && !node.referenceCollection) {
+      const collection = node.items.referenceCollection
+        || (name.endsWith('Ids') ? resolveCollectionName(name.slice(0, -3), declaredCollections) : null);
+      if (collection) node.referenceCollection = collection;
+    }
+  }
+
+  if (node.properties && typeof node.properties === 'object') {
+    for (const [key, child] of Object.entries(node.properties)) {
+      annotateReferences(child, declaredCollections, key);
+    }
+  }
+}
+
+/**
+ * Humanise a block type for display: first word capitalised, the rest lower
+ * case ('hero' -> 'Hero', 'featureGrid' -> 'Feature grid'). The same rule as
+ * the editor's humanizeName (ui/form-generator.js).
  */
 function formatLabel(value) {
   if (typeof value !== 'string') return String(value);
-
-  return value
-    // Insert space before capitals
-    .replace(/([A-Z])/g, ' $1')
-    // Capitalize first letter
-    .replace(/^./, str => str.toUpperCase())
-    .trim();
+  const words = value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  if (words.length === 0) return value;
+  words[0] = words[0].charAt(0).toUpperCase() + words[0].slice(1);
+  return words.join(' ');
 }
 
 /**

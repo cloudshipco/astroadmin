@@ -29,6 +29,57 @@ export function registerReferenceFieldHandlers(setup) {
 }
 
 /**
+ * The entry being edited, for image() fields: their value is a path relative
+ * to the entry's file. The dashboard registers it (it owns that state).
+ * @type {() => ({collection: string, slug: string}|null)}
+ */
+let currentEntry = () => null;
+
+export function registerEntryContext(getEntry) {
+  currentEntry = getEntry;
+}
+
+/**
+ * Store a picked library image in a picker.
+ *
+ * A plain image field stores the library URL (`/images/x.jpg`), as it always
+ * has. An Astro image() field (data-astro-image) asks the server for the value
+ * to store instead: a path relative to the entry's file that `astro build` can
+ * import (`../assets/images/x.jpg`), copying a public upload somewhere
+ * importable first. If that fails the field is left as it was and the editor
+ * is told, rather than storing a value the build would refuse.
+ *
+ * @param {HTMLElement} picker - the .image-picker
+ * @param {string} url - the library URL of the picked image
+ * @param {{filename: string, source?: string}} [image] - the library entry
+ * @returns {Promise<boolean>} whether the picker changed
+ */
+export async function applyPickedImage(picker, url, image = null) {
+  if (!picker.hasAttribute('data-astro-image')) {
+    updateImagePicker(picker, url);
+    return true;
+  }
+  const entry = currentEntry();
+  const filename = image?.filename || decodeURIComponent(String(url).split('/').pop() || '');
+  try {
+    if (!entry?.collection || !entry?.slug) throw new Error('No entry is open');
+    const response = await fetch(`/api/images/${encodeURIComponent(filename)}/entry-value`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ collection: entry.collection, slug: entry.slug, source: image?.source }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) throw new Error(result.error || `HTTP ${response.status}`);
+    updateImagePicker(picker, result.value, result.previewUrl);
+    return true;
+  } catch (error) {
+    console.error('Could not use the image for this field:', error);
+    alert(`Could not use that image here: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Wire up every widget inside a container.
  * @param {HTMLElement} container - Form or modal root
  * @param {Function} [onChange] - Called after any widget changes a value
@@ -53,10 +104,10 @@ function setupImagePickers(container, onChange) {
       const picker = e.target.closest('.image-picker');
       const hiddenInput = picker.querySelector('.image-picker-input');
 
-      openImageLibrary((url) => {
-        updateImagePicker(picker, url);
-        if (onChange) onChange();
-      }, hiddenInput.value);
+      const astroImage = picker.hasAttribute('data-astro-image');
+      openImageLibrary(async (url, image) => {
+        if ((await applyPickedImage(picker, url, image)) && onChange) onChange();
+      }, hiddenInput.value, { astroImage });
       return;
     }
 
@@ -64,10 +115,10 @@ function setupImagePickers(container, onChange) {
     if (e.target.closest('[data-upload]')) {
       const picker = e.target.closest('.image-picker');
 
-      uploadNewImage((url) => {
-        updateImagePicker(picker, url);
-        if (onChange) onChange();
-      });
+      const astroImage = picker.hasAttribute('data-astro-image');
+      uploadNewImage(async (url, image) => {
+        if ((await applyPickedImage(picker, url, image)) && onChange) onChange();
+      }, { astroImage });
       return;
     }
 
@@ -108,11 +159,15 @@ export function resolveImageUrl(imagePath) {
     return imagePath;
   }
 
-  // Relative paths like ../assets/posts/... or ./assets/... — AstroAdmin serves these from /assets/
-  if (imagePath.startsWith('../assets/') || imagePath.startsWith('./assets/')) {
-    const assetsIndex = imagePath.indexOf('assets/');
-    if (assetsIndex !== -1) {
-      return '/' + imagePath.slice(assetsIndex);
+  // A path relative to the entry (what Astro's image() stores), such as
+  // ../assets/x.jpg or ../../assets/images/x.jpg. AstroAdmin serves
+  // src/content/assets and src/assets at /assets, so whatever follows the
+  // leading ./ and ../ segments (and a src/, content/ or src/content/ prefix,
+  // for an entry outside src/content) is looked up there.
+  if (imagePath.startsWith('./') || imagePath.startsWith('../')) {
+    const rest = imagePath.replace(/^(?:\.\.?\/)+/, '').replace(/^(?:src\/)?(?:content\/)?(?=assets\/)/, '');
+    if (rest.startsWith('assets/')) {
+      return '/' + rest;
     }
   }
 
@@ -143,9 +198,10 @@ export function isPreviewableImage(value) {
  * Update an image picker's hidden input and preview.
  * The stored value stays exactly as chosen; only the preview src is resolved —
  * the same rule generateImageField uses on first render, so a relative path
- * previews identically whether it was loaded or just picked.
+ * previews identically whether it was loaded or just picked. A previewUrl the
+ * server gave for this exact file (applyPickedImage) wins over that guess.
  */
-export function updateImagePicker(picker, url) {
+export function updateImagePicker(picker, url, previewUrl = '') {
   const hiddenInput = picker.querySelector('.image-picker-input');
   const altInput = picker.querySelector('[data-alt-input]');
   const preview = picker.querySelector('[data-preview]');
@@ -155,7 +211,7 @@ export function updateImagePicker(picker, url) {
   hiddenInput.value = url;
 
   if (isPreviewableImage(url)) {
-    previewImg.src = resolveImageUrl(url);
+    previewImg.src = previewUrl || resolveImageUrl(url);
     preview.classList.remove('hidden');
     placeholder.classList.add('hidden');
   } else {
