@@ -99,7 +99,11 @@ runner aggregating them). Most run server-less and need env vars:
   publish runs a full `astro build`).
 - `bun tests/live-url.test.js` — page path -> live-site URL (`ui/live-url.js`), shared by the
   header's "View live site" link and the server's live-status check: base paths, query/hash,
-  and escape attempts (`//host`, `/\host`, `javascript:`) falling back to the site root.
+  and escape attempts (`//host`, `/\host`, `javascript:`, and paths that only normalise to
+  `//host`, such as `/.//host`) falling back to the site root.
+- `bun tests/preview-live-link.test.js` — the preview's pageNavigation message -> live link and
+  entry, with and without a base path (the iframe reports its pathname WITH the preview base,
+  which must be stripped before the live link adds publicUrl's).
 - `bun tests/preview-click.test.js` — the script the integration injects into preview pages
   (`adminPreviewScript`, exported for this), run in happy-dom inside a stand-in iframe: which
   clicks post a `fieldFocus` (never one inside an `<a href>`), and which element a

@@ -39,7 +39,19 @@ export function resolveLiveUrl(publicUrl, requestedPath) {
   if (typeof pagePath !== 'string' || !pagePath.startsWith('/')) throw escapeError;
   const resolved = new URL(pagePath, origin);
   if (resolved.origin !== origin) throw escapeError;
-  return new URL(`${basePath}${resolved.pathname}${resolved.search}${resolved.hash}`, origin);
+  // Normalisation can itself produce "//host": "/.//evil.example" (also via
+  // "..", "%2e", backslashes, or tabs/newlines, which URL strips) has the
+  // pathname "//evil.example". No page lives there, so refuse it outright.
+  if (resolved.pathname.startsWith('//')) throw escapeError;
+  // Build the result on a URL already fixed to the public origin, assigning the
+  // parts rather than re-parsing a string, so nothing in the path is ever read
+  // as an authority. Then check the FINAL URL, not just the intermediate one.
+  const liveUrl = new URL(origin);
+  liveUrl.pathname = `${basePath}${resolved.pathname}`;
+  liveUrl.search = resolved.search;
+  liveUrl.hash = resolved.hash;
+  if (liveUrl.origin !== origin || !liveUrl.pathname.startsWith(`${basePath}/`)) throw escapeError;
+  return liveUrl;
 }
 
 /**

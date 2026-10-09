@@ -13,6 +13,33 @@ function escapeRegExp(string) {
 }
 
 /**
+ * A pathname reported by the preview iframe -> the site-relative path it shows.
+ *
+ * The iframe reports window.location.pathname, which includes the preview's
+ * base path (the path on PREVIEW_URL, e.g. an Astro site with base '/site'
+ * previewed at http://localhost:4321/site reports '/site/about/'). Everything
+ * downstream — entry resolution and the live link, which adds publicUrl's own
+ * base — wants '/about/'. Returns null for a path outside the preview base,
+ * which is not a page of this site.
+ *
+ * @param {string} previewUrl  The configured preview URL (may carry a base path)
+ * @param {string} pathname    The pathname the preview reported
+ * @returns {string|null}
+ */
+export function previewPathToSitePath(previewUrl, pathname) {
+  let basePath = '';
+  try {
+    basePath = new URL(previewUrl, 'http://preview.invalid').pathname.replace(/\/+$/, '');
+  } catch {
+    basePath = '';
+  }
+  if (basePath === '') return pathname;
+  if (pathname === basePath) return '/';
+  if (!pathname.startsWith(`${basePath}/`)) return null;
+  return pathname.slice(basePath.length);
+}
+
+/**
  * Resolve a previewed path to the entry that renders it, or null.
  *
  * Pure: everything it needs is passed in, so it can be tested without a DOM or a

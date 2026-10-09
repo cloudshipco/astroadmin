@@ -3,7 +3,7 @@
  */
 
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
-import { resolvePreviewTarget } from './preview-routes.js';
+import { resolvePreviewTarget, previewPathToSitePath } from './preview-routes.js';
 import { formatEntryRef, resolveFieldFocus } from './click-to-edit.js';
 import { registerReferenceFieldHandlers } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
@@ -1688,9 +1688,12 @@ window.addEventListener('message', (event) => {
 
   // Handle page navigation in preview - sync admin to show that page
   if (event.data?.type === 'pageNavigation') {
-    const pathname = event.data.pathname;
     // A malformed message without a string pathname would throw below.
-    if (typeof pathname !== 'string') return;
+    if (typeof event.data.pathname !== 'string') return;
+    // The iframe reports its full pathname, preview base included; everything
+    // below works in site-relative paths (the live link adds publicUrl's base).
+    const pathname = previewPathToSitePath(previewUrl, event.data.pathname);
+    if (pathname === null) return; // outside the preview's base: not a site page
 
     // Ignore component-preview URLs - these are for non-page collections
     if (pathname.startsWith('/component-preview/')) {
