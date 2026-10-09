@@ -19,6 +19,7 @@ import buildRouter from './api/build.js';
 import gitRouter from './api/git.js';
 import publishRouter from './api/publish.js';
 import imagesRouter from './api/images.js';
+import doctorRouter from './doctor/editor.js';
 import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collections.js';
 import { maybeAutoImport } from './utils/import-files.js';
 import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
@@ -210,6 +211,7 @@ export async function createServer() {
     app.use('/api/git', requireAuth, gitRouter);
   }
   app.use('/api/images', requireAuth, imagesRouter);
+  app.use('/api/doctor', requireAuth, doctorRouter);
 
   // Page routes (BEFORE static middleware to take precedence)
   app.get('/login', (req, res) => {

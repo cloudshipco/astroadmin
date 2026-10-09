@@ -126,7 +126,7 @@ async function linkNodeModules(sourceDir, targetDir) {
  * workspace package) would resolve to the live checkout's UNCOMMITTED copy,
  * so the check would not be of the commit. Returns the first one found.
  */
-async function findWorkspaceLink(nodeModulesDir, realRepoTop) {
+export async function findWorkspaceLink(nodeModulesDir, realRepoTop) {
   const candidates = [];
   for (const entry of await fs.readdir(nodeModulesDir)) {
     if (entry.startsWith('.')) continue;
@@ -174,7 +174,7 @@ async function git(cwd, args) {
  * for them to close would hold the git lock forever.
  * @returns {Promise<{exitCode: number|null, output: string, timedOut: boolean}>}
  */
-function runCommand(command, cwd, timeoutMs, env) {
+export function runCommand(command, cwd, timeoutMs, env) {
   return new Promise((resolve, reject) => {
     const child = spawn('/bin/sh', ['-c', command], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
@@ -213,8 +213,58 @@ function runCommand(command, cwd, timeoutMs, env) {
 }
 
 /** The admin's environment minus its own secrets and settings. */
-function buildEnvironment() {
+export function buildEnvironment() {
   return Object.fromEntries(Object.entries(process.env).filter(([name]) => !ADMIN_ENV_PATTERN.test(name)));
+}
+
+/**
+ * Paths of the git submodules (gitlinks, mode 160000) in a commit's tree.
+ * @param {string} projectRoot
+ * @param {string} revision
+ * @returns {Promise<string[]>}
+ */
+export async function listGitlinks(projectRoot, revision) {
+  const tree = await git(projectRoot, ['ls-tree', '-r', '--full-tree', revision]);
+  return tree.split('\n').filter((line) => line.startsWith('160000 ')).map((line) => line.split('\t')[1]);
+}
+
+/**
+ * Where node_modules can live for a site: its own directory or any directory
+ * above it up to the repository root (hoisted monorepo installs).
+ * @param {string} realRepoTop
+ * @param {string} siteSubdir - the site's directory relative to the repo root
+ * @returns {Array<{relativeDir: string, liveNodeModules: string}>}
+ */
+export function nodeModulesLevels(realRepoTop, siteSubdir) {
+  const levels = siteSubdir ? siteSubdir.split(path.sep) : [];
+  const result = [];
+  for (let depth = 0; depth <= levels.length; depth++) {
+    const relativeDir = levels.slice(0, depth).join(path.sep);
+    result.push({ relativeDir, liveNodeModules: path.join(realRepoTop, relativeDir, 'node_modules') });
+  }
+  return result;
+}
+
+/** The repository's real top and the site's directory within it. */
+async function locateSite(projectRoot) {
+  const realRepoTop = await fs.realpath(await git(projectRoot, ['rev-parse', '--show-toplevel']));
+  const siteSubdir = path.relative(realRepoTop, await fs.realpath(projectRoot));
+  return { realRepoTop, siteSubdir };
+}
+
+/**
+ * The first workspace package linked back into the site's repository, from
+ * any node_modules the site resolves from, or null.
+ * @param {string} projectRoot
+ */
+export async function findWorkspaceLinkForProject(projectRoot) {
+  const { realRepoTop, siteSubdir } = await locateSite(projectRoot);
+  for (const { liveNodeModules } of nodeModulesLevels(realRepoTop, siteSubdir)) {
+    if (!(await exists(liveNodeModules))) continue;
+    const workspaceLink = await findWorkspaceLink(liveNodeModules, realRepoTop);
+    if (workspaceLink) return workspaceLink;
+  }
+  return null;
 }
 
 /**
@@ -223,9 +273,14 @@ function buildEnvironment() {
  * @param {Object} fullConfig - getConfig() result. The command is `build.check`,
  *   else the site's `build.production` (so the check builds the way the site is
  *   built), else `astro build`; `build.checkTimeoutMs` overrides the time limit.
+ * @param {Object} [options]
+ * @param {(build: {siteDir: string, commit: string, command: string}) => Promise<void>} [options.onBuilt] -
+ *   called after a check that passed, while its worktree (and the build output
+ *   in it) still exists. Errors it throws are logged and ignored: it can never
+ *   fail the check. It must bound its own running time.
  * @returns {Promise<AstroCheckResult>}
  */
-export async function checkHeadWithAstro(fullConfig) {
+export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
   const projectRoot = fullConfig.paths.projectRoot;
   const command = fullConfig.build?.check || fullConfig.build?.production || DEFAULT_CHECK_COMMAND;
   const timeoutMs = fullConfig.build?.checkTimeoutMs || DEFAULT_CHECK_TIMEOUT_MS;
@@ -241,11 +296,10 @@ export async function checkHeadWithAstro(fullConfig) {
 
   try {
     commit = await git(projectRoot, ['rev-parse', 'HEAD']);
-    const realRepoTop = await fs.realpath(await git(projectRoot, ['rev-parse', '--show-toplevel']));
-    serverPaths.push(realRepoTop);
     // A site in a subdirectory of its repo (monorepo `subdir`) sits at the same
     // place inside the worktree.
-    const siteSubdir = path.relative(realRepoTop, await fs.realpath(projectRoot));
+    const { realRepoTop, siteSubdir } = await locateSite(projectRoot);
+    serverPaths.push(realRepoTop);
 
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astroadmin-check-'));
     serverPaths.push(tempDir, await realpathOrNull(tempDir));
@@ -254,18 +308,14 @@ export async function checkHeadWithAstro(fullConfig) {
 
     // A worktree does not populate submodules (gitlinks, mode 160000), so
     // content kept in one would silently be checked as empty. Refuse instead.
-    const tree = await git(projectRoot, ['ls-tree', '-r', '--full-tree', commit]);
-    if (tree.split('\n').some((line) => line.startsWith('160000 '))) {
+    if ((await listGitlinks(projectRoot, commit)).length > 0) {
       return fail('This site uses git submodules, which the publish check does not support, so nothing was pushed.');
     }
 
     // node_modules can live in the site's directory or any directory above it
     // up to the repository root (hoisted monorepo installs); mirror each one.
     const siteDir = path.join(worktreeDir, siteSubdir);
-    const levels = siteSubdir ? siteSubdir.split(path.sep) : [];
-    for (let depth = 0; depth <= levels.length; depth++) {
-      const relativeDir = levels.slice(0, depth).join(path.sep);
-      const liveNodeModules = path.join(realRepoTop, relativeDir, 'node_modules');
+    for (const { relativeDir, liveNodeModules } of nodeModulesLevels(realRepoTop, siteSubdir)) {
       if (!(await exists(liveNodeModules))) continue;
       const workspaceLink = await findWorkspaceLink(liveNodeModules, realRepoTop);
       if (workspaceLink) {
@@ -282,6 +332,13 @@ export async function checkHeadWithAstro(fullConfig) {
     }
     if (result.exitCode !== 0) {
       return fail(result.output);
+    }
+    if (onBuilt) {
+      try {
+        await onBuilt({ siteDir, commit, command });
+      } catch (error) {
+        console.error('After-check hook failed (ignored):', error.message);
+      }
     }
     return { success: true, commit, output: cleanCheckOutput(result.output, serverPaths).slice(-4000), entries: [] };
   } catch (error) {

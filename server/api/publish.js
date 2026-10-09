@@ -15,6 +15,7 @@
 import express from 'express';
 import path from 'path';
 import simpleGit from 'simple-git';
+import { recordDoctorAfterCheck } from '../doctor/editor.js';
 import { getConfig } from '../config.js';
 import { deploy, validateDeployConfig } from '../utils/deploy.js';
 import { runProductionBuild } from '../utils/build.js';
@@ -79,7 +80,9 @@ export function withGitLock(task) {
  * @returns {Promise<{pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult}>}
  */
 export async function pushIfAstroAccepts(fullConfig, git) {
-  const check = await checkHeadWithAstro(fullConfig);
+  // The check's build is reused for the doctor's click-to-edit scan (capped,
+  // never fails the publish), so the editor can show coverage without a build.
+  const check = await checkHeadWithAstro(fullConfig, { onBuilt: (build) => recordDoctorAfterCheck(fullConfig, build) });
   if (!check.success) {
     return { pushed: false, pushError: null, check };
   }

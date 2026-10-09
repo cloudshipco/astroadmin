@@ -2190,6 +2190,8 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     });
 
     const result = await response.json();
+    // A passing publish check also refreshed the click-to-edit scan (ui/doctor-notice.js).
+    window.dispatchEvent(new CustomEvent('astroadmin:published'));
 
     if (result.success) {
       document.querySelector('.publish-problems-panel')?.remove();
