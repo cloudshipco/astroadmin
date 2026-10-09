@@ -45,7 +45,7 @@ Each result is one of:
 Example output, trimmed:
 
 ```text
-astroadmin doctor 1.4.8 — /srv/sites/site-a
+astroadmin doctor 1.5.0 — /srv/sites/site-a
 
 ✓ PASS Astro integration (since 0.2.0)
        astroadmin() is in astro.config.mjs.
@@ -62,7 +62,7 @@ astroadmin doctor 1.4.8 — /srv/sites/site-a
 
 ```json
 {
-  "version": "1.4.8",
+  "version": "1.5.0",
   "projectRoot": "/srv/sites/site-a",
   "ok": true,
   "counts": { "pass": 8, "warn": 2, "fail": 0, "skip": 1 },
@@ -337,7 +337,7 @@ link: the preview follows it and no field is focused. So `data-aa-field` on a
 link, or on an element inside one, can never fire. Annotate the text beside the
 link instead, and leave link labels to be edited from the sidebar.
 
-An annotated element that *contains* a link is fine (since 1.4.9): a click on
+An annotated element that *contains* a link is fine (since 1.5.0): a click on
 the link navigates, and a click anywhere else in the element focuses its
 field. A Markdown body with links in it, or a hero section with a button, can
 be annotated as a whole.

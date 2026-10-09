@@ -390,14 +390,14 @@ card would focus the open entry's `title`. Marking a card with
 A click inside a link that navigates (`<a href>`, `<area href>`) belongs to
 the link: the preview follows it and no field is focused. So:
 
-- An element that **contains** a link can be annotated (since 1.4.9). A
+- An element that **contains** a link can be annotated (since 1.5.0). A
   Markdown body with links in it, or a hero section with a button in it,
   focuses its field when clicked anywhere except on the link.
 - An annotation **on** a link, or on an element **inside** one, can never fire.
   Annotate the text beside the link instead, and edit link labels from the
   sidebar. The doctor's `click-to-edit-links` check reports these.
 
-Before 1.4.9 a click on a link inside an annotated element focused the field
+Before 1.5.0 a click on a link inside an annotated element focused the field
 and then navigated away, so sites avoided annotating anything that held a
 link. That workaround is no longer needed.
 
