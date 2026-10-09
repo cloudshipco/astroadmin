@@ -15,7 +15,7 @@ import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { entryApiPath, entryDashboardPath, entryFromDashboardPath } from '../ui/entry-urls.js';
+import { entryApiPath, entryDashboardPath, entryFromDashboardPath, splitEntryValue } from '../ui/entry-urls.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-entry-urls-'));
@@ -124,6 +124,32 @@ await check('dashboard.js builds content and dashboard URLs only through entry-u
   assert.ok((dashboardSource.match(/entryApiPath\(/g) || []).length >= 3, 'loadEntry, the saver and delete use entryApiPath');
   assert.equal(dashboardSource.includes('/api/content/'), false, 'a hand-built content API URL');
   assert.equal(dashboardSource.includes('`/dashboard/${'), false, 'a hand-built dashboard URL');
+});
+
+await check('picker: choosing "pages/team/jane" loads collection pages, slug team/jane (the real change handler)', () => {
+  // The <select>'s option value is "<collection>/<slug>"; a nested slug has
+  // more slashes, and only the first separates the collection.
+  const dashboardSource = fs.readFileSync(path.join(repoRoot, 'ui/dashboard.js'), 'utf8');
+  const handlerSource = dashboardSource.match(/document\.getElementById\('pageSelector'\)\.addEventListener\('change', \(e\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(handlerSource, 'pageSelector change handler not found in dashboard.js');
+  const loads = [];
+  let handler = null;
+  const documentStub = { getElementById: (id) => (id === 'pageSelector' ? { addEventListener: (type, fn) => { if (type === 'change') handler = fn; } } : null) };
+  new Function('document', 'loadEntry', 'loadVirtualPage', 'openNewItemModal', 'splitEntryValue', 'currentCollection', 'currentSlug', handlerSource)(
+    documentStub, (collection, slug) => loads.push([collection, slug]), () => {}, () => {}, splitEntryValue, null, null,
+  );
+  assert.ok(handler, 'the handler registered');
+  handler({ target: { value: 'pages/team/jane' } });
+  handler({ target: { value: 'pages/about' } });
+  assert.deepEqual(loads, [['pages', 'team/jane'], ['pages', 'about']]);
+});
+
+await check('splitEntryValue splits at the first slash only', () => {
+  assert.deepEqual(splitEntryValue('articles/2024/first-post'), NESTED);
+  assert.deepEqual(splitEntryValue('pages/home'), { collection: 'pages', slug: 'home' });
+  assert.equal(splitEntryValue('pages'), null);
+  assert.equal(splitEntryValue('/home'), null);
+  assert.equal(splitEntryValue('pages/'), null);
 });
 
 server.close();

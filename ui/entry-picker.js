@@ -12,10 +12,11 @@
  * this change entirely front-end and off the load logic.
  */
 
+import { splitEntryValue } from './entry-urls.js';
+
 /** The slug half of an entry option value (`pages/blog` -> `blog`). */
 function rowSlug(value) {
-  const i = value.indexOf('/');
-  return i === -1 ? '' : value.slice(i + 1);
+  return splitEntryValue(value)?.slug ?? '';
 }
 
 /** Read the select's option tree into groups the modal renders from. */

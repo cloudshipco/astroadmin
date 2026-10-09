@@ -4,7 +4,7 @@
 
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
 import { resolvePreviewTarget, previewPathToSitePath } from './preview-routes.js';
-import { entryApiPath, entryDashboardPath, entryFromDashboardPath } from './entry-urls.js';
+import { entryApiPath, entryDashboardPath, entryFromDashboardPath, splitEntryValue } from './entry-urls.js';
 import { registerReferenceFieldHandlers } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
@@ -413,8 +413,8 @@ document.getElementById('pageSelector').addEventListener('change', (e) => {
     const collectionName = value.split(':')[1];
     openNewItemModal(collectionName);
   } else {
-    const [collection, slug] = value.split('/');
-    loadEntry(collection, slug);
+    const entry = splitEntryValue(value);
+    if (entry) loadEntry(entry.collection, entry.slug);
   }
 });
 
