@@ -23,6 +23,7 @@ import doctorRouter from './doctor/editor.js';
 import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collections.js';
 import { maybeAutoImport } from './utils/import-files.js';
 import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
+import { requireSameOrigin } from './utils/same-origin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,12 +36,18 @@ export async function createServer() {
     app.set('trust proxy', 1);
   }
 
-  // Middleware
+  // Middleware. JSON only: nothing in the admin posts a urlencoded form (login
+  // sends JSON), and multer parses /api/images uploads itself.
   app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
 
   // CORS
   app.use(cors(fullConfig.cors));
+
+  // Refuse state-changing /api requests from any other origin, before any
+  // route (login and logout included). SameSite=Strict still sends the
+  // session cookie from a sibling origin on the same site, such as the hosted
+  // preview subdomain. See server/utils/same-origin.js.
+  app.use('/api', requireSameOrigin(fullConfig.cors.origin));
 
   // Rate limiting (production only)
   if (fullConfig.rateLimit.enabled) {

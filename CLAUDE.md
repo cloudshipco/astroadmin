@@ -143,6 +143,13 @@ runner aggregating them). Most run server-less and need env vars:
   number field and the dashboard's virtual-page panel. Every interpolation of such data goes
   through `escapeHtml` (`ui/escape-html.js`); the markdown body textarea too, or `&lt;`
   in a body is decoded to `<` and `</textarea>` truncates it on the next save.
+- `bun tests/cross-origin.test.js` — every state-changing `/api` request (save, delete, upload,
+  revert, commit, publish, login, logout) from another origin is a 403 that changes nothing on
+  disk (`Sec-Fetch-Site: same-site`/`cross-site`, a foreign or `null` Origin, another port),
+  with a same-origin positive control per route, GETs unaffected, form bodies no longer parsed,
+  and the origin rule behind a proxy (Host + X-Forwarded-Proto, or ALLOWED_ORIGINS).
+  `server/utils/same-origin.js`. SameSite=Strict is per SITE: the hosted preview subdomain
+  receives the session cookie.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 

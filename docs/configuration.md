@@ -142,6 +142,17 @@ SESSION_SECRET=a-long-random-string
 **Security note:** AstroAdmin warns at startup when production runs with the
 default credentials, a plaintext-only password, or the default session secret.
 
+**Cross-origin writes are refused.** Every state-changing `/api` request
+(saves, uploads, git actions, publish, login and logout) must come from the
+admin's own origin: a browser's `Sec-Fetch-Site` must be `same-origin`, or, for
+a client that sends no `Sec-Fetch-Site`, the `Origin` must be absent or the
+admin's own. The session cookie is `SameSite=Strict`, but that is per site, so
+without this a page on a sibling origin (a preview subdomain, another
+localhost port) could write as the editor. The admin's own origin is the one
+the request was addressed to (`Host`, and `X-Forwarded-Proto` behind a proxy in
+production), or any origin listed in `ALLOWED_ORIGINS`; set that to the public
+admin URL if your proxy does not pass the original `Host`.
+
 ## Build commands
 
 ```javascript
