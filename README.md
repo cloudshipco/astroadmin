@@ -132,6 +132,10 @@ repo. Publishing commits the configured paths (`src/content/`, styles, images
 Pages, GitHub Pages via Actions) rebuilds the site from git. The host is your
 build sandbox, CDN, and rollback story.
 
+Before it pushes, publish builds that exact commit with the site's own Astro,
+and pushes nothing if the build fails, so content your schema rejects never
+reaches the host. See [the pre-push build check](./docs/configuration.md#the-pre-push-build-check).
+
 No build-on-push host? Configure a [deploy adapter](./docs/deploy-adapters.md)
 (rsync today) and publishing becomes commit → build → deploy from the machine
 running AstroAdmin. Git can be disabled entirely (`GIT_ENABLED=false`) for
