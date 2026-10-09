@@ -21,7 +21,7 @@ import path from 'path';
  * Enables clicking a block in the admin panel to scroll to it in the preview.
  * Works automatically without requiring site modifications.
  */
-const adminPreviewScript = `
+export const adminPreviewScript = `
 // AstroAdmin preview integration - handles block focus from admin panel
 (function() {
   // Only run in iframe (preview context)
@@ -90,11 +90,19 @@ const adminPreviewScript = `
     '.aa-highlight{outline:2px solid #3b82f6;outline-offset:3px}';
   document.head.appendChild(affordance);
 
+  // A click inside a link that navigates belongs to the link: it navigates as
+  // usual and focuses nothing, even when an annotated element holds the link
+  // (a Markdown link in a rich-text block, a button in an annotated hero).
+  // Focusing a field and then leaving the page would only lose the focus.
+  const NAVIGATING_LINK = 'a[href], area[href]';
+
   document.addEventListener('click', (event) => {
-    const el = event.target.closest && event.target.closest('[data-aa-field]');
+    const target = event.target;
+    if (!target || typeof target.closest !== 'function') return;
+    if (target.closest(NAVIGATING_LINK)) return;
+    const el = target.closest('[data-aa-field]');
     if (!el) return;
-    // Let genuine links still navigate; otherwise there's no default to block.
-    window.parent.postMessage({ type: 'fieldFocus', field: el.dataset.aaField }, '*');
+    window.parent.postMessage({ type: 'fieldFocus', field: el.getAttribute('data-aa-field') }, '*');
   });
 
   // Briefly outline an element when its control is focused/clicked in the editor.

@@ -185,7 +185,8 @@ export function computeFieldCoverage(entries, pages) {
       report.unchecked.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath });
       continue;
     }
-    const names = new Set(page.fields.map((field) => field.name));
+    // An annotation on or inside a link is never reached by a click.
+    const names = new Set(page.fields.filter((field) => !field.link).map((field) => field.name));
     const { textFields, values } = describeEntryFields(entry);
     const blockArrays = entry.blockArrays || [];
     const isCovered = (fieldPath) => reachingPaths(fieldPath, blockArrays).some((candidate) => names.has(candidate));
@@ -281,18 +282,18 @@ export function findUnindexedBlocks(entries, pages) {
 }
 
 /**
- * Annotations a link click resolves to: an annotated <a>, or an annotated
- * element whose nearest annotated descendant-free path holds an <a>. The
- * integration posts the focus and then lets the link navigate, so the preview
- * leaves the page being edited.
+ * Annotations that can never fire: on a link that navigates, or inside one.
+ * The integration lets a click inside a link navigate and focuses nothing, so
+ * an annotated ANCESTOR of a link is fine (a click beside the link still
+ * reaches it), but these are dead.
  * @param {Map<string, import('./html-scan.js').PageScan>} pages
  */
 export function findAnnotatedLinks(pages) {
   const found = [];
   for (const [pagePath, page] of pages) {
     for (const field of page.fields) {
-      if (field.tag === 'a') found.push({ pagePath, name: field.name, problem: 'is a link' });
-      else if (field.containsLink) found.push({ pagePath, name: field.name, problem: `is a <${field.tag}> containing a link` });
+      if (field.link === 'is') found.push({ pagePath, name: field.name, problem: 'is a link' });
+      else if (field.link === 'inside') found.push({ pagePath, name: field.name, problem: 'is inside a link' });
     }
   }
   return found;

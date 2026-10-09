@@ -17,8 +17,10 @@ import path from 'path';
  * @typedef {Object} AnnotatedElement
  * @property {string} name - the attribute's value (an editor control's form name)
  * @property {string} tag - lower-case tag name
- * @property {boolean} containsLink - an <a> sits inside it with no nearer
- *   annotated element in between, so a click on that link resolves here
+ * @property {'is'|'inside'|null} link - 'is' when the element is itself a
+ *   link that navigates (<a href>, <area href>), 'inside' when it sits inside
+ *   one. The integration lets such a click navigate and focuses nothing, so
+ *   either way the annotation can never fire.
  */
 
 /**
@@ -72,9 +74,6 @@ export async function scanHtml(html) {
   /** @type {AnnotatedElement[]} */
   const fields = [];
   const blockIndexes = [];
-  // Open annotated elements, innermost last. The integration resolves a click
-  // with closest('[data-aa-field]'), so only the innermost one matters.
-  const openAnnotated = [];
   // Text is collected only inside <body>, outside links and non-rendered elements.
   const textChunks = [];
   const linkChunks = [];
@@ -82,6 +81,10 @@ export async function scanHtml(html) {
   let bodyDepth = 0;
   let linkDepth = 0;
   let hiddenDepth = 0;
+  const isNavigatingLink = (element) => {
+    const tag = element.tagName.toLowerCase();
+    return (tag === 'a' || tag === 'area') && element.hasAttribute('href');
+  };
   const trackDepth = (element, change) => {
     if (!element.canHaveContent || element.selfClosing) return;
     change(1);
@@ -89,29 +92,18 @@ export async function scanHtml(html) {
   };
 
   const rewriter = new HTMLRewriter()
-    // Registered before the data-aa-field handler, so an annotated <a> is not
-    // yet on the stack when its own 'a' handler runs.
     .on('body', { element(element) { trackDepth(element, (delta) => { bodyDepth += delta; }); } })
     .on('script, style, template, noscript, svg', { element(element) { trackDepth(element, (delta) => { hiddenDepth += delta; }); } })
-    .on('a', {
-      element(element) {
-        const innermost = openAnnotated.at(-1);
-        if (innermost) innermost.containsLink = true;
-        trackDepth(element, (delta) => { linkDepth += delta; });
-      },
-    })
+    // Registered before the link handler, so an annotated <a href> has not yet
+    // counted itself when it is recorded: linkDepth > 0 here means an
+    // enclosing link.
     .on('[data-aa-field]', {
       element(element) {
-        const record = { name: element.getAttribute('data-aa-field') || '', tag: element.tagName.toLowerCase(), containsLink: false };
-        fields.push(record);
-        if (!element.canHaveContent || element.selfClosing) return;
-        openAnnotated.push(record);
-        element.onEndTag(() => {
-          const position = openAnnotated.lastIndexOf(record);
-          if (position !== -1) openAnnotated.splice(position, 1);
-        });
+        const link = isNavigatingLink(element) ? 'is' : linkDepth > 0 ? 'inside' : null;
+        fields.push({ name: element.getAttribute('data-aa-field') || '', tag: element.tagName.toLowerCase(), link });
       },
     })
+    .on('a[href]', { element(element) { trackDepth(element, (delta) => { linkDepth += delta; }); } })
     .on('[data-block-index]', {
       element(element) {
         const value = Number.parseInt(element.getAttribute('data-block-index'), 10);

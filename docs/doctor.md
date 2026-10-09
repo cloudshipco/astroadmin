@@ -261,12 +261,17 @@ block field annotated without its index (`heading` where the control is
 
 *Since 1.4.1. Warns.*
 
-Do not put `data-aa-field` on a link, or on an element that contains one. The
-integration lets real links keep working, so a click on one focuses the field
-and then navigates the preview away from the page being edited. Annotate the
-text inside a card rather than the card, and leave link labels to be edited
-from the sidebar. A link inside a nearer annotated element is reported against
-that element only, since that is the one the click resolves to.
+A click inside a link that navigates (`<a href>`, `<area href>`) belongs to the
+link: the preview follows it and no field is focused. So `data-aa-field` on a
+link, or on an element inside one, can never fire. Annotate the text beside the
+link instead, and leave link labels to be edited from the sidebar.
+
+An annotated element that *contains* a link is fine (since 1.4.9): a click on
+the link navigates, and a click anywhere else in the element focuses its
+field. A Markdown body with links in it, or a hero section with a button, can
+be annotated as a whole.
+
+See [Links](./inline-editing.md#links) in the click-to-edit conventions.
 
 ## Adding a check
 

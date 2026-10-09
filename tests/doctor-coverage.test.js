@@ -212,22 +212,41 @@ await check('links: the fixture (card link not annotated) has no annotated link'
   assert.deepEqual(findAnnotatedLinks(await pagesFor(ANNOTATED_PAGE)), []);
 });
 
-await check('links MUTATION: data-aa-field on an <a> is reported', async () => {
+await check('links MUTATION: data-aa-field on an <a href> is reported', async () => {
   const mutated = ANNOTATED_PAGE.replace('<a href="/first">', '<a href="/first" data-aa-field="blocks[2].items">');
   assert.deepEqual(findAnnotatedLinks(await pagesFor(mutated)), [{ pagePath: '/about', name: 'blocks[2].items', problem: 'is a link' }]);
 });
 
-await check('links MUTATION: data-aa-field on an ancestor of an <a> is reported', async () => {
-  const mutated = ANNOTATED_PAGE.replace('<li><article>', '<li><article data-aa-field="blocks[2].items">');
-  assert.deepEqual(findAnnotatedLinks(await pagesFor(mutated)), [{ pagePath: '/about', name: 'blocks[2].items', problem: 'is a <article> containing a link' }]);
+await check('links: an annotated ANCESTOR of a link is not reported (the link click resolves to nothing)', async () => {
+  const mutated = ANNOTATED_PAGE.replace('<li><article>', '<li><article data-aa-field="blocks[2].items">')
+    .replace('<p data-aa-field="blocks[2].items">The first thing.</p>', '<p data-aa-field="blocks[2].items">The <a href="/x">first</a> thing.</p>');
+  assert.deepEqual(findAnnotatedLinks(await pagesFor(mutated)), []);
 });
 
-await check('links: a link inside a NEARER annotated element is reported against that one only', async () => {
-  const mutated = ANNOTATED_PAGE.replace('<p data-aa-field="blocks[2].items">The first thing.</p>', '<p data-aa-field="blocks[2].items">The <a href="/x">first</a> thing.</p>')
-    .replace('<li><article>', '<li><article data-aa-field="blocks[2].heading">');
-  const found = findAnnotatedLinks(await pagesFor(mutated));
-  assert.deepEqual(found.map((item) => item.name), ['blocks[2].heading', 'blocks[2].items'],
-    'the article still holds the card link directly; the paragraph holds the inline one');
+await check('links MUTATION: data-aa-field INSIDE a link is reported (it can never fire)', async () => {
+  const mutated = ANNOTATED_PAGE.replace('<a href="/first">Read more</a>', '<a href="/first"><span data-aa-field="blocks[2].items">Read more</span></a>');
+  assert.deepEqual(findAnnotatedLinks(await pagesFor(mutated)), [{ pagePath: '/about', name: 'blocks[2].items', problem: 'is inside a link' }]);
+});
+
+await check('links: an <a> without href is not a link (a click on it focuses its field)', async () => {
+  const mutated = ANNOTATED_PAGE.replace('<p class="eyebrow" data-aa-field="kicker">About</p>', '<a class="eyebrow" data-aa-field="kicker">About</a>');
+  assert.deepEqual(findAnnotatedLinks(await pagesFor(mutated)), []);
+});
+
+await check('links MUTATION: an annotated <area href> is reported', async () => {
+  const mutated = ANNOTATED_PAGE.replace('</main>', '<map name="m"><area href="/a" data-aa-field="headline"></map></main>');
+  assert.deepEqual(findAnnotatedLinks(await pagesFor(mutated)), [{ pagePath: '/about', name: 'headline', problem: 'is a link' }]);
+});
+
+await check('coverage: an annotation on or inside a link does not cover its field (a click never reaches it)', async () => {
+  const onLink = ANNOTATED_PAGE.replace('<h1 data-aa-field="headline">An example company</h1>', '<h1><a href="/" data-aa-field="headline">An example company</a></h1>');
+  // Its text is then wholly inside a link, so it is left out rather than
+  // counted as covered (without the filter it would count as covered: 12/12).
+  for (const html of [onLink, ANNOTATED_PAGE.replace('<h1 data-aa-field="headline">An example company</h1>', '<a href="/"><h1 data-aa-field="headline">An example company</h1></a>')]) {
+    const report = computeFieldCoverage([aboutEntry], await pagesFor(html));
+    assert.equal(report.coveredFields, 11);
+    assert.deepEqual(report.entries[0].notRendered, ['headline']);
+  }
 });
 
 await check('names: every annotation on the fixture names a real control', async () => {

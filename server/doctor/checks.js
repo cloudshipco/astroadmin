@@ -38,6 +38,8 @@ import {
 /** @typedef {'pass'|'warn'|'fail'|'skip'} Severity */
 
 export const DOCS_BASE = 'https://github.com/cloudshipco/astroadmin/blob/main/docs/doctor.md';
+// The click-to-edit conventions, linked from the checks that enforce them.
+export const INLINE_EDITING_DOCS = 'https://github.com/cloudshipco/astroadmin/blob/main/docs/inline-editing.md';
 const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
 // Below this share of text fields reachable by a click, coverage warns.
 export const COVERAGE_PASS_SHARE = 0.8;
@@ -241,10 +243,10 @@ export const CHECKS = [
       if (!context.distDir) return noBuild(context);
       const { pages } = await context.built();
       const found = findAnnotatedLinks(pages);
-      if (found.length === 0) return { severity: 'pass', message: 'No annotated element is, or holds, a link.' };
+      if (found.length === 0) return { severity: 'pass', message: 'No data-aa-field is on or inside a link.' };
       return {
         severity: 'warn',
-        message: `${found.length} annotated element(s) are or hold a link: a click there focuses the field and then navigates the preview away.`,
+        message: `${found.length} data-aa-field annotation(s) are on or inside a link. A click on a link follows it and focuses nothing, so these never fire; annotate the text beside the link instead. See ${INLINE_EDITING_DOCS}#links.`,
         details: listSome(found.map((item) => `${item.pagePath}: "${item.name}" ${item.problem}`)),
       };
     },

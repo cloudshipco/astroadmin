@@ -100,6 +100,10 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/live-url.test.js` — page path -> live-site URL (`ui/live-url.js`), shared by the
   header's "View live site" link and the server's live-status check: base paths, query/hash,
   and escape attempts (`//host`, `/\host`, `javascript:`) falling back to the site root.
+- `bun tests/preview-click.test.js` — the script the integration injects into preview pages
+  (`adminPreviewScript`, exported for this), run in happy-dom inside a stand-in iframe: which
+  clicks post a `fieldFocus` (never one inside an `<a href>`), and which element a
+  `highlightField` outlines.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 
