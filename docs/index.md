@@ -8,7 +8,7 @@ AstroAdmin is a visual admin interface for [Astro Content Collections](https://d
 - [Best Practices](./best-practices.md) - Structure your site for optimal editing
 - [Content Collections](./content-collections.md) - Schema field reference
 - [Block-Based Editing](./blocks.md) - Flexible page layouts with blocks
-- [Inline Editing](./inline-editing.md) - Convert template pages to editable content
+- [Inline Editing](./inline-editing.md) - Convert template pages to editable content, and annotate them for click-to-edit (`data-aa-field`, `data-aa-entry`, `data-block-index`)
 - [Configuration](./configuration.md) - Customize AstroAdmin behavior
 - [Requirements](./requirements.md) - What your Astro project needs
 - [Doctor](./doctor.md) - Check a site's setup and click-to-edit coverage

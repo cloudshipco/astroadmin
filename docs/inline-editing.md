@@ -1,10 +1,22 @@
-# Converting Template Pages to Inline Editing
+# Inline Editing
 
-This guide explains how to convert your Astro pages from hardcoded template files to content collections that can be edited through AstroAdmin's sidebar.
+Two things make a page editable in place:
 
-## Understanding the Difference
+1. **Its content lives in a content collection**, so the sidebar can edit it.
+   [Converting template pages](#converting-template-pages) below covers moving
+   hardcoded `.astro` content into collections.
+2. **Its templates are annotated for click-to-edit**, so a click on text in
+   the preview opens the right control, and focusing a control outlines its
+   text in the preview. [Click-to-edit in the preview](#click-to-edit-in-the-preview)
+   covers the attributes and the traps.
 
-### Template Pages (Static)
+## Converting template pages
+
+This part explains how to convert your Astro pages from hardcoded template files to content collections that can be edited through AstroAdmin's sidebar.
+
+### Understanding the Difference
+
+#### Template Pages (Static)
 
 Template pages are `.astro` files in `src/pages/` with hardcoded content:
 
@@ -25,7 +37,7 @@ import Layout from '../layouts/Layout.astro';
 - Changes need deployment
 - No admin interface
 
-### Content Collections (Editable)
+#### Content Collections (Editable)
 
 Content collections store your content in JSON or Markdown files with a defined schema:
 
@@ -58,9 +70,9 @@ export const collections = { pages };
 - No code changes needed
 - Schema validation
 
-## Step-by-Step Conversion
+### Step-by-Step Conversion
 
-### Step 1: Identify Your Content
+#### Step 1: Identify Your Content
 
 Look at your template page and identify what content should be editable:
 
@@ -82,7 +94,7 @@ Look at your template page and identify what content should be editable:
 
 Editable content: title, description, team members.
 
-### Step 2: Define the Schema
+#### Step 2: Define the Schema
 
 Create a content collection schema that matches your content structure:
 
@@ -106,7 +118,7 @@ const pages = defineCollection({
 export const collections = { pages };
 ```
 
-### Step 3: Create the Content File
+#### Step 3: Create the Content File
 
 Move your content to a JSON file:
 
@@ -122,7 +134,7 @@ Move your content to a JSON file:
 }
 ```
 
-### Step 4: Update Your Template
+#### Step 4: Update Your Template
 
 Modify your page to read from the content collection:
 
@@ -154,16 +166,16 @@ const { title, description, team } = page.data;
 </Layout>
 ```
 
-### Step 5: Verify in AstroAdmin
+#### Step 5: Verify in AstroAdmin
 
 1. Run `npx astroadmin dev`
 2. Select "pages" > "about" from the dropdown
 3. Edit your content in the sidebar
 4. See changes live in the preview
 
-## Common Patterns
+### Common Patterns
 
-### Simple Text Page
+#### Simple Text Page
 
 **Schema:**
 ```typescript
@@ -176,7 +188,7 @@ const pages = defineCollection({
 });
 ```
 
-### Page with Hero and Features
+#### Page with Hero and Features
 
 **Schema:**
 ```typescript
@@ -197,7 +209,7 @@ const pages = defineCollection({
 });
 ```
 
-### Page with Blocks (Flexible Layouts)
+#### Page with Blocks (Flexible Layouts)
 
 For pages with varying sections, use discriminated unions:
 
@@ -232,9 +244,9 @@ const pages = defineCollection({
 
 See [Content Collections](./content-collections.md) for more schema examples.
 
-## Tips
+### Tips
 
-### Keep Your Layouts
+#### Keep Your Layouts
 
 Don't move layout/styling code to content. Content collections should only contain _content_, not markup:
 
@@ -252,7 +264,7 @@ schema: z.object({
 })
 ```
 
-### Use Descriptive Field Names
+#### Use Descriptive Field Names
 
 AstroAdmin generates labels from field names. Use clear names:
 
@@ -264,11 +276,229 @@ schema: z.object({
 })
 ```
 
-### Start Small
+#### Start Small
 
 Convert one page at a time. Start with simple pages before tackling complex ones with blocks.
+
+## Click-to-edit in the preview
+
+The editor's preview links to the sidebar in both directions:
+
+- **Preview to editor.** Clicking an element that carries `data-aa-field`
+  focuses, scrolls to and briefly flashes the control that attribute names.
+- **Editor to preview.** Clicking a control outlines the element annotated
+  with its name, and clicking a block's header outlines the block.
+
+Nothing here changes how the site looks. The attributes are plain `data-*`
+attributes, and the script that reads them is injected by the
+`astroadmin()` integration only into the dev server the editor previews, never
+into a production build. A site with no annotations still works; clicks in its
+preview just do nothing.
+
+`astroadmin doctor` checks most of what follows on the built site
+([docs](./doctor.md)).
+
+### Field names
+
+The value of `data-aa-field` is the editor control's form name, exactly:
+
+| What it edits | `data-aa-field` |
+|---|---|
+| A top-level field | `headline` |
+| A nested field | `hero.title` |
+| A field of a block | `blocks[2].heading` |
+| A list of objects (see [Arrays](#arrays)) | `blocks[1].items` |
+| One string in a list of strings | `credentials[2]` |
+| A Markdown entry's body | `body` |
+
+A field inside a block is qualified with the block's index: `blocks[2].text`,
+not `text`. In a template that maps over blocks, build the name from the
+index:
+
+```astro
+{blocks.map((block, i) => (
+  <section data-block-index={i}>
+    <h2 data-aa-field={`blocks[${i}].heading`}>{block.heading}</h2>
+  </section>
+))}
+```
+
+A wrong name fails silently: the click is sent, the editor finds no control
+with that name, and nothing happens. The doctor's `click-to-edit-names` check
+reports names that match no field.
+
+### Arrays
+
+A list of **objects** (two or more properties each) is edited as a list of
+cards with ONE named control, `blocks[1].items`. There is no control per item
+or per item field: `blocks[1].items[0].title` names nothing. Annotate each
+item's text with the list's name; a click scrolls to and flashes the list,
+and the editor opens items from there.
+
+```astro
+{block.items.map((item) => (
+  <article>
+    <h3 data-aa-field={`blocks[${i}].items`}>{item.title}</h3>
+    <p data-aa-field={`blocks[${i}].items`}>{item.body}</p>
+  </article>
+))}
+```
+
+A list of **strings** does get a control per item, so annotate each with its
+own index: `credentials[2]`.
+
+The list's control (like an image picker's) is a hidden input, which cannot
+take focus. For those fields a click scrolls to and flashes the visible group
+without focusing anything. That is the intended behaviour, not a bug.
+
+### Blocks: `data-block-index`
+
+When an editor clicks a block's header, the preview outlines the element whose
+`data-block-index` is that block's index. Blocks are picked by **position**
+among the page's `[data-block-index]` elements, not by the attribute's value,
+so the attribute must go on:
+
+- exactly one root element per rendered block,
+- in the same order as the block list,
+- with none nested inside another.
+
+Without any `data-block-index` on the page, the preview guesses by counting
+top-level `<section>` elements, which goes wrong as soon as one block renders
+as a `<figure>` or a `<div>`, or renders nothing. Every block after it is then
+off by one, and nothing reports it except the doctor's `block-index` check.
+
+### Cards from other entries
+
+The editor edits one entry at a time, and an unqualified `data-aa-field` means
+a field of the entry the page is for. A page often also shows cards from
+OTHER entries: a services collection listed on the home page, testimonials,
+projects. To make those clickable, put `data-aa-entry` on the card (or any
+ancestor of the annotated elements):
+
+```astro
+---
+const services = await getCollection('services');
+---
+<ul>
+  {services.map((service) => (
+    <li data-aa-entry={`services/${service.id}`}>
+      <h3 data-aa-field="title">{service.data.title}</h3>
+      <p data-aa-field="summary">{service.data.summary}</p>
+      <a href={`/services/${service.id}`}>Read more</a>
+    </li>
+  ))}
+</ul>
+```
+
+The rules (since 1.4.9):
+
+- The value is `<collection>/<slug>`, with the slug the editor uses for the
+  entry (its id, as in `/dashboard/<collection>/<slug>`). A collection name has
+  no slash, so everything after the first slash is the slug, and nested slugs
+  (`articles/2024/first-post`) work.
+- An annotated element belongs to the nearest `data-aa-entry` on itself or an
+  ancestor. With none, it belongs to the page's own entry, exactly as before.
+- Inside a card, `data-aa-field` names the control **in that entry**: `title`,
+  not anything qualified by the page.
+- Clicking a card's annotation opens that entry in the editor and focuses the
+  field. The preview stays on the page you clicked, so you keep editing the
+  card where it is shown: a save refreshes the preview on that page, and
+  focusing one of the entry's controls outlines that card (not the page's own
+  element of the same name, nor another entry's card).
+- While a card's entry is open, clicking an unqualified annotation goes back to
+  the page's own entry and focuses that field.
+- A reference to an entry that does not exist does nothing. The doctor warns
+  about it, and counts a card's annotations toward that entry's coverage.
+
+### Links
+
+A click inside a link that navigates (`<a href>`, `<area href>`) belongs to
+the link: the preview follows it and no field is focused. So:
+
+- An element that **contains** a link can be annotated (since 1.4.9). A
+  Markdown body with links in it, or a hero section with a button in it,
+  focuses its field when clicked anywhere except on the link.
+- An annotation **on** a link, or on an element **inside** one, can never fire.
+  Annotate the text beside the link instead, and edit link labels from the
+  sidebar. The doctor's `click-to-edit-links` check reports these.
+
+Before 1.4.9 a click on a link inside an annotated element focused the field
+and then navigated away, so sites avoided annotating anything that held a
+link. That workaround is no longer needed.
+
+### Components must pass the attribute on
+
+A wrapper component that destructures a fixed list of props and renders its
+own root element drops `data-aa-field` (and `data-aa-entry`): it compiles,
+renders nothing, and fails no test. Spread the rest of the props onto the root:
+
+```astro
+---
+const { title, ...attrs } = Astro.props;
+---
+<h2 class="section-title" {...attrs}>{title}</h2>
+```
+
+The doctor measures the built HTML, so it sees an attribute a component
+dropped.
+
+### What cannot be annotated
+
+- **Media under a full-size overlay.** An `<img>` covered by a text layer or a
+  gradient never receives the click. Annotate the overlay (or the section),
+  and nearer annotations inside it still win.
+- **Fields rendered only in `<head>`**: a page `title`, SEO and Open Graph
+  fields. Nothing there can be clicked; edit them from the sidebar. The doctor
+  leaves them out of coverage.
+
+### Keep template comments out of the markup
+
+Two kinds of comment in a template change the output, so a comment added while
+annotating can change how the site looks:
+
+- **Tailwind's class scanner reads comments.** A comment containing a utility
+  name ("hidden", "fixed", "block", "grid") makes Tailwind generate that class,
+  and the stylesheet changes.
+- **Astro ships HTML comments.** A `<!-- -->` comment in a template is sent to
+  every visitor, and a `{/* */}` line between elements can add whitespace that
+  shifts inline content.
+
+Put explanations in the component's frontmatter (the `---` fence), which never
+reaches the output.
+
+### Verifying
+
+1. **Run the doctor** from the site's directory. It builds the site and checks
+   block indexes, coverage, names, entry references and links on the built
+   HTML:
+
+   ```bash
+   bunx astroadmin doctor
+   ```
+
+2. **Prove the annotations are visually inert.** Build the site before and
+   after annotating, strip the attributes from both, and diff. Any difference
+   left is a change a visitor would see (a stylesheet that changed because of
+   a comment, extra whitespace):
+
+   ```bash
+   git worktree add ../site-before <commit-before-annotating>
+   (cd ../site-before && bunx --bun astro build --outDir /tmp/aa-before)
+   bunx --bun astro build --outDir /tmp/aa-after
+   find /tmp/aa-before /tmp/aa-after -name '*.html' -exec perl -pi -e 's/ data-(aa-field|aa-entry|block-index)="[^"]*"//g' {} +
+   diff -r /tmp/aa-before /tmp/aa-after && echo "annotations are inert"
+   ```
+
+   Asset file names carry a hash of their content, so a stylesheet that
+   changed shows up as a differing file name as well as differing content.
+   Remove the worktree afterwards with `git worktree remove ../site-before`.
+
+3. **Click through the preview** in the editor: a click on each kind of
+   annotated element should focus its control, and a click on a link should
+   navigate without focusing anything.
 
 ## Next Steps
 
 - [Content Collections](./content-collections.md) - Schema field types
 - [Configuration](./configuration.md) - Customize AstroAdmin
+- [Doctor](./doctor.md) - Check a site's click-to-edit coverage

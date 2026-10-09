@@ -206,6 +206,7 @@ wrong one as soon as one block renders as something else (a `<figure>`, a
 ```
 
 The check compares each entry's block list with the indexes on its built page.
+See [Blocks](./inline-editing.md#blocks-data-block-index) for the rules.
 
 ### click-to-edit-coverage
 
@@ -241,6 +242,8 @@ a button label). The report says how many fields were left out that way.
 Coverage is reported per collection, since the entries of one collection share
 a template: a site can have well annotated pages and an FAQ list with none.
 
+The full conventions, with examples, are in
+[Click-to-edit in the preview](./inline-editing.md#click-to-edit-in-the-preview).
 Three traps the check cannot see directly, worth knowing when annotating:
 
 - **Annotate the element the click lands on.** An annotated `<img>` behind a

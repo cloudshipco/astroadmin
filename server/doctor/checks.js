@@ -185,7 +185,7 @@ export const CHECKS = [
       if (report.pages.length === 0) return { severity: 'pass', message };
       return {
         severity: 'warn',
-        message: `${message} Without it the editor guesses blocks by counting <section>s and can highlight the wrong one.`,
+        message: `${message} Without it the editor guesses blocks by counting <section>s and can highlight the wrong one. See ${INLINE_EDITING_DOCS}#blocks-data-block-index.`,
         details: listSome(report.pages.map((page) => `${page.pagePath} (${page.collection}/${page.slug}): ${page.field} ${page.missing.join(', ')} of ${page.blocks}`)),
         data: report,
       };
@@ -215,7 +215,9 @@ export const CHECKS = [
       }
       if (report.notRendered > 0) details.push(`${report.notRendered} text fields are not counted: their text is not visible outside a link on the page (page titles, link labels, metadata, reformatted dates).`);
       if (report.unchecked.length > 0) details.push(`${report.unchecked.length} entries had no built page and were not checked.`);
-      return { severity: share >= COVERAGE_PASS_SHARE ? 'pass' : 'warn', message, details, data: report };
+      const passes = share >= COVERAGE_PASS_SHARE;
+      if (!passes) details.push(`How to annotate: ${INLINE_EDITING_DOCS}#click-to-edit-in-the-preview`);
+      return { severity: passes ? 'pass' : 'warn', message, details, data: report };
     },
   },
   {
