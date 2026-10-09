@@ -21,6 +21,13 @@
  * - `aria-hidden="true"` hides an element from assistive technology only; it
  *   is still visible and clickable, so it is treated as rendered.
  * - Text inside <svg> (icon titles) and <title> is not body text.
+ * - <head> is never rendered, so an annotation or data-aa-entry in it (a
+ *   `<title data-aa-field="title">`) cannot be clicked and does not count.
+ *   The same goes for the head-only elements (title, meta, link, base) where
+ *   a page has no <head> tag. Its data-block-index DOES count, for the same
+ *   reason as a hidden one: the integration's position count includes it.
+ *   The head ends where a browser ends it: at </head>, or at the first element
+ *   that is not head content (a <div> after an unclosed <head> is body).
  * CSS (`display: none`, a `hidden` class) is not evaluated.
  *
  * A page with no <body> tag (a fragment, or a template that leaves the tag
@@ -58,6 +65,12 @@ import path from 'path';
  * @property {string} linkText - visible text inside links, as comparableText()
  * @property {string} bodyText - all visible body text, as comparableText()
  */
+
+// Elements the HTML parser only ever puts in (or treats as) head content,
+// wherever they appear: never rendered, so never clickable.
+const HEAD_ONLY_TAGS = new Set(['title', 'meta', 'link', 'base']);
+// Elements that stay inside an open <head>; any other start tag ends it.
+const HEAD_CONTENT_TAGS = new Set([...HEAD_ONLY_TAGS, 'style', 'script', 'noscript', 'template']);
 
 const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 
@@ -106,7 +119,9 @@ export async function scanHtml(html) {
   const linkChunks = [];
   const bodyChunks = [];
   let bodyDepth = 0;
-  let headDepth = 0;
+  // Inside <head>: from its start tag to </head> or the first element that
+  // is not head content.
+  let inHead = false;
   let sawBody = false;
   let linkDepth = 0;
   // Content that is not in the DOM (template, noscript, script, style).
@@ -125,7 +140,8 @@ export async function scanHtml(html) {
     change(1);
     element.onEndTag(() => change(-1));
   };
-  const isRendered = (element) => absentDepth === 0 && hiddenDepth === 0 && !element.hasAttribute('hidden');
+  const isRendered = (element) => absentDepth === 0 && hiddenDepth === 0 && !inHead
+    && !element.hasAttribute('hidden') && !HEAD_ONLY_TAGS.has(element.tagName.toLowerCase());
 
   // Handler order matters: for one element, handlers run in registration
   // order, so the depth trackers that describe an element's ANCESTORS must
@@ -134,8 +150,20 @@ export async function scanHtml(html) {
   // root is nested only inside ANOTHER block root).
   const rewriter = new HTMLRewriter()
     .on('body', { element(element) { sawBody = true; trackDepth(element, (delta) => { bodyDepth += delta; }); } })
-    .on('head', { element(element) { trackDepth(element, (delta) => { headDepth += delta; }); } })
     .on('template, noscript, script, style', { element(element) { trackDepth(element, (delta) => { absentDepth += delta; }); } })
+    // After the absent tracker, so elements inside a <template> in the head
+    // (not in the DOM) do not end it.
+    .on('*', {
+      element(element) {
+        const tag = element.tagName.toLowerCase();
+        if (tag === 'head') {
+          inHead = true;
+          if (element.canHaveContent && !element.selfClosing) element.onEndTag(() => { inHead = false; });
+        } else if (inHead && absentDepth === 0 && !HEAD_CONTENT_TAGS.has(tag)) {
+          inHead = false;
+        }
+      },
+    })
     .on('[data-block-index]', {
       element(element) {
         if (absentDepth > 0) return;
@@ -173,7 +201,7 @@ export async function scanHtml(html) {
     .on('a[href]', { element(element) { trackDepth(element, (delta) => { linkDepth += delta; }); } })
     .onDocument({
       text(chunk) {
-        const inBody = bodyDepth > 0 || (!sawBody && headDepth === 0);
+        const inBody = bodyDepth > 0 || (!sawBody && !inHead);
         if (!inBody || absentDepth > 0 || hiddenDepth > 0 || nonTextDepth > 0) return;
         const target = linkDepth > 0 ? linkChunks : textChunks;
         target.push(chunk.text);

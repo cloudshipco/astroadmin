@@ -241,7 +241,7 @@ export const CHECKS = [
       const { entries, pages } = await context.built();
       const report = computeFieldCoverage(entries, pages);
       const uncheckedNote = report.unchecked.length > 0
-        ? `${report.unchecked.length} ${report.unchecked.length === 1 ? 'entry was' : 'entries were'} not checked: ${report.unchecked.length === 1 ? 'its page was' : 'their pages were'} not built (e.g. ${report.unchecked.slice(0, 3).map((item) => `${item.collection}/${item.slug} at ${item.pagePath}`).join(', ')}).`
+        ? `${report.unchecked.length} ${report.unchecked.length === 1 ? 'entry was' : 'entries were'} not checked on ${report.unchecked.length === 1 ? 'its own page, which was' : 'their own pages, which were'} not built (e.g. ${report.unchecked.slice(0, 3).map((item) => `${item.collection}/${item.slug} at ${item.pagePath}`).join(', ')}).`
         : null;
       const unmappedNote = report.unmapped.length > 0
         ? `${report.unmapped.length} ${report.unmapped.length === 1 ? 'entry is' : 'entries are'} on no built page (no page of their own, and no card names them with data-aa-entry), so not counted.`

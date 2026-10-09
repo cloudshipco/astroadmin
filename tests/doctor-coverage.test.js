@@ -591,5 +591,107 @@ await check('an entry whose page was not built keeps coverage from passing, and 
   }
 });
 
+console.log('\n🧪 doctor: review round 2 (cards without annotations, cards masking missing pages, <head>)\n' + '='.repeat(40));
+
+await check('coverage MUTATION: removing EVERY annotation from a card drops coverage (the card is still a place showing its entry)', async () => {
+  const bare = HOME_WITH_CARDS
+    .replace('<h3 data-aa-field="title">Hedge trimming</h3>', '<h3>Hedge trimming</h3>')
+    .replace('<p data-aa-field="summary">Neat edges', '<p>Neat edges');
+  assert.notEqual(bare, HOME_WITH_CARDS, 'the mutation applied');
+  const before = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS, '/'));
+  const after = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(bare, '/'));
+  // Positive control: before the mutation the hedge-trimming card is counted, 2 of 2.
+  assert.deepEqual(before.entries.find((entry) => entry.slug === 'hedge-trimming')?.covered, 2);
+  const hedge = after.entries.find((entry) => entry.slug === 'hedge-trimming');
+  assert.ok(hedge, `the visible card's entry is still reported: ${JSON.stringify(after.entries.map((entry) => entry.slug))}`);
+  assert.deepEqual({ fields: hedge.fields, covered: hedge.covered, missing: hedge.missing }, { fields: 2, covered: 0, missing: ['title', 'summary'] });
+  assert.deepEqual(after.unmapped, [], 'a visible card is not "on no built page"');
+  assert.equal(after.coveredFields, before.coveredFields - 2);
+  assert.equal(after.totalFields, before.totalFields);
+});
+
+await check('coverage: a card naming an entry with no annotations at all (only data-aa-entry) still shows that entry', async () => {
+  const scan = await scanHtml('<html><body><article data-aa-entry="services/hedge-trimming"><h3>Hedge trimming</h3></article></body></html>');
+  assert.deepEqual(scan.entryRefs, ['services/hedge-trimming']);
+  const report = computeFieldCoverage(serviceEntries, new Map([['/', scan]]));
+  assert.deepEqual(report.entries.map((entry) => [entry.slug, entry.fields, entry.covered]), [['hedge-trimming', 1, 0]]);
+  assert.deepEqual(report.unmapped, [{ collection: 'services', slug: 'garden-design' }]);
+});
+
+await check('coverage MUTATION: an entry whose own page was not built is unchecked even when a card shows it elsewhere', async () => {
+  const withPages = serviceEntries.map((entry) => ({ ...entry, pagePath: `/services/${entry.slug}` }));
+  const report = computeFieldCoverage([homeEntry, ...withPages], await pagesFor(HOME_WITH_CARDS, '/'));
+  assert.deepEqual(report.unchecked, [
+    { collection: 'services', slug: 'garden-design', pagePath: '/services/garden-design' },
+    { collection: 'services', slug: 'hedge-trimming', pagePath: '/services/hedge-trimming' },
+  ]);
+  // The cards still count toward coverage.
+  assert.deepEqual(report.entries.find((entry) => entry.slug === 'garden-design')?.covered, 2);
+  // Control: with the standalone pages built, nothing is unchecked.
+  const pages = await pagesFor(HOME_WITH_CARDS, '/');
+  for (const entry of withPages) pages.set(entry.pagePath, await scanHtml(`<html><body><h1 data-aa-field="title">${entry.data.title}</h1></body></html>`));
+  assert.deepEqual(computeFieldCoverage([homeEntry, ...withPages], pages).unchecked, []);
+});
+
+await check('coverage: a card masking a missing page keeps the check from passing (runDoctor)', async () => {
+  const { runDoctor } = await import('../server/doctor/index.js');
+  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-card-mask-'));
+  try {
+    fs.writeFileSync(path.join(distDir, 'index.html'), HOME_WITH_CARDS.replace('</main>', '<p data-aa-field="title">Garden design</p></main>'));
+    const garden = { ...serviceEntries[0], pagePath: '/services/garden-design' };
+    const report = await runDoctor({ projectRoot: distDir, distDir, build: false, phases: ['built'], loadEntries: async () => ({ entries: [homeEntry, garden, serviceEntries[1]] }) });
+    const coverage = report.results.find((result) => result.id === 'click-to-edit-coverage');
+    assert.equal(coverage.data.coveredFields, coverage.data.totalFields, `positive control: everything shown is annotated: ${coverage.message}`);
+    assert.equal(coverage.severity, 'warn', JSON.stringify(coverage));
+    assert.match(coverage.message, /services\/garden-design at \/services\/garden-design/, coverage.message);
+  } finally {
+    fs.rmSync(distDir, { recursive: true, force: true });
+  }
+});
+
+const titleEntry = { collection: 'pages', slug: 'home', pagePath: '/', schema: { type: 'object', properties: { title: { type: 'string' }, headline: { type: 'string' } } }, data: { title: 'Example home', headline: 'Welcome to the example' } };
+
+await check('head MUTATION: an annotation in <head> (a <title>) is not recorded and covers nothing', async () => {
+  const page = '<!DOCTYPE html><html><head><title data-aa-field="title">Example home</title></head><body><h1>Welcome to the example</h1><p>Example home</p></body></html>';
+  const scan = await scanHtml(page);
+  assert.deepEqual(scan.fields, [], JSON.stringify(scan.fields));
+  const report = computeFieldCoverage([titleEntry], new Map([['/', scan]]));
+  assert.deepEqual({ total: report.totalFields, covered: report.coveredFields }, { total: 2, covered: 0 });
+  // Control: the same annotation on the visible copy is recorded and covers it.
+  const visible = await scanHtml(page.replace('<p>Example home</p>', '<p data-aa-field="title">Example home</p>'));
+  assert.deepEqual(visible.fields.map((field) => field.name), ['title']);
+  assert.equal(computeFieldCoverage([titleEntry], new Map([['/', visible]])).coveredFields, 1);
+});
+
+await check('head: a page whose only annotation is its <title> does not report 1/1', async () => {
+  const report = computeFieldCoverage([titleEntry], await pagesFor('<html><head><title data-aa-field="title">Example home</title></head><body><p>Nothing annotated</p></body></html>', '/'));
+  // Unfixed, the title annotation made this 1 of 1. Its text is not in the body, so it is not counted at all.
+  assert.deepEqual({ total: report.totalFields, covered: report.coveredFields }, { total: 0, covered: 0 }, JSON.stringify(report));
+});
+
+await check('head: annotations and entry refs on head elements are left out, also without a <head> tag; body text still read', async () => {
+  const scan = await scanHtml('<title data-aa-field="title">Example home</title><meta data-aa-entry="services/x" data-aa-field="summary" content="x"><link data-aa-field="title" rel="icon" href="/x.png"><h1 data-aa-field="headline">Welcome to the example</h1>');
+  assert.deepEqual(scan.fields.map((field) => field.name), ['headline']);
+  assert.deepEqual(scan.entryRefs, []);
+  assert.ok(scan.clickableText.includes('welcometotheexample'), 'the implicit body is still read');
+  const inHead = await scanHtml('<html><head><meta name="x" data-aa-entry="services/hedge-trimming"><noscript></noscript></head><body><p data-aa-field="headline">Hi</p></body></html>');
+  assert.deepEqual(inHead.entryRefs, []);
+  assert.deepEqual(inHead.fields.map((field) => [field.name, field.entry]), [['headline', null]], 'a head entry ref does not qualify body annotations');
+  // The head ends where a browser ends it: an omitted </head> does not swallow the body.
+  for (const html of [
+    '<html><head><title>T</title><body><p data-aa-field="headline">Hello there</p></body></html>',
+    '<html><head><title>T</title><p data-aa-field="headline">Hello there</p></html>',
+    '<html><head><template><div data-aa-field="inert">x</div></template><title>T</title></head><body><p data-aa-field="headline">Hello there</p></body></html>',
+  ]) {
+    const unclosed = await scanHtml(html);
+    assert.deepEqual({ html, names: unclosed.fields.map((field) => field.name), text: unclosed.clickableText }, { html, names: ['headline'], text: 'hellothere' });
+  }
+});
+
+await check('head: a block root in <head> still counts, as the integration picks roots by position among every [data-block-index]', async () => {
+  const scan = await scanHtml('<html><head><meta data-block-index="0"></head><body><section data-block-index="0"></section><section data-block-index="1"></section></body></html>');
+  assert.deepEqual(scan.blockIndexes, [0, 0, 1]);
+});
+
 console.log('='.repeat(40));
 console.log(`\n📊 ${passed} checks passed.\n`);

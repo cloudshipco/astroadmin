@@ -251,6 +251,42 @@ ${body}
     }
   });
 
+  const configFor = async (source) => staticResults(makeSite((dir) => writeFile(dir, 'astro.config.mjs', source)));
+
+  await check('config MUTATION: a wrapper call that is not astro\'s defineConfig is "could not verify", not read as the config', async () => {
+    const assign = `import astroadmin from 'astroadmin/integration';
+export default Object.assign({ integrations: [astroadmin()], ${VITE} }, { integrations: [], vite: { server: { hmr: true } } });
+`;
+    const localDefine = `import astroadmin from 'astroadmin/integration';
+const defineConfig = (config) => ({ ...config, integrations: [] });
+export default defineConfig({ integrations: [astroadmin()], ${VITE} });
+`;
+    const otherModule = `import { defineConfig } from './my-config-helpers.mjs';
+import astroadmin from 'astroadmin/integration';
+export default defineConfig({ integrations: [astroadmin()], ${VITE} });
+`;
+    for (const source of [assign, localDefine, otherModule]) {
+      const results = await configFor(source);
+      assert.equal(results['astro-integration'].severity, 'warn', `${source}\n${JSON.stringify(results['astro-integration'])}`);
+      assert.match(results['astro-integration'].message, /could not verify/i);
+      assert.equal(results['hosted-preview-config'].severity, 'warn', `${source}\n${JSON.stringify(results['hosted-preview-config'])}`);
+      assert.match(results['hosted-preview-config'].message, /could not verify/i);
+    }
+  });
+
+  await check('config: defineConfig imported from astro/config (also renamed, or through a const) is read', async () => {
+    for (const source of [
+      configWith(`export default defineConfig({ integrations: [astroadmin()], ${VITE} });`),
+      `import { defineConfig as define } from 'astro/config';\nimport astroadmin from 'astroadmin/integration';\nexport default define({ integrations: [astroadmin()], ${VITE} });\n`,
+      configWith(`const config = defineConfig({ integrations: [astroadmin()], ${VITE} });\nexport default config;`),
+      `import astroadmin from 'astroadmin/integration';\nexport default { integrations: [astroadmin()], ${VITE} };\n`,
+    ]) {
+      const results = await configFor(source);
+      assert.equal(results['astro-integration'].severity, 'pass', `${source}\n${JSON.stringify(results['astro-integration'])}`);
+      assert.equal(results['hosted-preview-config'].severity, 'pass', `${source}\n${JSON.stringify(results['hosted-preview-config'])}`);
+    }
+  });
+
   const previewFor = async (serverBody) => (await staticResults(makeSite((dir) => writeFile(dir, 'astro.config.mjs', configWith(`const overrides = {};\nexport default defineConfig({ integrations: [astroadmin()], vite: { server: ${serverBody} } });`)))))['hosted-preview-config'];
 
   await check('preview config: a later spread or computed key makes the values unknown, an earlier one does not', async () => {

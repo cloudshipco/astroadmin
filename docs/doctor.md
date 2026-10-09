@@ -125,14 +125,18 @@ export default defineConfig({
 
 Only the exported config counts: a call of `astroadmin()` elsewhere in the
 file (`const unused = astroadmin()`) does not install it. The check follows
-the exported `integrations` through a `defineConfig()` wrapper, a `const`
-holding the array (or the whole config), spreads of such arrays (`[...base]`)
-and a `const` holding the call (`const admin = astroadmin()`).
+the exported `integrations` through Astro's `defineConfig()` (imported from
+`astro/config`), a `const` holding the array (or the whole config), spreads of
+such arrays (`[...base]`) and a `const` holding the call
+(`const admin = astroadmin()`).
 
 The config is parsed, not run, so a config built up dynamically may not be
 readable. When `integrations` is something else (a function call, a
 condition, a `let`, or a later `...spread` that may replace it) the check
-warns that it could not verify it.
+warns that it could not verify it. So does a config exported through any
+other call (`Object.assign(...)`, a helper of your own, a `defineConfig` from
+another module), since that call may return a different config; the same
+applies to `hosted-preview-config`.
 
 ### hosted-preview-config
 
@@ -261,7 +265,9 @@ The check measures the **built** HTML, not the templates, so it sees what the
 preview actually renders, including an attribute a wrapper component dropped.
 What a visitor never sees is left out: annotations and text inside
 `<template>`, `<noscript>`, `<script>` or `<style>`, or inside an element with
-the `hidden` attribute, do not count. `aria-hidden="true"` hides an element
+the `hidden` attribute, do not count. Nor do annotations in `<head>` (a
+`<title data-aa-field="title">`), or on a `<title>`, `<meta>`, `<link>` or
+`<base>` anywhere, since nothing there can be clicked. `aria-hidden="true"` hides an element
 from screen readers only, so it still counts. CSS (`display: none`) is not
 evaluated. A page with no `<body>` tag is read as if it had one.
 
@@ -273,8 +279,9 @@ block (`blocks[2]`) covers nothing, since neither is a control.
 For each entry, it counts the entry's text fields and how many have a matching
 `data-aa-field` (themselves, or the list that holds them) where the entry is
 shown: on its own page (a `pages` entry at `/<slug>`, or a collection's preview
-route), and as a card on any built page whose annotations name it with
-`data-aa-entry` (since 1.4.9). A field reached in either place counts. An
+route), and as a card on any built page with a `data-aa-entry` naming it
+(since 1.4.9), whether or not the card has any annotations: a card with none
+counts its visible fields as missing. A field reached in either place counts. An
 annotation qualified with another entry never counts for the page's own
 entry, and an entry with no page of its own and no card is not counted at all.
 
@@ -286,7 +293,8 @@ report says how many fields were left out that way.
 
 The check passes only on positive evidence: at least 80% coverage, and every
 entry with a page of its own had that page in the build. An entry whose page
-was not built is named in the message and keeps the check at a warning. An
+was not built is named in the message and keeps the check at a warning, even
+when a card shows the entry on another page. An
 entry with no page of its own and no card naming it is listed as on no built
 page, and not counted.
 

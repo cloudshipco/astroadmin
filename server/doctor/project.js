@@ -98,15 +98,43 @@ function getProperty(objectNode, name, resolve) {
   return found;
 }
 
+// Modules whose defineConfig returns its argument unchanged.
+const DEFINE_CONFIG_MODULES = new Set(['astro/config', 'astro']);
+
+/**
+ * The local names `defineConfig` is imported under from astro/config (or astro).
+ * A function of that name from anywhere else (a local helper, another module)
+ * may change the config, so it is not in this set.
+ */
+function defineConfigNames(ast) {
+  const names = new Set();
+  for (const statement of ast.program.body) {
+    if (statement.type !== 'ImportDeclaration' || !DEFINE_CONFIG_MODULES.has(statement.source.value)) continue;
+    if (statement.importKind === 'type') continue;
+    for (const specifier of statement.specifiers) {
+      const imported = specifier.type === 'ImportSpecifier' ? (specifier.imported.name ?? specifier.imported.value) : null;
+      if (imported === 'defineConfig' && specifier.importKind !== 'type') names.add(specifier.local.name);
+    }
+  }
+  return names;
+}
+
 /**
  * The object the config exports: `export default defineConfig({...})`,
- * `export default {...}`, or either through a const. Null when it is not
- * statically an object literal.
+ * `export default {...}`, or either through a const. Only astro's own
+ * defineConfig (imported from astro/config), which returns its argument, is
+ * unwrapped: any other call (`Object.assign(a, b)`, a helper) may return
+ * something else, so it is not read. Null when the export is not statically
+ * an object literal.
  */
 function findConfigObject(ast, resolve) {
   const exported = ast.program.body.find((node) => node.type === 'ExportDefaultDeclaration')?.declaration;
   let candidate = resolve(exported);
-  if (candidate?.type === 'CallExpression') candidate = resolve(candidate.arguments[0]);
+  if (candidate?.type === 'CallExpression') {
+    const callee = candidate.callee;
+    const isAstroDefineConfig = callee.type === 'Identifier' && defineConfigNames(ast).has(callee.name);
+    candidate = isAstroDefineConfig && candidate.arguments.length === 1 ? resolve(candidate.arguments[0]) : null;
+  }
   return candidate?.type === 'ObjectExpression' ? candidate : null;
 }
 

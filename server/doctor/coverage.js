@@ -212,10 +212,13 @@ export function entryRef(entry) {
 }
 
 /**
- * Where an entry can be clicked: its own page, where unqualified annotations
- * (and ones qualified with its own reference) are its fields, and every other
- * page holding annotations qualified with its reference. An annotation on or
- * inside a link is left out: a click never reaches it.
+ * Where an entry is shown: its own page, where unqualified annotations (and
+ * ones qualified with its own reference) are its fields, and every other page
+ * with a rendered data-aa-entry naming it (a card), where annotations
+ * qualified with its reference are its fields. A card is a place showing the
+ * entry whether or not anything in it is annotated, so a card with no
+ * annotations counts its visible fields as missing rather than dropping out.
+ * An annotation on or inside a link is left out: a click never reaches it.
  * @returns {Array<{pagePath: string, page: import('./html-scan.js').PageScan, names: Set<string>}>}
  */
 function placesShowing(entry, pages) {
@@ -228,8 +231,9 @@ function placesShowing(entry, pages) {
   }
   for (const [pagePath, page] of pages) {
     if (pagePath === entry.pagePath) continue;
+    if (!(page.entryRefs || []).includes(ref)) continue;
     const qualified = page.fields.filter((field) => !field.link && field.entry === ref);
-    if (qualified.length > 0) places.push({ pagePath, page, names: new Set(qualified.map((field) => field.name)) });
+    places.push({ pagePath, page, names: new Set(qualified.map((field) => field.name)) });
   }
   return places;
 }
@@ -246,13 +250,16 @@ function placesShowing(entry, pages) {
 export function computeFieldCoverage(entries, pages) {
   const report = { totalFields: 0, coveredFields: 0, notRendered: 0, noControl: 0, entries: [], unchecked: [], unmapped: [] };
   for (const entry of entries) {
+    // An entry whose own page was not built is unchecked (the build or the
+    // route is wrong) even when a card shows it elsewhere: the cards' coverage
+    // says nothing about the page that is missing.
+    if (entry.pagePath && !pages.has(entry.pagePath)) {
+      report.unchecked.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath });
+    }
     const places = placesShowing(entry, pages);
     if (places.length === 0) {
-      // Not on any page we can check: an entry whose own page was not built
-      // (unchecked: the build or the route is wrong), or one with no page of
-      // its own and no card naming it (unmapped: shown nowhere clickable).
-      if (entry.pagePath) report.unchecked.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath });
-      else report.unmapped.push({ collection: entry.collection, slug: entry.slug });
+      // No page of its own and no card naming it: shown nowhere clickable.
+      if (!entry.pagePath) report.unmapped.push({ collection: entry.collection, slug: entry.slug });
       continue;
     }
     const { textFields: allTextFields, values, controls } = describeEntryFields(entry);
