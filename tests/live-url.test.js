@@ -87,5 +87,45 @@ check('resolveLiveUrl throws on an escape attempt rather than falling back', () 
   assert.throws(() => resolveLiveUrl(site, 'about'), /public site/);
 });
 
+// --- normalisation tricks: the path is resolved TWICE (once to normalise it,
+// once onto the base), so anything that normalises to a pathname starting "//"
+// would become a protocol-relative URL on the second pass. Each of these went
+// to https://evil.example/ before the final origin was checked.
+
+const normalisesToNetworkPath = [
+  '/.//evil.example/x', '/..//evil.example/x', '/a/..//evil.example', '/.///evil.example',
+  '/%2e//evil.example/x', '/%2E%2E//evil.example/x', '/.\\/evil.example', '/./\\evil.example',
+  '/.//\\evil.example', '/.\n//evil.example', '/.\t//evil.example', '/\t/evil.example',
+  '/.\r\n/\\evil.example/x',
+];
+for (const base of ['https://example.com', 'https://example.com/site']) {
+  check(`paths normalising to "//host" are refused (base ${base})`, () => {
+    for (const hostile of normalisesToNetworkPath) {
+      assert.throws(() => resolveLiveUrl(base, hostile), /public site/, `strict, for ${JSON.stringify(hostile)}`);
+      assert.strictEqual(liveSiteHref(base, hostile), new URL(base).origin + new URL(base).pathname.replace(/\/*$/, '/'),
+        `lenient, for ${JSON.stringify(hostile)}`);
+    }
+  });
+}
+check('encoded slashes, backslashes and dots stay on the public site', () => {
+  for (const base of ['https://example.com', 'https://example.com/site']) {
+    for (const odd of ['/.%2f/evil.example', '/%2f%2fevil.example/x', '/%5c%5cevil.example', '/%2e%2e%2f%2e%2e%2fetc',
+      '/a/%2e%2e/%2e%2e/%2e%2e/b', '/./a', '/../a', '/ab\tout', '/x?next=//evil.example#//evil.example']) {
+      const href = liveSiteHref(base, odd);
+      const url = new URL(href);
+      assert.strictEqual(url.origin, 'https://example.com', `${base} + ${JSON.stringify(odd)} -> ${href}`);
+      assert.ok(url.pathname.startsWith(new URL(base).pathname.replace(/\/*$/, '/')), `${base} + ${JSON.stringify(odd)} -> ${href}`);
+    }
+  }
+});
+check('ordinary normalisation still works (positive control for the refusals)', () => {
+  assert.strictEqual(liveSiteHref(site, '/./about'), 'https://example.com/about');
+  assert.strictEqual(liveSiteHref(site, '/a/%2e%2e/about'), 'https://example.com/about');
+  assert.strictEqual(liveSiteHref(site, '/ab\tout'), 'https://example.com/about');
+  assert.strictEqual(liveSiteHref('https://example.com/site', '/../about'), 'https://example.com/site/about');
+  assert.strictEqual(liveSiteHref(site, '/x?next=//evil.example#//evil.example'),
+    'https://example.com/x?next=//evil.example#//evil.example');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;
