@@ -60,6 +60,9 @@ writeProjectFile('src/content/articles/flat.md', '---\ntitle: Flat\n---\nFlat.\n
 writeProjectFile('src/content/pages/home.md', '---\ntitle: Home\n---\nHome.\n');
 writeProjectFile('src/data/team.json', JSON.stringify([{ id: 'ada', name: 'Ada' }], null, 2));
 writeProjectFile('public/images/photo.png', 'not really a png');
+// A tracked file OUTSIDE the git paths whose contents and history must never
+// be readable through the git API (a site may commit one by mistake).
+writeProjectFile('.env', 'FIXTURE_TOKEN=TRACKED-SECRET-1\n');
 writeProjectFile('public/images/.metadata.json', JSON.stringify({ 'photo.png': { alt: 'A photo' } }));
 
 // Symlinks inside the content directory pointing OUTSIDE the project.
@@ -73,6 +76,13 @@ git(['config', 'user.name', 'AstroAdmin Test']);
 git(['config', 'user.email', 'astroadmin@example.com']);
 git(['add', '-A']);
 git(['commit', '-q', '-m', 'Initial commit']);
+const rootCommit = git(['rev-parse', 'HEAD']).trim();
+// A second commit touching the tracked secret AND a content file, so a history
+// diff has something inside the git paths to show (the positive control).
+writeProjectFile('.env', 'FIXTURE_TOKEN=TRACKED-SECRET-2\n');
+writeProjectFile('src/content/pages/about.md', '---\ntitle: About\n---\nAbout.\n');
+git(['add', '-A']);
+git(['commit', '-q', '-m', 'Second commit']);
 
 const sentinels = {
   [path.join(projectRoot, 'package.json')]: PACKAGE_JSON,
@@ -329,6 +339,44 @@ await check('git control: a literal content path shows and reverts', async () =>
   const history = await request(`/api/git/file-history?file=${encodeURIComponent('src/content/articles/flat.md')}`);
   assert.equal(history.status, 200);
   assert.equal((await history.json()).commits.length, 1);
+});
+
+await check('git: a diff with no file stays inside the git paths (working tree and history)', async () => {
+  const flat = path.join(projectRoot, 'src/content/articles/flat.md');
+  const envFile = path.join(projectRoot, '.env');
+  fs.writeFileSync(flat, '---\ntitle: Flat, diff probe\n---\nFlat.\n');
+  fs.writeFileSync(envFile, 'FIXTURE_TOKEN=TRACKED-SECRET-3\n'); // uncommitted, outside the git paths
+  try {
+    const head = git(['rev-parse', 'HEAD']).trim();
+    const cases = [
+      ['working tree', '/api/git/diff', /Flat, diff probe/],
+      ['from the root commit', `/api/git/diff?from=${rootCommit}`, /title: About/],
+      ['root commit to HEAD', `/api/git/diff?from=${rootCommit}&to=${head}`, /title: About/],
+      ['from HEAD', '/api/git/diff?from=HEAD', /Flat, diff probe/],
+    ];
+    for (const [label, url, contentEdit] of cases) {
+      const response = await request(url);
+      const text = await response.text();
+      assert.equal(response.status, 200, `${label}: ${response.status} ${text.slice(0, 200)}`);
+      const { diff } = JSON.parse(text);
+      // Positive control: the diff demonstrably ran and shows a content change.
+      assert.match(diff, contentEdit, `${label}: the content change is missing, so the check below proves nothing`);
+      assert.equal(/TRACKED-SECRET/.test(diff), false, `${label}: a tracked file outside the git paths leaked: ${diff.match(/.*TRACKED-SECRET.*/g)}`);
+      assert.equal(diff.includes('.env'), false, `${label}: the diff names a file outside the git paths`);
+    }
+  } finally {
+    git(['checkout', 'HEAD', '--', 'src/content/articles/flat.md', '.env']);
+  }
+});
+
+await check('git: diff and show refuse from/to values that are options or not commits', async () => {
+  for (const value of ['-p', '--output=probe-out', '--no-index', 'deadbeefdeadbeef', 'HEAD~1', 'main']) {
+    const q = encodeURIComponent(value);
+    await assertRefused(await request(`/api/git/diff?from=${q}`), `diff from=${value}`);
+    await assertRefused(await request(`/api/git/diff?from=HEAD&to=${q}`), `diff to=${value}`);
+    await assertRefused(await request(`/api/git/show?file=src%2Fcontent%2Farticles%2Fflat.md&commit=${q}`), `show commit=${value}`);
+  }
+  assert.equal(fs.existsSync(path.join(projectRoot, 'probe-out')), false, 'an option reached git');
 });
 
 // --- The shared guards on their own ---------------------------------------------

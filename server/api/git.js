@@ -209,6 +209,28 @@ function validateCommitHash(commit) {
 }
 
 /**
+ * A commit reference the request named, checked twice: its FORMAT (HEAD or a
+ * hex hash, so it can never start with `-` and be read as an option) and that
+ * it names a commit in this repository, so a typo is a 400 rather than a git
+ * error passed through as a 500.
+ */
+async function validateCommitRef(git, commit) {
+  const ref = validateCommitHash(commit);
+  // `--quiet` makes a miss exit 1 with no stderr, which simple-git resolves
+  // rather than rejects, so the answer is read from the output.
+  let resolved = '';
+  try {
+    resolved = (await git.raw(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).trim();
+  } catch {
+    // treated as unknown below
+  }
+  if (!/^[0-9a-f]{40,64}$/.test(resolved)) {
+    throw new GitRequestError('Unknown commit');
+  }
+  return ref;
+}
+
+/**
  * GET /api/git/status
  * Get Git status
  */
@@ -407,21 +429,29 @@ router.get('/diff', async (req, res) => {
     const validatedFile = file ? await validateFilePath(file, fullConfig) : null;
 
     // Validate commit references if provided
-    const validatedFrom = from ? validateCommitHash(from) : null;
-    const validatedTo = to ? validateCommitHash(to) : null;
+    const validatedFrom = from ? await validateCommitRef(git, from) : null;
+    const validatedTo = to ? await validateCommitRef(git, to) : null;
 
-    const pathspec = validatedFile ? literalPathspec(validatedFile) : '.';
+    // With no file, the diff covers the configured git paths only — never `.`,
+    // which would show every tracked file in the project and its history.
+    // An empty list after `--` would mean the whole tree, so it is no diff.
+    const pathspecs = validatedFile
+      ? [literalPathspec(validatedFile)]
+      : getAllowedGitPaths(fullConfig).filter(Boolean).map(literalPathspec);
+    if (pathspecs.length === 0) {
+      return res.json({ success: true, diff: '' });
+    }
     let diffResult;
 
     if (validatedFrom && validatedTo) {
       // Diff between two commits
-      diffResult = await git.diff([validatedFrom, validatedTo, '--', pathspec]);
+      diffResult = await git.diff([validatedFrom, validatedTo, '--', ...pathspecs]);
     } else if (validatedFrom) {
       // Diff from a specific commit to working tree
-      diffResult = await git.diff([validatedFrom, '--', pathspec]);
+      diffResult = await git.diff([validatedFrom, '--', ...pathspecs]);
     } else {
       // Diff of uncommitted changes (staged + unstaged)
-      diffResult = await git.diff(['HEAD', '--', pathspec]);
+      diffResult = await git.diff(['HEAD', '--', ...pathspecs]);
     }
 
     res.json({
@@ -460,7 +490,7 @@ router.get('/show', async (req, res) => {
     const validatedFile = await validateFilePath(file, fullConfig);
 
     // Validate commit reference
-    const ref = commit ? validateCommitHash(commit) : 'HEAD';
+    const ref = commit ? await validateCommitRef(git, commit) : 'HEAD';
     const content = await git.show([showObjectSpec(ref, validatedFile)]);
 
     res.json({
