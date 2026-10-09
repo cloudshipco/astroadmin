@@ -12,19 +12,24 @@ still builds. Publishing is a git commit and push.
 
 ## Features
 
-- Strings, numbers, booleans, enums, dates, images, arrays, nested objects
-  and `{collection}Ids` references each get a matching control.
+- Strings, numbers, booleans, enums, dates, arrays and nested objects each
+  get a matching control. Astro's `image()` gets an image picker that saves
+  a path the build accepts, and `reference()` gets an entry picker.
 - A discriminated union in a schema becomes a block editor: a list of page
-  sections that editors can add, reorder and fill in.
+  sections that editors can add, reorder and fill in. Markdown entries keep
+  their body editor alongside the blocks.
 - The preview iframe is your site running under `astro dev`, with your
   styles and components.
 - With `data-aa-field` attributes on your templates, a click on text in the
   preview opens its field, and focusing a field outlines its text.
   See [inline editing](./docs/inline-editing.md).
-- A save writes the file atomically. If the entry fails its schema, the save
-  still goes through and the editor shows which fields are wrong.
+- Edits save automatically; there is no Save button. A save writes the file
+  atomically and keeps its key order, comments and formatting. If the entry
+  fails its schema, the save still goes through and the editor shows which
+  fields are wrong.
 - Image uploads with alt text, and an image library.
-- Login uses an argon2 password hash and is rate limited.
+- Changes to `src/content.config.ts` are picked up without a restart; reload
+  the editor tab to see new fields.
 
 ## Quick start
 
@@ -32,19 +37,25 @@ AstroAdmin runs on [Bun](https://bun.sh), so Bun must be installed. From your
 Astro project root:
 
 ```bash
+npm install astroadmin
+```
+
+```bash
 npx astroadmin dev
 ```
 
 This starts AstroAdmin and your Astro dev server together and prints both
-URLs.
+URLs. AstroAdmin listens on port 4000 (or the next free port), and Astro on
+the port in `preview.url` (default `http://localhost:4321`, set in
+`astroadmin.config.js`).
 
 ```bash
-# Another port, or a project elsewhere
+# AstroAdmin on another port, or a project elsewhere
 npx astroadmin dev --port 3030 --project ./my-astro-site
 ```
 
 ```bash
-# You run the Astro dev server yourself
+# You run the Astro dev server yourself, on the preview.url port
 npx astroadmin dev --no-astro
 ```
 
@@ -54,9 +65,11 @@ npx astroadmin doctor
 ```
 
 The default login is `admin` / `admin`. Before the editor is reachable from
-the internet, set `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` (from
-`npx astroadmin hash-password`) and `SESSION_SECRET`. AstroAdmin prints a
-warning at startup if production runs with weak auth settings.
+the internet, set `NODE_ENV=production`, `ADMIN_USERNAME`,
+`ADMIN_PASSWORD_HASH` (from `npx astroadmin hash-password`) and
+`SESSION_SECRET`. Production mode turns on secure cookies and login rate
+limiting, and AstroAdmin prints a warning at startup if it runs with weak
+auth settings.
 
 ## Requirements
 
@@ -91,6 +104,10 @@ installed Astro. If the build fails, the commit stays local and the editor
 sees Astro's error, so content your schema rejects never reaches the host.
 See [the pre-push build check](./docs/configuration.md#the-pre-push-build-check).
 
+Images picked for an `image()` field are stored in
+`src/content/assets/images`, which the default `config.git.paths` includes.
+If you set `git.paths` yourself, keep `src/content/` in it.
+
 Without a build-on-push host, a [deploy adapter](./docs/deploy-adapters.md)
 (rsync is the only one so far) builds and deploys from the machine running
 AstroAdmin. `GIT_ENABLED=false` turns git off for adapter-only setups.
@@ -101,9 +118,9 @@ MDX editing only to people you would trust with the site's code.
 
 ## Astro integration (optional)
 
-Collections that are not pages, such as testimonials or team members, have no
-URL to preview. The integration adds a `/component-preview/` route in
-development that renders the item being edited inside its block component:
+The integration does two things in development, and never in a production
+build: it injects the click-to-edit script into the preview, and it adds a
+`/component-preview/` route for collections that are not pages.
 
 ```javascript
 // astro.config.mjs
@@ -115,10 +132,19 @@ export default defineConfig({
 });
 ```
 
-It looks for block components at `src/components/blocks/{BlockType}Block.astro`
-(for example `TestimonialsBlock.astro`). Without the integration, those
-collections show a 404 in the preview. The integration also injects the
-click-to-edit script into the preview (never into a production build).
+A collection such as `team` has no URL of its own. If a block lists its
+entries (a `team` block with `teamIds: z.array(z.string())`, or
+`z.array(reference('team'))`), editing a team member previews it inside
+`src/components/blocks/TeamBlock.astro` (or `Team.astro`), which receives the
+block's fields as props. Otherwise, point the collection at a page that shows
+it:
+
+```javascript
+// astroadmin.config.js
+export default {
+  preview: { routes: { team: '/about' } },
+};
+```
 
 ## Configuration (optional)
 
