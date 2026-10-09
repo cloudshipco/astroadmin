@@ -413,6 +413,14 @@ async function performCommit(message) {
     if (data.success) {
       await loadStatus();
       showSuccessToast('Changes saved successfully!');
+    } else if (data.check) {
+      // Committed, but the auto-push was refused by the site's own build.
+      await loadStatus();
+      alert(`${data.message}\n\n${data.check.output.split('\n').slice(-15).join('\n')}`);
+    } else if (data.committed) {
+      // Committed, but the auto-push failed.
+      await loadStatus();
+      alert(data.message);
     } else {
       alert('Failed to commit: ' + data.error);
     }

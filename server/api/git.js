@@ -8,6 +8,10 @@ import path from 'path';
 import { getConfig } from '../config.js';
 import {
   publishHandler,
+  withGitLock,
+  pushIfAstroAccepts,
+  checkRefusalBody,
+  pushFailureBody,
   createGitClient,
   getGitPaths,
   stageGitPaths,
@@ -222,7 +226,15 @@ router.post('/commit', async (req, res) => {
       });
     }
 
-    const { result } = await commitConfiguredGitPaths(fullConfig, message);
+    const outcome = await withGitLock(async () => {
+      const { result } = await commitConfiguredGitPaths(fullConfig, message);
+      if (!result || !fullConfig.git.autoPush) return { result, check: null, pushError: null };
+      // A local commit is harmless; pushing it is publishing, so it is checked.
+      const { check, pushError } = await pushIfAstroAccepts(fullConfig, git);
+      return { result, check, pushError };
+    });
+    const { result } = outcome;
+
     if (!result) {
       return res.status(400).json({
         success: false,
@@ -230,14 +242,11 @@ router.post('/commit', async (req, res) => {
       });
     }
 
-    // Optionally push if configured
-    if (fullConfig.git.autoPush) {
-      try {
-        await git.push();
-        console.log('✅ Changes pushed to remote');
-      } catch (pushError) {
-        console.warn('⚠️  Failed to auto-push:', pushError.message);
-      }
+    if (outcome.check && !outcome.check.success) {
+      return res.status(422).json(await checkRefusalBody(outcome.check, { committed: true, commitResult: result }));
+    }
+    if (outcome.pushError) {
+      return res.status(502).json(pushFailureBody({ committed: true, commitResult: result }));
     }
 
     res.json({
@@ -302,7 +311,9 @@ router.post('/pull', async (req, res) => {
   try {
     const fullConfig = await getConfig();
     const git = createGitClient(fullConfig);
-    const result = await git.pull();
+    // Under the git lock: a pull that moved HEAD during a publish's check would
+    // make the pushed commit differ from the checked one.
+    const result = await withGitLock(() => git.pull());
 
     res.json({
       success: true,
@@ -319,31 +330,6 @@ router.post('/pull', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to pull changes',
-      message: error.message,
-    });
-  }
-});
-
-/**
- * POST /api/git/push
- * Push commits to remote
- */
-router.post('/push', async (req, res) => {
-  try {
-    const fullConfig = await getConfig();
-    const git = createGitClient(fullConfig);
-    const result = await git.push();
-
-    res.json({
-      success: true,
-      result,
-      message: 'Pushed changes successfully',
-    });
-  } catch (error) {
-    console.error('Error pushing changes:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to push changes',
       message: error.message,
     });
   }

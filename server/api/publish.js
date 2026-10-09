@@ -18,6 +18,8 @@ import simpleGit from 'simple-git';
 import { getConfig } from '../config.js';
 import { deploy, validateDeployConfig } from '../utils/deploy.js';
 import { runProductionBuild } from '../utils/build.js';
+import { checkHeadWithAstro } from '../utils/astro-check.js';
+import { listSlugs } from '../utils/content.js';
 
 const router = express.Router();
 // Conservative fallback for a malformed config; an explicitly-configured
@@ -56,6 +58,121 @@ export async function stageGitPaths(git, gitPaths) {
   return stagedPaths;
 }
 
+// Publishes and commits run one at a time, so the commit that was checked is
+// the commit that gets pushed (a second publish can't commit in between).
+let gitQueue = Promise.resolve();
+
+/** Run a task that commits and/or pushes, after any such task already running. */
+export function withGitLock(task) {
+  const run = gitQueue.then(task, task);
+  gitQueue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Push HEAD only if the site's own Astro accepts its content (see
+ * utils/astro-check.js). A failed check leaves the commit local and unpushed.
+ * `pushError` is set when there IS somewhere to push and the push failed (a
+ * site with no upstream simply is not pushed, which is not an error).
+ * @returns {Promise<{pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult}>}
+ */
+export async function pushIfAstroAccepts(fullConfig, git) {
+  const check = await checkHeadWithAstro(fullConfig);
+  if (!check.success) {
+    return { pushed: false, pushError: null, check };
+  }
+
+  const upstream = await findUpstream(git);
+  if (!upstream) {
+    console.log('Push skipped: no upstream branch configured');
+    return { pushed: false, pushError: null, check };
+  }
+
+  try {
+    await pushCheckedCommit(git, check.commit, upstream);
+    console.log('✅ Pushed to remote');
+    return { pushed: true, pushError: null, check };
+  } catch (pushError) {
+    console.error('Push failed:', pushError.message);
+    return { pushed: false, pushError: pushError.message, check };
+  }
+}
+
+/**
+ * The current branch's upstream, or null when HEAD is detached or the branch
+ * tracks nothing. Reads the full ref name: `--short` can return "heads/main"
+ * when a tag is also called "main", which names the wrong config keys.
+ * @returns {Promise<{remote: string, ref: string}|null>}
+ */
+async function findUpstream(git) {
+  try {
+    const headRef = (await git.raw(['symbolic-ref', '--quiet', 'HEAD'])).trim();
+    if (!headRef.startsWith('refs/heads/')) return null;
+    const branch = headRef.slice('refs/heads/'.length);
+    const remote = (await git.raw(['config', '--get', `branch.${branch}.remote`])).trim();
+    const ref = (await git.raw(['config', '--get', `branch.${branch}.merge`])).trim();
+    return remote && ref ? { remote, ref } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Push exactly the checked commit to the upstream branch, and nothing else. A
+ * bare `git push` can send other refs (a configured remote.<name>.push
+ * refspec, push.default=matching, followTags), none of which were checked.
+ */
+async function pushCheckedCommit(git, commit, upstream) {
+  await git.raw(['push', '--no-follow-tags', upstream.remote, `${commit}:${upstream.ref}`]);
+}
+
+/** Response body for a checked commit that could not be pushed. */
+export function pushFailureBody({ committed = false, commitResult = null } = {}) {
+  return {
+    success: false,
+    committed,
+    pushed: false,
+    commit: commitInfo(commitResult),
+    error: 'Could not send your changes to the site',
+    message: 'Your changes are saved and committed, but could not be sent to the site, so they are not live yet. '
+      + 'Try publishing again in a moment; if it keeps happening, contact your site administrator.',
+  };
+}
+
+/**
+ * Astro names a refused entry by its own ID, which is not always the editor's
+ * slug (a locale file home.fr.md has the ID "homefr"). Only an ID that is an
+ * existing slug of its collection can be opened from the refusal.
+ */
+async function markEditableEntries(entries) {
+  const marked = [];
+  for (const entry of entries) {
+    let slugs = [];
+    try {
+      slugs = await listSlugs(entry.collection);
+    } catch {
+      // unknown collection: not openable
+    }
+    marked.push({ ...entry, editable: slugs.includes(entry.slug) });
+  }
+  return marked;
+}
+
+/** Response body for a push the content check refused. */
+export async function checkRefusalBody(check, { committed = false, commitResult = null } = {}) {
+  return {
+    success: false,
+    committed,
+    pushed: false,
+    commit: commitInfo(commitResult),
+    error: "The site's build rejects this content",
+    message: committed
+      ? 'Your changes are saved and committed, but were not published: the site would not build with them.'
+      : 'Nothing was published: the site would not build with the current content.',
+    check: { commit: check.commit, output: check.output, entries: await markEditableEntries(check.entries) },
+  };
+}
+
 function commitInfo(commitResult) {
   return commitResult
     ? { hash: commitResult.commit, summary: commitResult.summary }
@@ -64,13 +181,16 @@ function commitInfo(commitResult) {
 
 /**
  * Run the git pre-step: pull --rebase, stage configured asset paths, commit,
- * push. Best-effort pull/push so a missing remote doesn't fail the publish.
- * @returns {Promise<{committed: boolean, pushed: boolean, commitResult: object|null}>}
+ * check the resulting HEAD with Astro, push. Best-effort pull/push so a missing
+ * remote doesn't fail the publish; the check is not best-effort.
+ * @returns {Promise<{committed: boolean, pushed: boolean, commitResult: object|null, check: object}>}
  */
 async function runGitStep(fullConfig, commitMessage) {
   let committed = false;
   let pushed = false;
   let commitResult = null;
+  let check = null;
+  let pushError = null;
   const git = createGitClient(fullConfig);
   const commitPaths = [];
 
@@ -102,15 +222,11 @@ async function runGitStep(fullConfig, commitMessage) {
     console.log(`✅ Committed: ${commitMessage}`);
   }
 
-  try {
-    await git.push();
-    pushed = true;
-    console.log('✅ Pushed to remote');
-  } catch (pushError) {
-    console.log('Push skipped:', pushError.message);
-  }
+  // Checked after the pull and the commit, so it is the combined result —
+  // exactly what the push would send — that has to pass.
+  ({ pushed, pushError, check } = await pushIfAstroAccepts(fullConfig, git));
 
-  return { committed, pushed, commitResult };
+  return { committed, pushed, commitResult, check, pushError };
 }
 
 /**
@@ -143,7 +259,16 @@ export async function publishHandler(req, res) {
     let pushed = false;
     let commitResult = null;
     if (gitEnabled) {
-      ({ committed, pushed, commitResult } = await runGitStep(fullConfig, commitMessage));
+      let check;
+      let pushError;
+      ({ committed, pushed, commitResult, check, pushError } =
+        await withGitLock(() => runGitStep(fullConfig, commitMessage)));
+      if (!check.success) {
+        return res.status(422).json(await checkRefusalBody(check, { committed, commitResult }));
+      }
+      if (pushError) {
+        return res.status(502).json(pushFailureBody({ committed, commitResult }));
+      }
     }
 
     // Build + deploy.

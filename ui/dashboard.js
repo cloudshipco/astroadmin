@@ -10,6 +10,7 @@ import { toggleChangesPanel, getChangesCount, showPublishDialog } from './change
 import { initEntryPicker, syncEntryPickerLabel } from './entry-picker.js';
 
 import { escapeHtml } from './escape-html.js';
+import { showEntryProblems, renderPublishProblems } from './content-problems.js';
 
 // Reference fields can appear anywhere a field can — including inside the array item
 // modal — so hand their wiring to the shared field layer rather than binding it to
@@ -1000,6 +1001,7 @@ async function renderEditor(entryData, ctx) {
     schema: schemaData.collection.schema,
     isNew: false,
   });
+  showEntryProblems(form, entryData.validation);
 
   // Collapse all blocks by default
   collapseAllBlocks();
@@ -1431,7 +1433,10 @@ function makeSaver(target) {
       }
 
       if (isTargetCurrent()) {
-        updateSaveStatus('Saved');
+        const needsFixing = result.validation?.status === 'invalid';
+        // Not 'Saved', so it stays up rather than fading after two seconds.
+        updateSaveStatus(needsFixing ? 'Saved, needs fixing' : 'Saved');
+        showEntryProblems(target.form, result.validation);
         if (!silent) showNotification('Changes saved!', 'success');
       }
 
@@ -2009,16 +2014,19 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
  * Cloudflare Pages, etc.) takes a short while to build, so we say so.
  */
 function friendlyPublishMessage(result) {
-  const didPublish = result.committed || result.pushed || result.deploy;
-  if (!didPublish) {
-    return 'Nothing new to publish — your work is already saved.';
-  }
   // A deploy adapter uploads the built site directly, so it's live right away.
   if (result.deploy) {
     return '✅ Published! Your changes are now live on your site.';
   }
   // Git push → the host builds and deploys, which takes a minute or two.
-  return '✅ Published! Your changes will appear on your live site in a minute or two.';
+  if (result.pushed) {
+    return '✅ Published! Your changes will appear on your live site in a minute or two.';
+  }
+  // Committed, but this site has nowhere to push to: nothing went live.
+  if (result.committed) {
+    return 'Your changes are committed. This site has no remote set up, so nothing was sent to the live site.';
+  }
+  return 'Nothing new to publish — your work is already saved.';
 }
 
 /**
@@ -2039,6 +2047,36 @@ function getCurrentPagePath() {
     return `${localePrefix}${collection.previewRoute.replace('{slug}', currentSlug)}`;
   }
   return null; // component-preview-only: no standalone production page
+}
+
+/**
+ * Publish was refused because the site's build rejects the content. Stays up
+ * until dismissed or the next successful publish; named entries open in the editor.
+ */
+function showPublishProblems(refusal) {
+  document.querySelector('.publish-problems-panel')?.remove();
+
+  const panel = document.createElement('div');
+  panel.className = 'publish-problems-panel';
+  panel.setAttribute('role', 'alert');
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'publish-problems-close';
+  closeButton.setAttribute('aria-label', 'Dismiss');
+  closeButton.textContent = '×';
+  closeButton.addEventListener('click', () => panel.remove());
+  panel.appendChild(closeButton);
+
+  const problems = renderPublishProblems(refusal);
+  problems.addEventListener('click', (event) => {
+    const link = event.target.closest('a[data-collection]');
+    if (!link) return;
+    event.preventDefault();
+    loadEntry(link.dataset.collection, link.dataset.slug);
+  });
+  panel.appendChild(problems);
+  document.body.appendChild(panel);
 }
 
 // A persistent, updatable status toast (unlike showNotification's fire-and-forget)
@@ -2121,8 +2159,10 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     const result = await response.json();
 
     if (result.success) {
+      document.querySelector('.publish-problems-panel')?.remove();
       updateChangesBadge();
-      const didPublish = result.committed || result.pushed || result.deploy;
+      // Only a push or a deploy reaches the live site; a local commit does not.
+      const didPublish = result.pushed || result.deploy;
 
       if (didPublish && result.deploy) {
         // Synchronous deploy adapter — already live.
@@ -2136,6 +2176,8 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         // No live-check available — fall back to the plain friendly message.
         showNotification(friendlyPublishMessage(result), 'success');
       }
+    } else if (result.check) {
+      showPublishProblems(result);
     } else {
       showNotification('Failed to publish: ' + result.error, 'error');
     }

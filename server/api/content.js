@@ -10,6 +10,7 @@ import {
   deleteContent,
   contentExists,
 } from '../utils/content.js';
+import { validateStoredEntry } from '../utils/content-validation.js';
 import { getConfig } from '../config.js';
 
 const router = express.Router();
@@ -40,6 +41,21 @@ async function getLocaleFromRequest(req) {
 }
 
 /**
+ * Check a stored entry against its collection schema. After a save, the save
+ * has already succeeded and stays saved (an autosave of a half-finished edit must
+ * reach disk); the result only tells the editor what the build would reject.
+ * Publish is where invalid content is refused.
+ * @returns {Promise<import('../utils/content-validation.js').EntryValidation>}
+ */
+async function validateSavedEntry(collection, slug, locale) {
+  try {
+    return await validateStoredEntry(collection, slug, locale);
+  } catch (error) {
+    return { status: 'unchecked', issues: [], reason: error.message };
+  }
+}
+
+/**
  * GET /api/content/:collection/:slug
  * Read a content entry
  * Query params: ?locale=en (optional, uses default locale if i18n enabled)
@@ -57,6 +73,8 @@ router.get('/:collection/:slug', async (req, res) => {
       slug,
       locale,
       ...content,
+      // An entry already broken on disk says so as soon as it is opened.
+      validation: await validateSavedEntry(collection, slug, locale),
     });
   } catch (error) {
     console.error(`Error reading content ${req.params.collection}/${req.params.slug}:`, error);
@@ -109,6 +127,7 @@ router.post('/:collection/:slug', async (req, res) => {
       slug,
       locale,
       ...result,
+      validation: await validateSavedEntry(collection, slug, locale),
       message: 'Content saved successfully',
     });
   } catch (error) {
@@ -156,6 +175,7 @@ router.put('/:collection/:slug', async (req, res) => {
       slug,
       locale,
       ...result,
+      validation: await validateSavedEntry(collection, slug, locale),
       message: 'Content updated successfully',
     });
   } catch (error) {

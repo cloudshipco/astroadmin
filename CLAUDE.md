@@ -84,9 +84,24 @@ runner aggregating them). Most run server-less and need env vars:
   The rule it pins: an empty array survives `extractFormData` only when its key is REQUIRED;
   an empty array the schema proves optional is dropped (`[]` fails `.optional().min(1)`),
   inside block items too.
+- `bun tests/content-validation.test.js` — the editor's schema WARNINGS: what a stored entry
+  is judged as (dropped required array, nested block field, quoted vs unquoted YAML date,
+  `file()` items), and that a save still writes invalid content and reports why.
+- `bun tests/publish-check.test.js` — the publish gate, against this repo's real Astro: a
+  throwaway site with a bare remote; invalid content is committed but not pushed, the commit
+  (not the working tree) is what is checked, a rebase onto the remote is checked as
+  combined, a missing `image()` file is refused, only the checked commit is pushed (not
+  other configured refs, even with a same-named tag), a failed push is reported as NOT
+  published, a timeout settles even when a descendant daemonises, gitlinks and workspace
+  links are refused, a tracked `.env` stays as committed, `build.production` is honoured,
+  the admin's secrets are not in the build's environment, server paths are stripped, and
+  the site's own `node_modules/.astro` is byte-identical afterwards. Takes ~1-2 min (each
+  publish runs a full `astro build`).
+- `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
+  their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 
-**Known red:** `tests/git-api.test.js` fails on a clean tree ("only configured git path
-was committed"). Pre-existing and unrelated to the UI; don't read it as your breakage.
+`tests/git-api.test.js` used to be a known red; it passes as of 2026-10-08 (checked at
+`74609bd` in a clean worktree).
 
 **Storage modes:** the content store is selected by `config.content.store`
 (`files` default | `db`), env `ASTROADMIN_CONTENT_STORE`. Tests that exercise the
@@ -96,6 +111,52 @@ before imports), since `files` is now the default.
 **Caveat:** `npm test` / the `test` script only runs `tests/api.test.js`, which
 needs a **running server** and is currently red (tracked as issue #2). Don't read
 that single red as the suite being broken — run the server-less tests above.
+
+## Schema validation: saves warn, the site's own Astro gates the push
+
+Two layers, deliberately unequal:
+
+1. **Saves always write, and only WARN.** The save/read response carries `validation`
+   (`server/utils/content-validation.js`: the stored entry, read back through the store,
+   checked against the collection's Zod schema), and `ui/content-problems.js` shows it.
+   It approximates Astro's loading and is never used to refuse anything; a 422 on save
+   would lose half-finished autosaved edits.
+2. **Nothing is pushed until the site's own Astro accepts the exact commit**
+   (`server/utils/astro-check.js`): `build.check`, else the site's `build.production`,
+   else `astro build`, runs in a throwaway `git worktree` at HEAD, after the commit
+   and after `pull --rebase`, under `withGitLock` (which `/api/git/pull` also takes) so
+   the commit checked is the commit pushed. The push names that SHA and the branch's
+   upstream explicitly (`pushCheckedCommit`), so a configured push refspec or
+   `push.default=matching` cannot send unchecked refs. A failure keeps the commit local
+   and returns 422 with Astro's output, server paths and stack trace stripped. A push
+   that fails (with an upstream configured) returns 502 and the editor is told it is NOT
+   live; only `pushed` or a deploy counts as published in the UI.
+   It is a full build, not `astro sync`: sync passes a missing `image()` file, and for
+   these sites the build costs about the same (~1.5 s).
+
+**Trust boundary:** the site's code (config, integrations, build scripts) is trusted; it
+is ours, and editors change content only. The worktree stops an honest build reading the
+live checkout's uncommitted state or overwriting its caches, and the admin's own
+variables (`ASTROADMIN_*`, `ADMIN_*`, `SESSION_SECRET`) are removed from its environment.
+It is NOT a sandbox against hostile site code: that is the hosted platform's isolation
+work. Layouts it cannot reproduce faithfully are refused rather than checked
+approximately: git submodules (any mode-160000 entry) and workspace packages linked back
+into the repo. Three Codex rounds probed it; round 3's remaining findings assumed hostile
+site code, which this boundary puts out of scope.
+
+Why not a home-made validator as the gate: the first version re-implemented Astro's
+loading, and review found it wrong in both directions (glob discovery, YAML 1.1 vs 1.2
+octals, object-shaped `file()` JSON, `reference()`, locale variants). Astro is exact by
+construction. Any NEW route that pushes must go through `pushIfAstroAccepts`; there is
+deliberately no bare push endpoint.
+
+The worktree gets its own `node_modules` (a symlink per package) WITHOUT dot-directories
+other than `.bin`: Astro writes its content data store into `node_modules/.astro`, so
+linking the whole directory would let the check overwrite the running preview's store. A
+custom `cacheDir` inside `node_modules` that does NOT start with a dot would still be
+shared; none of our sites set one. Hoisted `node_modules` above a monorepo site are
+mirrored too. A tracked `.env` is the committed one; only gitignored `.env*` files are
+copied in from the live checkout.
 
 ## Releasing
 

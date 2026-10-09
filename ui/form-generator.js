@@ -1059,7 +1059,7 @@ function generateReferenceCard(itemId, index, fullPath) {
 /**
  * Format field name into readable label
  */
-function formatLabel(name) {
+export function formatLabel(name) {
   return name
     .replace(/([A-Z])/g, ' $1')
     .replace(/[_-]/g, ' ')
