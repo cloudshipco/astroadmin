@@ -236,18 +236,33 @@ export async function createServer() {
     index: false, // Don't auto-serve index.html
   }));
 
+  // Site files served on the admin's OWN origin (editor thumbnails only; the
+  // site's host and the preview serve the site's images themselves). An SVG is
+  // a document as well as an image, so an uploaded one opened directly here
+  // would run its script with the editor's session. Sandbox every such
+  // response: a CSP on a response applies only when it is rendered as a
+  // document, so <img> display is unchanged, while a direct visit gets an
+  // opaque origin and no script. nosniff keeps a file from being re-read as
+  // HTML.
+  const siteFileOptions = {
+    setHeaders(res) {
+      res.setHeader('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox");
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+  };
+
   // Serve images for previews in the admin
   // First check src/assets/images (source images), then public/images (uploads)
-  app.use('/images', express.static(fullConfig.paths.srcImages));
-  app.use('/images', express.static(fullConfig.paths.images));
+  app.use('/images', express.static(fullConfig.paths.srcImages, siteFileOptions));
+  app.use('/images', express.static(fullConfig.paths.images, siteFileOptions));
 
   // Serve assets for content-relative image paths
   // Content files use relative paths like ../assets/posts/... which resolve to src/content/assets/
   // Also check src/assets for project-level assets
   const contentAssetsDir = path.join(fullConfig.paths.projectRoot, 'src/content/assets');
   const srcAssetsDir = path.join(fullConfig.paths.projectRoot, 'src/assets');
-  app.use('/assets', express.static(contentAssetsDir));
-  app.use('/assets', express.static(srcAssetsDir));
+  app.use('/assets', express.static(contentAssetsDir, siteFileOptions));
+  app.use('/assets', express.static(srcAssetsDir, siteFileOptions));
 
   // Catch-all for API routes (404)
   app.get('*', (req, res) => {

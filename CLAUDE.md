@@ -126,6 +126,12 @@ runner aggregating them). Most run server-less and need env vars:
   after its final name is built (`server/utils/glob-files.js`: `assertDeclaredCollection`,
   `assertSafeSlug`, `assertContainedPath`). `path.normalize` alone is not a guard: it turns
   `/../../` into `/`. Refusals are 400s that name no server path.
+- `bun tests/image-serving.test.js` — site files the admin serves on its own origin (`/images`,
+  `/assets`, for editor thumbnails) carry `Content-Security-Policy: ...; sandbox` and `nosniff`,
+  so an uploaded SVG opened directly runs no script with the editor's session. A response CSP
+  applies only to a document, so `<img>` display is unchanged; checked once in real Chrome
+  (2026-10-09: before the fix a navigated SVG read `/api/session` and wrote admin-origin
+  localStorage; after it, the origin is opaque, nothing ran, and the `<img>` still drew).
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 
