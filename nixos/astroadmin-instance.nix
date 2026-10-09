@@ -228,6 +228,11 @@ let
     HOME = inst.stateDir;                       # bun/astro/git caches live here
     ASTROADMIN_PROJECT_ROOT = inst.projectRoot;
     GIT_SSH_COMMAND = gitSshCommand name inst;
+    # sharp (Astro's image service) ships a prebuilt binary that links against
+    # libstdc++.so.6, which NixOS has no global path for. Without this every
+    # site's sharp fails to load (ERR_DLOPEN_FAILED), so a site that optimises
+    # images fails the publish check and its preview cannot serve them.
+    LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
   };
 
   # One-shot: clone the repo if absent, otherwise fast-forward it onto
