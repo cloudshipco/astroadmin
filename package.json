@@ -1,7 +1,7 @@
 {
   "name": "astroadmin",
-  "version": "1.4.7",
-  "description": "The git-native CMS for Astro \u2014 auto-generates an editing UI from your content collection Zod schemas; publish = git push",
+  "version": "1.4.8",
+  "description": "The git-native CMS for Astro — auto-generates an editing UI from your content collection Zod schemas; publish = git push",
   "type": "module",
   "main": "server/index.js",
   "exports": {
