@@ -8,7 +8,6 @@
 
 import assert from 'assert';
 import { parseEntryRef, resolveFieldFocus } from '../ui/click-to-edit.js';
-import { resolvePreviewTarget } from '../ui/preview-routes.js';
 
 let passed = 0;
 function check(name, fn) {
@@ -29,10 +28,12 @@ const entries = [
   { collection: 'services', slug: 'hedge-trimming' },
   { collection: 'articles', slug: '2024/first-post' },
 ];
-const collections = [{ name: 'pages' }, { name: 'services', previewRoute: null }, { name: 'articles', previewRoute: '/articles/{slug}' }];
-const resolvePage = (pathname) => resolvePreviewTarget(pathname, entries, collections);
 const home = { collection: 'pages', slug: 'home' };
-const onHome = (overrides = {}) => ({ current: home, previewPagePath: null, entries, resolvePage, ...overrides });
+const hedge = { collection: 'services', slug: 'hedge-trimming' };
+// The editor on the home page with pages/home open (not card mode).
+const onHome = (overrides = {}) => ({ current: home, cardMode: false, entries, pageEntry: home, ...overrides });
+// services/hedge-trimming opened from its card on the home page.
+const cardOnHome = (overrides = {}) => onHome({ current: hedge, cardMode: true, ...overrides });
 
 console.log('\n🧪 click-to-edit: resolving a preview click\n' + '='.repeat(40));
 
@@ -56,12 +57,11 @@ check('an unqualified click focuses the field of the open entry (unchanged behav
 
 check('an entry-qualified click on another entry opens it and keeps the preview on the clicked page', () => {
   const action = resolveFieldFocus({ field: 'title', entry: 'services/hedge-trimming', pathname: '/' }, onHome());
-  assert.deepEqual(action, { action: 'open', collection: 'services', slug: 'hedge-trimming', field: 'title', previewPagePath: '/' });
+  assert.deepEqual(action, { action: 'open', collection: 'services', slug: 'hedge-trimming', field: 'title', keepPreview: true });
 });
 
 check('an entry-qualified click on the entry already open just focuses', () => {
-  const current = { collection: 'services', slug: 'hedge-trimming' };
-  const action = resolveFieldFocus({ field: 'summary', entry: 'services/hedge-trimming', pathname: '/' }, onHome({ current, previewPagePath: '/' }));
+  const action = resolveFieldFocus({ field: 'summary', entry: 'services/hedge-trimming', pathname: '/' }, cardOnHome());
   assert.deepEqual(action, { action: 'focus', field: 'summary' });
 });
 
@@ -70,23 +70,22 @@ check('a reference to an entry that does not exist, or a malformed one, does not
   assert.equal(resolveFieldFocus({ field: 'title', entry: 'services', pathname: '/' }, onHome()), null);
 });
 
-check('with a card\'s entry open, an unqualified click goes back to the page\'s own entry', () => {
-  const current = { collection: 'services', slug: 'hedge-trimming' };
-  const action = resolveFieldFocus({ field: 'headline', pathname: '/' }, onHome({ current, previewPagePath: '/' }));
-  assert.deepEqual(action, { action: 'open', collection: 'pages', slug: 'home', field: 'headline', previewPagePath: null });
-  // Control: the same click with the entry opened normally (not from a card) focuses it.
-  assert.deepEqual(resolveFieldFocus({ field: 'headline', pathname: '/' }, onHome({ current, previewPagePath: null })), { action: 'focus', field: 'headline' });
+check('in card mode, an unqualified click goes back to the page\'s own entry (and lets the preview show it)', () => {
+  const action = resolveFieldFocus({ field: 'headline', pathname: '/' }, cardOnHome());
+  assert.deepEqual(action, { action: 'open', collection: 'pages', slug: 'home', field: 'headline', keepPreview: false });
+  // Control: the same click with the entry opened normally (not card mode) focuses it.
+  assert.deepEqual(resolveFieldFocus({ field: 'headline', pathname: '/' }, cardOnHome({ cardMode: false })), { action: 'focus', field: 'headline' });
 });
 
-check('with a card\'s entry open on a page that resolves to no entry, an unqualified click focuses as before', () => {
-  const current = { collection: 'services', slug: 'hedge-trimming' };
-  const action = resolveFieldFocus({ field: 'headline', pathname: '/no-entry-here' }, onHome({ current, previewPagePath: '/no-entry-here' }));
-  assert.deepEqual(action, { action: 'focus', field: 'headline' });
+check('in card mode, an unqualified click on a page whose entry cannot be found does NOTHING', () => {
+  // Focusing the card entry's same-named field would send the next edits to
+  // the card (the /fr/ and /site/ cases of the review finding).
+  assert.equal(resolveFieldFocus({ field: 'title', pathname: '/no-entry-here' }, cardOnHome({ pageEntry: null })), null);
+  assert.equal(resolveFieldFocus({ field: 'headline' }, cardOnHome({ pageEntry: null })), null);
 });
 
-check('an unqualified click when the pinned entry IS the page\'s entry just focuses (no reload)', () => {
-  const action = resolveFieldFocus({ field: 'headline', pathname: '/' }, onHome({ previewPagePath: '/' }));
-  assert.deepEqual(action, { action: 'focus', field: 'headline' });
+check('an unqualified click when the open entry IS the page\'s entry just focuses (no reload)', () => {
+  assert.deepEqual(resolveFieldFocus({ field: 'headline', pathname: '/' }, onHome({ cardMode: true })), { action: 'focus', field: 'headline' });
 });
 
 check('a nested slug reference opens that entry', () => {
@@ -95,11 +94,9 @@ check('a nested slug reference opens that entry', () => {
   assert.equal(action.slug, '2024/first-post');
 });
 
-check('no field, or a non-string field, does nothing; a pathname that is not a path is dropped', () => {
+check('no field, or a non-string field, does nothing', () => {
   assert.equal(resolveFieldFocus({ entry: 'services/hedge-trimming' }, onHome()), null);
   assert.equal(resolveFieldFocus({ field: ['title'] }, onHome()), null);
-  const action = resolveFieldFocus({ field: 'title', entry: 'services/hedge-trimming', pathname: 'javascript:alert(1)' }, onHome());
-  assert.equal(action.previewPagePath, null);
 });
 
 console.log('='.repeat(40));

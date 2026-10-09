@@ -3,8 +3,9 @@
  */
 
 import { generateForm, extractFormData, setupFormHandlers } from './form-generator.js';
-import { resolvePreviewTarget, previewPathToSitePath } from './preview-routes.js';
-import { formatEntryRef, resolveFieldFocus } from './click-to-edit.js';
+import { formatEntryRef } from './click-to-edit.js';
+import { createPreviewSync, entryPagePath, entryPreviewPath } from './preview-sync.js';
+import { entryApiPath, entryDashboardPath, entryFromDashboardPath } from './entry-urls.js';
 import { registerReferenceFieldHandlers } from './field-widgets.js';
 import { openReferencePicker } from './reference-picker.js';
 import { toggleChangesPanel, getChangesCount, showPublishDialog } from './changes-panel.js';
@@ -28,10 +29,6 @@ let publicUrl = ''; // Production site origin (optional); enables the live-statu
 // open entry's route, overridden by wherever the preview iframe reports it has
 // navigated. Null when unknown (the link then opens the site root).
 let livePagePath = null;
-// Set when the open entry was opened by clicking its card on another page
-// (data-aa-entry): the preview stays on that page while the entry is edited,
-// so its card is what the editor highlights. {path, locale}, or null.
-let previewPin = null;
 let allPages = []; // Store all pages for dropdown
 let allCollections = []; // Store collection info for new entries
 let allStaticPages = []; // Store discovered static pages (virtual pages)
@@ -63,6 +60,20 @@ let i18nConfig = {
 };
 let currentLocale = null; // Current locale being edited (null if i18n disabled)
 let entryLocales = []; // Which locales exist for current entry
+
+// The page the preview shows is the single source of truth for which entry
+// owns it; "card mode" (an entry opened from its card on another page,
+// data-aa-entry) is derived from it and the open entry. See ui/preview-sync.js.
+const previewSync = createPreviewSync(() => ({
+  previewUrl,
+  entries: allPages,
+  collections: allCollections,
+  collectionOrder,
+  i18n: i18nConfig,
+  locale: currentLocale,
+  selectedBlock: selectedPreviewBlock,
+}));
+const openEntryRef = () => (currentCollection && currentSlug ? { collection: currentCollection, slug: currentSlug } : null);
 
 // Check authentication
 async function checkAuth() {
@@ -395,9 +406,9 @@ document.getElementById('localeTabs').addEventListener('click', async (e) => {
   currentLocale = newLocale;
   renderLocaleTabs();
 
-  // Reload entry for new locale
+  // Reload entry for new locale, on its own page in that locale
   if (currentCollection && currentSlug) {
-    await loadEntry(currentCollection, currentSlug, false);
+    await loadEntry(currentCollection, currentSlug, false, { toEntryRoute: true });
   }
 });
 
@@ -551,14 +562,13 @@ document.getElementById('newItemSlug').addEventListener('keydown', (e) => {
 async function createNewEntry(collection, slug) {
   flushPendingSave();
   const myLoad = ++loadSeq; // claim, so a pending entry load can't overwrite this form
-  previewPin = null;
   currentCollection = collection;
   currentSlug = slug;
   isNewEntry = true;
-  setLivePagePath(getCurrentPagePath());
+  setLivePagePath(entryPagePath(openEntryRef(), previewSync.context()));
 
   // Update URL
-  const newUrl = `/dashboard/${collection}/${slug}`;
+  const newUrl = entryDashboardPath(collection, slug);
   history.pushState({ collection, slug }, '', newUrl);
 
   // Update dropdown (won't find the new item yet, that's OK)
@@ -666,21 +676,20 @@ function renderEditorForNewEntry(schema, contentType, ctx) {
 // Load an entry for editing
 /**
  * @param {Object} [options]
- * @param {string|null} [options.previewPagePath] - keep the preview on this page
- *   (the entry was opened from its card there) instead of the entry's own route
+ * @param {boolean} [options.keepPreview] - leave the preview where it is (the
+ *   entry was opened from its card on the page the preview shows)
+ * @param {boolean} [options.toEntryRoute] - show the entry's own page even when
+ *   reloading the entry already open (a locale switch)
  */
-async function loadEntry(collection, slug, updateUrl = true, { previewPagePath = null } = {}) {
+async function loadEntry(collection, slug, updateUrl = true, { keepPreview = false, toEntryRoute = false } = {}) {
   // A queued autosave belongs to the form we're leaving — flush it before its
   // form is replaced, so it saves that entry rather than firing against this one.
   flushPendingSave();
 
-  // Reloading the same entry in the same locale (a revert, say) keeps its pin;
-  // anything else drops it, unless this load sets a new one.
-  const keepsPin = previewPin !== null && collection === currentCollection && slug === currentSlug
-    && previewPin.locale === currentLocale;
-  if (previewPagePath) previewPin = { path: previewPagePath, locale: currentLocale };
-  else if (!keepsPin) previewPin = null;
-  const previewAlreadyShowsPage = Boolean(previewPagePath);
+  // Where the preview goes once the entry has loaded (undefined: stay put).
+  // Decided against the entry open BEFORE this load: reloading it (a revert,
+  // say) refreshes whatever the preview shows.
+  const previewTarget = previewSync.previewForLoad(openEntryRef(), { collection, slug }, { keepPreview, toEntryRoute });
 
   // Claim this load. A response that arrives after a newer load must not render.
   const myLoad = ++loadSeq;
@@ -694,11 +703,13 @@ async function loadEntry(collection, slug, updateUrl = true, { previewPagePath =
   currentSlug = slug;
   isNewEntry = false; // Loading existing entry
   isVirtualPage = false; // Not a virtual page
-  setLivePagePath(getCurrentPagePath());
+  setLivePagePath(previewTarget === undefined
+    ? previewSync.pagePath(openEntryRef())
+    : previewSync.pagePath(openEntryRef(), previewTarget));
 
   // Update URL without page reload
   if (updateUrl) {
-    const newUrl = `/dashboard/${collection}/${slug}`;
+    const newUrl = entryDashboardPath(collection, slug);
     history.pushState({ collection, slug }, '', newUrl);
   }
 
@@ -725,7 +736,7 @@ async function loadEntry(collection, slug, updateUrl = true, { previewPagePath =
 
   try {
     // Build URL with locale query param if i18n enabled
-    let apiUrl = `/api/content/${collection}/${slug}`;
+    let apiUrl = entryApiPath(collection, slug);
     if (i18nConfig.enabled && currentLocale) {
       apiUrl += `?locale=${currentLocale}`;
     }
@@ -744,7 +755,7 @@ async function loadEntry(collection, slug, updateUrl = true, { previewPagePath =
       renderBlockSelector(); // Show block selector for component preview
       // Opened from its card: the preview is already on that page, and
       // reloading it would only lose the place.
-      if (!previewAlreadyShowsPage) updatePreview();
+      if (previewTarget !== undefined) updatePreview(previewTarget);
     } else if (response.status === 404 && i18nConfig.enabled) {
       // Entry doesn't exist for this locale - show empty form for new translation
       isNewEntry = true;
@@ -787,7 +798,6 @@ function loadVirtualPage(pageSlug) {
   }
 
   // Reset state
-  previewPin = null;
   currentCollection = null;
   currentSlug = null;
   currentData = null;
@@ -918,6 +928,7 @@ function updateVirtualPagePreview(page) {
 
   // Build the preview URL
   const pageUrl = `${previewUrl}${page.url}`;
+  previewSync.shown(page.url);
 
   // Show preview and controls
   iframe.style.display = 'block';
@@ -951,11 +962,7 @@ function getEntryFromUrl() {
     return { virtualPage: virtualMatch[1] };
   }
 
-  const match = path.match(/^\/dashboard\/([^/]+)\/(.+)$/);
-  if (match) {
-    return { collection: match[1], slug: match[2] };
-  }
-  return null;
+  return entryFromDashboardPath(path);
 }
 
 // Handle browser back/forward
@@ -1306,7 +1313,7 @@ function setupBlockFocus() {
     if (blockType === 'seo') return;
     // The preview is on another entry's page (this entry was opened from its
     // card there), so its block indexes are that page's blocks, not these.
-    if (previewPin) return;
+    if (previewSync.isCardMode(openEntryRef())) return;
 
     // Send message to iframe to focus this block/element
     const iframe = document.getElementById('previewFrame');
@@ -1448,7 +1455,7 @@ function makeSaver(target) {
     }
 
     try {
-      let apiUrl = `/api/content/${target.collection}/${target.slug}`;
+      let apiUrl = entryApiPath(target.collection, target.slug);
       if (i18nConfig.enabled && target.locale) apiUrl += `?locale=${target.locale}`;
 
       const response = await fetch(apiUrl, {
@@ -1512,7 +1519,7 @@ function makeSaver(target) {
         // WORKAROUND: Astro/Vite HMR needs a beat after the change is detected.
         // See https://github.com/withastro/astro/issues/13138
         await new Promise((r) => setTimeout(r, 2000));
-        if (isTargetCurrent()) updatePreview();
+        if (isTargetCurrent()) updatePreview(previewSync.refreshPath(openEntryRef()));
       }
     } catch (error) {
       console.error('Save failed:', error);
@@ -1594,42 +1601,17 @@ function previewOrigin() {
   }
 }
 
-// Get current preview page URL
+// A site path on the preview server -> its URL (null when there is no preview
+// or no page to show).
+function previewPageUrl(sitePath) {
+  if (!previewUrl || sitePath === null || sitePath === undefined) return null;
+  return `${previewUrl}${sitePath}`;
+}
+
+// The URL a save checks for its change and then reloads: the page the preview
+// shows in card mode, else the open entry's own preview (see ui/preview-sync.js).
 function getPreviewPageUrl() {
-  if (!previewUrl) return null;
-  if (previewPin) return `${previewUrl}${previewPin.path}`;
-
-  const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
-  const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
-
-  // Pages collection uses direct URL preview
-  if (currentCollection === 'pages') {
-    if (currentSlug === 'home') {
-      return isDefaultLocale ? `${previewUrl}/` : `${previewUrl}${localePrefix}`;
-    }
-    return `${previewUrl}${localePrefix}/${currentSlug}`;
-  }
-
-  // Check if collection has a preview route (auto-detected or user-configured)
-  const collection = allCollections.find(c => c.name === currentCollection);
-
-  if (collection?.previewRoute) {
-    // Replace {slug} placeholder with actual slug
-    const routePath = collection.previewRoute.replace('{slug}', currentSlug);
-    return `${previewUrl}${localePrefix}${routePath}`;
-  }
-
-  // Fall back to component preview if available (usedByBlocks)
-  const usedByBlocks = collection?.usedByBlocks || [];
-
-  if (usedByBlocks.length > 0) {
-    // Use selected block or default to first one
-    const blockType = selectedPreviewBlock || usedByBlocks[0].type;
-    return `${previewUrl}/component-preview/${blockType}/${currentSlug}`;
-  }
-
-  // No preview available for this collection
-  return null;
+  return previewPageUrl(previewSync.refreshPath(openEntryRef()));
 }
 
 // Wait for content to actually change before refreshing preview
@@ -1688,69 +1670,38 @@ window.addEventListener('message', (event) => {
 
   // Handle page navigation in preview - sync admin to show that page
   if (event.data?.type === 'pageNavigation') {
-    // A malformed message without a string pathname would throw below.
-    if (typeof event.data.pathname !== 'string') return;
-    // The iframe reports its full pathname, preview base included; everything
-    // below works in site-relative paths (the live link adds publicUrl's base).
-    const pathname = previewPathToSitePath(previewUrl, event.data.pathname);
-    if (pathname === null) return; // outside the preview's base: not a site page
+    // The preview now shows this page: record it (the iframe reports its
+    // pathname with the preview base, which is removed here) and decide
+    // whether the editor should follow. Card mode follows from the new path
+    // by itself, so leaving a card's page can never leave a stale card mode.
+    const result = previewSync.navigated(event.data.pathname, openEntryRef());
+    if (result === null) return; // malformed, or outside the preview base: not a site page
+    // Component previews are for non-page collections, not site pages.
+    if (result.sitePath.startsWith('/component-preview/')) return;
 
-    // Ignore component-preview URLs - these are for non-page collections
-    if (pathname.startsWith('/component-preview/')) {
-      return;
-    }
+    // The live link follows the preview (as reported, so a site with
+    // trailing-slash URLs keeps them).
+    setLivePagePath(result.sitePath);
 
-    // The preview is now showing this route, whether or not it resolves to an
-    // entry below; the live link follows it (as the preview reported it, so a
-    // site with trailing-slash URLs keeps them).
-    setLivePagePath(pathname);
-
-    // Resolve the previewed route to an editor target. A route can be BOTH a
-    // rendered `.astro` file (read-only "site page") and an editable pages
-    // entry — prefer the editable entry.
-    //   1. an editable `pages` entry at /<slug>  -> load it
-    //   2. otherwise a discovered route (blog/faq index, etc.) -> read-only view
-    //   3. otherwise leave the sidebar as-is (never fire a load that 404s and
-    //      hangs the panel on "Loading…").
-    const norm = pathname.replace(/\/+$/, '') || '/';
-
-    // Ignore the echo of our OWN preview update. Loading any entry points the
-    // preview at that entry's route, which fires a pageNavigation back here; if
-    // that route also happens to be an editable `pages` entry (e.g. an faqs
-    // entry previews at /faq, which is also the pages/faq entry), resolving it
-    // below would yank the editor off the entry the user just picked. The
-    // current entry's own preview path is never a user navigation. Only compare
-    // when the current entry HAS a real page path — a component-only collection
-    // returns null, which must not be coerced to '/' (that would swallow a
-    // genuine Home navigation).
-    const currentPath = getCurrentPagePath();
-    if (currentPath !== null && norm === ((currentPath.replace(/\/+$/, '')) || '/')) return;
-
-    const target = resolvePreviewTarget(norm, allPages, allCollections, collectionOrder);
-    if (target && !(currentCollection === target.collection && currentSlug === target.slug)) {
-      loadEntry(target.collection, target.slug, true);
-    }
-    if (target) return;
-    // Unresolved (a route with no matching content entry) — leave the editor
-    // as it is rather than opening a read-only view.
+    // Resolve the previewed route to an editor target (preview-sync.js): an
+    // editable entry that owns it is opened; the echo of the editor's own
+    // load, a reload of the same page and a route no entry owns leave the
+    // editor as it is (never fire a load that 404s and hangs the panel).
+    if (result.load) loadEntry(result.load.collection, result.load.slug, true);
   }
 });
 
 /**
  * Click-to-edit (preview → editor): a click on an annotated element. Focus its
  * field in the open entry, or first open the entry its card names
- * (data-aa-entry), keeping the preview on the page that was clicked.
+ * (data-aa-entry), keeping the preview on the page that was clicked, or (in
+ * card mode) the entry that owns the page.
  */
 async function handlePreviewFieldClick(message) {
-  const action = resolveFieldFocus(message, {
-    current: currentCollection && currentSlug ? { collection: currentCollection, slug: currentSlug } : null,
-    previewPagePath: previewPin ? previewPin.path : null,
-    entries: allPages,
-    resolvePage: (pathname) => resolvePreviewTarget(pathname, allPages, allCollections, collectionOrder),
-  });
+  const action = previewSync.fieldClicked(message, openEntryRef());
   if (!action) return;
   if (action.action === 'open') {
-    await loadEntry(action.collection, action.slug, true, { previewPagePath: action.previewPagePath });
+    await loadEntry(action.collection, action.slug, true, { keepPreview: action.keepPreview });
     // A newer load (another click, a navigation) may have replaced this one.
     if (currentCollection !== action.collection || currentSlug !== action.slug) return;
   }
@@ -1824,17 +1775,23 @@ document.addEventListener('click', (event) => {
     type: 'highlightField',
     field,
     entry: currentCollection && currentSlug ? formatEntryRef(currentCollection, currentSlug) : null,
-    pageEntry: previewPin === null,
+    pageEntry: !previewSync.isCardMode(openEntryRef()),
   }, previewOrigin() || '*');
 });
 
 // Update preview
-async function updatePreview() {
+/**
+ * Point the preview at a site path: by default the open entry's own preview.
+ * @param {string|null} [sitePath]
+ */
+async function updatePreview(sitePath = entryPreviewPath(openEntryRef(), previewSync.context())) {
   const iframe = document.getElementById('previewFrame');
   const placeholder = document.getElementById('previewPlaceholder');
   const previewControls = document.getElementById('previewControls');
 
-  const pageUrl = getPreviewPageUrl();
+  const pageUrl = previewPageUrl(sitePath);
+  // The preview now shows this page, or no page at all.
+  previewSync.shown(pageUrl ? sitePath : null);
   if (!pageUrl) {
     // No route to preview this collection at — say so instead of leaving a
     // blank pane (routeless collections on e.g. single-page sites hit this
@@ -1910,7 +1867,7 @@ async function updatePreview() {
 
 // Refresh preview manually
 document.getElementById('refreshPreview')?.addEventListener('click', () => {
-  updatePreview();
+  updatePreview(previewSync.refreshPath(openEntryRef()));
 });
 
 // Viewport size selector
@@ -2017,7 +1974,7 @@ document.getElementById('deleteEntryBtn').addEventListener('click', async () => 
     // A failed save must not stop the delete (they're independent) — swallow it.
     if (pendingSave) await pendingSave.catch(() => {});
 
-    let apiUrl = `/api/content/${target.collection}/${target.slug}`;
+    let apiUrl = entryApiPath(target.collection, target.slug);
     if (i18nConfig.enabled && target.locale) {
       apiUrl += `?locale=${target.locale}`;
     }
@@ -2121,24 +2078,13 @@ function setLivePagePath(pagePath) {
 }
 
 /**
- * The production path of the current entry (e.g. '/', '/about'), or null when
- * the entry has no real production page (component-preview-only collections).
- * Mirrors getPreviewPageUrl()'s routing, minus the origin.
+ * The production path the editor is about (e.g. '/', '/about'): the page the
+ * preview shows when the open entry was opened from a card there, else the
+ * entry's own page, or null when it has none (component-preview-only
+ * collections).
  */
 function getCurrentPagePath() {
-  if (previewPin) return previewPin.path;
-  const isDefaultLocale = !i18nConfig.enabled || currentLocale === i18nConfig.defaultLocale;
-  const localePrefix = isDefaultLocale ? '' : `/${currentLocale}`;
-
-  if (currentCollection === 'pages') {
-    if (currentSlug === 'home') return isDefaultLocale ? '/' : localePrefix;
-    return `${localePrefix}/${currentSlug}`;
-  }
-  const collection = allCollections.find(c => c.name === currentCollection);
-  if (collection?.previewRoute) {
-    return `${localePrefix}${collection.previewRoute.replace('{slug}', currentSlug)}`;
-  }
-  return null; // component-preview-only: no standalone production page
+  return previewSync.pagePath(openEntryRef());
 }
 
 /**

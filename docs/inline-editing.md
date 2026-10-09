@@ -403,9 +403,9 @@ const services = await getCollection('services');
 The rules (since 1.4.9):
 
 - The value is `<collection>/<slug>`, with the slug the editor uses for the
-  entry (its id, as in `/dashboard/<collection>/<slug>`). A collection name has
+  entry (its id, as listed in the editor's entry picker). A collection name has
   no slash, so everything after the first slash is the slug, and nested slugs
-  (`articles/2024/first-post`) work.
+  (`articles/2024/first-post`, a file in a subfolder) work.
 - An annotated element belongs to the nearest `data-aa-entry` on itself or an
   ancestor. With none, it belongs to the page's own entry, exactly as before.
 - Inside a card, `data-aa-field` names the control **in that entry**: `title`,
@@ -415,8 +415,16 @@ The rules (since 1.4.9):
   card where it is shown: a save refreshes the preview on that page, and
   focusing one of the entry's controls outlines that card (not the page's own
   element of the same name, nor another entry's card).
+- The editor treats the open entry as a card for as long as the preview shows
+  a page that entry does not own. Follow the card's link to the entry's own
+  page and it is the page's entry again: saves refresh that page, and its
+  controls outline the page's own elements. Go to any other page and saves
+  refresh that page; nothing returns the preview to the page the card was on.
 - While a card's entry is open, clicking an unqualified annotation goes back to
-  the page's own entry and focuses that field.
+  the page's own entry and focuses that field. The page is matched without the
+  preview's base path or a locale prefix (`/site/`, `/fr/`). On a page with no
+  entry of its own (a template page), such a click does nothing, rather than
+  focus a field of the card's entry.
 - A reference to an entry that does not exist does nothing. The doctor warns
   about it, and counts a card's annotations toward that entry's coverage.
 
