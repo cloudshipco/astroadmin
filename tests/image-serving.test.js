@@ -108,6 +108,28 @@ await check('a raster image is served as itself, with the same headers', async (
   await assertSandboxed('/images/photo.png', /^image\/png/, Buffer.from('89504e470d0a1a0a', 'hex'));
 });
 
+await check('without a session, every admin-served folder refuses (draft files are not public)', async () => {
+  const paths = [
+    '/images/committed.svg', // public/images
+    '/images/source.svg', // src/assets/images
+    '/assets/posts/rel.svg', // src/content/assets
+    '/assets/project.svg', // src/assets
+    '/images/photo.png',
+  ];
+  for (const urlPath of paths) {
+    const anonymous = await fetch(base + urlPath, { redirect: 'manual' });
+    const body = Buffer.from(await anonymous.arrayBuffer());
+    assert.equal(anonymous.status, 401, `${urlPath}: anonymous request got ${anonymous.status}`);
+    assert.equal(body.includes(Buffer.from('<svg')), false, `${urlPath}: anonymous response carried the file`);
+    // Positive control: the same path with the session is the file.
+    const withSession = await fetch(base + urlPath, { headers: { cookie } });
+    assert.equal(withSession.status, 200, `${urlPath}: logged-in request got ${withSession.status}`);
+  }
+  // A forged/expired cookie is no session either.
+  const forged = await fetch(`${base}/images/committed.svg`, { headers: { cookie: 'connect.sid=s%3Anot-a-session.x' } });
+  assert.equal(forged.status, 401, `forged cookie got ${forged.status}`);
+});
+
 await check("the admin's own pages are not sandboxed (control: the headers are scoped)", async () => {
   const response = await fetch(`${base}/login`);
   assert.equal(response.status, 200);

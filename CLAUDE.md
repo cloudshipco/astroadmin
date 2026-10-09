@@ -132,6 +132,10 @@ runner aggregating them). Most run server-less and need env vars:
   applies only to a document, so `<img>` display is unchanged; checked once in real Chrome
   (2026-10-09: before the fix a navigated SVG read `/api/session` and wrote admin-origin
   localStorage; after it, the origin is opaque, nothing ran, and the `<img>` still drew).
+  They also need a session (401 without one, like the API): `src/assets` and
+  `src/content/assets` hold unpublished drafts. The editor's `<img>` requests are
+  same-origin and carry the session cookie; the preview and the live site serve
+  their own copies.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 

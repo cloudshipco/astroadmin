@@ -251,6 +251,13 @@ export async function createServer() {
     },
   };
 
+  // These folders hold unpublished drafts (src/assets, src/content/assets, new
+  // uploads), so they need the same session as the API. The editor's <img>
+  // requests are same-origin and carry the session cookie; the site's host
+  // and the preview serve their own copies and never come here. A 401 matches
+  // the API; the admin's pages send a logged-out user to /login themselves.
+  app.use(['/images', '/assets'], requireAuth);
+
   // Serve images for previews in the admin
   // First check src/assets/images (source images), then public/images (uploads)
   app.use('/images', express.static(fullConfig.paths.srcImages, siteFileOptions));
