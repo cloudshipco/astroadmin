@@ -22,6 +22,7 @@ import {
   listGitlinks,
   runCommand,
 } from '../utils/astro-check.js';
+import { listBuiltPagePaths } from './html-scan.js';
 import {
   computeFieldCoverage,
   findAnnotatedLinks,
@@ -45,6 +46,7 @@ const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
 // Below this share of text fields reachable by a click, coverage warns.
 export const COVERAGE_PASS_SHARE = 0.8;
 const MAX_LISTED = 10;
+export const NO_HTML_MESSAGE = 'The build has no HTML pages, so there was nothing to check.';
 
 const percent = (part, whole) => `${Math.round((part / whole) * 100)}%`;
 const listSome = (items) => items.slice(0, MAX_LISTED).concat(items.length > MAX_LISTED ? [`… and ${items.length - MAX_LISTED} more`] : []);
@@ -153,7 +155,15 @@ export const CHECKS = [
     phase: 'build',
     title: 'The build runs',
     async run(context) {
-      if (context.distDir) return { severity: 'skip', message: `Using the existing build in ${context.distDir}.` };
+      if (context.distDir) {
+        if ((await listBuiltPagePaths(context.distDir)).length === 0) {
+          context.buildSkippedReason = NO_HTML_MESSAGE;
+          const given = context.distDir;
+          context.distDir = null;
+          return { severity: 'fail', message: `${given} is missing or has no HTML pages, so the built pages could not be checked.` };
+        }
+        return { severity: 'skip', message: `Using the existing build in ${context.distDir}.` };
+      }
       if (!context.build) {
         context.buildSkippedReason = 'Not built (pass --build <distDir> to check an existing build).';
         return { severity: 'skip', message: context.buildSkippedReason };
@@ -166,6 +176,10 @@ export const CHECKS = [
         context.buildSkippedReason = 'The build failed, so the built HTML could not be checked.';
         const output = cleanCheckOutput(result.output, [context.projectRoot, outDir]).slice(-2000);
         return { severity: 'fail', message: result.timedOut ? `The build did not finish within ${BUILD_TIMEOUT_MS / 1000} seconds.` : 'The build failed.', details: [output] };
+      }
+      if ((await listBuiltPagePaths(outDir)).length === 0) {
+        context.buildSkippedReason = NO_HTML_MESSAGE;
+        return { severity: 'fail', message: 'The build succeeded but wrote no HTML pages.' };
       }
       context.distDir = outDir;
       return { severity: 'pass', message: `${command.replace(JSON.stringify(outDir), '<temp dir>')} succeeded.` };
@@ -180,13 +194,23 @@ export const CHECKS = [
       if (!context.distDir) return noBuild(context);
       const { entries, pages } = await context.built();
       const report = findUnindexedBlocks(entries, pages);
-      if (report.totalBlocks === 0) return { severity: 'skip', message: 'No built page renders a block list.' };
-      const message = `${report.indexedBlocks} of ${report.totalBlocks} rendered blocks carry data-block-index.`;
-      if (report.pages.length === 0) return { severity: 'pass', message };
+      const unchecked = report.unchecked.length > 0
+        ? `${report.unchecked.length} ${report.unchecked.length === 1 ? 'entry' : 'entries'} with blocks had no built page and were not checked.`
+        : null;
+      if (report.totalBlocks === 0) {
+        if (unchecked) return { severity: 'warn', message: unchecked, details: listSome(report.unchecked.map((item) => `${item.collection}/${item.slug} (${item.pagePath})`)), data: report };
+        return { severity: 'skip', message: 'No built page renders a block list.' };
+      }
+      const message = `${report.indexedBlocks} of ${report.totalBlocks} rendered blocks carry the right data-block-index for their position.`;
+      if (report.pages.length === 0 && !unchecked) return { severity: 'pass', message };
+      const details = report.pages.map((page) => `${page.pagePath} (${page.collection}/${page.slug}): ${page.field} (${page.blocks} blocks) ${page.problems.join('; ')}`);
+      if (unchecked) details.push(unchecked);
       return {
         severity: 'warn',
-        message: `${message} Without it the editor guesses blocks by counting <section>s and can highlight the wrong one. See ${INLINE_EDITING_DOCS}#blocks-data-block-index.`,
-        details: listSome(report.pages.map((page) => `${page.pagePath} (${page.collection}/${page.slug}): ${page.field} ${page.missing.join(', ')} of ${page.blocks}`)),
+        message: report.pages.length > 0
+          ? `${message} The editor picks a block's element by its position among the page's data-block-index elements, so a missing, extra, nested or out-of-order one highlights the wrong block. See ${INLINE_EDITING_DOCS}#blocks-data-block-index.`
+          : `${message} ${unchecked}`,
+        details: listSome(details),
         data: report,
       };
     },
@@ -200,12 +224,20 @@ export const CHECKS = [
       if (!context.distDir) return noBuild(context);
       const { entries, pages } = await context.built();
       const report = computeFieldCoverage(entries, pages);
+      const uncheckedNote = report.unchecked.length > 0
+        ? `${report.unchecked.length} ${report.unchecked.length === 1 ? 'entry was' : 'entries were'} not checked: ${report.unchecked.length === 1 ? 'its page was' : 'their pages were'} not built (e.g. ${report.unchecked.slice(0, 3).map((item) => `${item.collection}/${item.slug} at ${item.pagePath}`).join(', ')}).`
+        : null;
+      const unmappedNote = report.unmapped.length > 0
+        ? `${report.unmapped.length} ${report.unmapped.length === 1 ? 'entry is' : 'entries are'} on no built page (no page of their own, and no card names them with data-aa-entry), so not counted.`
+        : null;
       if (report.totalFields === 0) {
-        return { severity: 'skip', message: 'No built page renders an entry with text fields.', data: report };
+        // Only "nothing to check" when every entry's page was there to read.
+        if (uncheckedNote) return { severity: 'warn', message: `No text field could be checked. ${uncheckedNote}`, details: unmappedNote ? [unmappedNote] : [], data: report };
+        return { severity: 'skip', message: 'No built page renders an entry with text fields.', details: unmappedNote ? [unmappedNote] : [], data: report };
       }
       const share = report.coveredFields / report.totalFields;
       const perCollection = report.byCollection.map((summary) => `${summary.collection} ${summary.covered}/${summary.fields}`).join(', ');
-      const message = `Click-to-edit reaches ${report.coveredFields} of ${report.totalFields} text fields (${percent(report.coveredFields, report.totalFields)}): ${perCollection}.`;
+      const message = `Click-to-edit reaches ${report.coveredFields} of ${report.totalFields} text fields (${percent(report.coveredFields, report.totalFields)}): ${perCollection}.${uncheckedNote ? ` ${uncheckedNote}` : ''}`;
       const details = [];
       for (const summary of report.byCollection) {
         const gaps = report.entries.filter((entry) => entry.collection === summary.collection && entry.covered < entry.fields);
@@ -214,8 +246,10 @@ export const CHECKS = [
         details.push(`${summary.collection}: ${gaps.length} of ${summary.entries} entries have gaps, e.g. ${example.slug} on ${example.pagePath} misses ${listSome(example.missing).join(', ')}`);
       }
       if (report.notRendered > 0) details.push(`${report.notRendered} text fields are not counted: their text is not visible outside a link on the page (page titles, link labels, metadata, reformatted dates).`);
-      if (report.unchecked.length > 0) details.push(`${report.unchecked.length} entries had no built page and were not checked.`);
-      const passes = share >= COVERAGE_PASS_SHARE;
+      if (report.noControl > 0) details.push(`${report.noControl} text fields have no editor control a click could focus (gallery items, say), so are not counted.`);
+      if (unmappedNote) details.push(unmappedNote);
+      // A clean result needs every entry with a page to have been read.
+      const passes = share >= COVERAGE_PASS_SHARE && !uncheckedNote;
       if (!passes) details.push(`How to annotate: ${INLINE_EDITING_DOCS}#click-to-edit-in-the-preview`);
       return { severity: passes ? 'pass' : 'warn', message, details, data: report };
     },

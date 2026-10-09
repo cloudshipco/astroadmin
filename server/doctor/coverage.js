@@ -7,12 +7,20 @@
  * `blocks[2].heading`, or an array such as `blocks[3].items` (whose items are
  * edited through the array control). `body` is a Markdown entry's body.
  *
+ * Which names are controls is not re-derived here: the editor's own renderer
+ * (ui/form-generator.js generateForm) renders the entry, and its `name`
+ * attributes are the controls, exactly the ones a click can focus. So a nested
+ * object (`hero`) is not a control but `hero.title` is; a list of strings has
+ * one control per item (`credentials[2]`); a list of objects with one property
+ * has one per item field (`points[0].text`); a list of objects with two or more
+ * properties has ONE control (`blocks[1].items`); an image has its own control.
+ *
  * An annotation means a field of the entry its page is for, unless it or an
  * ancestor carries data-aa-entry="<collection>/<slug>": then it is a field of
  * that entry (a card listing another collection's entry).
  */
 
-import { isImageField } from '../../ui/form-generator.js';
+import { generateForm, isImageField } from '../../ui/form-generator.js';
 import { comparableText, comparableWords } from './html-scan.js';
 
 // How much of a value's start is looked for in the page (in comparable
@@ -32,7 +40,9 @@ const WHOLE_WORD_BELOW = 16;
  *   page of its own (it can still appear as a card on other pages)
  * @property {Object} data
  * @property {string|null} [body] - Markdown body, if any
- * @property {Object|null} [schema] - the collection's JSON Schema
+ * @property {Object|null} [schema] - the collection's JSON Schema, with
+ *   `blockTypes` on each block list as the editor's form receives it (see
+ *   server/utils/block-types.js)
  * @property {string[]} [blockArrays] - top-level keys holding a block list
  */
 
@@ -74,7 +84,7 @@ function resolveSchema(schemaNode, value) {
  * @param {Object|null} schemaNode
  * @param {string} value
  */
-export function isTextField(key, schemaNode, value) {
+function isTextField(key, schemaNode, value) {
   if (typeof value !== 'string' || value.trim() === '') return false;
   if (schemaNode && (schemaNode.enum || schemaNode.const !== undefined)) return false;
   if (schemaNode && NON_TEXT_FORMATS.has(schemaNode.format)) return false;
@@ -85,15 +95,38 @@ export function isTextField(key, schemaNode, value) {
 }
 
 /**
+ * The names of the entry's editor controls: the `name` attributes the editor's
+ * form renders for it (plus `body`, the Markdown editor, which the dashboard
+ * adds beside the form for an entry with a body and no blocks). Fixed values
+ * (a block's `type`, a z.literal) and schema-hidden fields are hidden inputs
+ * with nothing to show, so they are left out.
+ * @param {DoctorEntry} entry
+ * @param {Set<string>} inertPaths - paths of fixed and hidden values
+ * @returns {Set<string>|null} null when the entry has no object schema to render
+ */
+function editorControls(entry, inertPaths) {
+  const schema = entry.schema;
+  if (!schema || schema.type !== 'object') return null;
+  const html = generateForm(schema, entry.data || {});
+  const controls = new Set();
+  for (const match of html.matchAll(/\sname="([^"]*)"/g)) {
+    if (!inertPaths.has(match[1])) controls.add(match[1]);
+  }
+  if (typeof entry.body === 'string' && !schema.properties?.blocks) controls.add('body');
+  return controls;
+}
+
+/**
  * Walk an entry's data with its schema.
- * @returns {{textFields: string[], values: Map<string, string>, dataPaths: Set<string>}}
- *   dataPaths: every control path, from the data and from the schema (a field
- *   the entry leaves empty still has a control the editor can focus)
+ * @returns {{textFields: string[], values: Map<string, string>, controls: Set<string>}}
+ *   controls: every editor control name (see editorControls). An entry with no
+ *   schema falls back to the paths in its data.
  */
 export function describeEntryFields(entry) {
   const textFields = [];
   const values = new Map();
   const dataPaths = new Set();
+  const inertPaths = new Set();
 
   const walk = (value, schemaNode, fieldPath, key) => {
     const resolved = resolveSchema(schemaNode, value);
@@ -103,8 +136,8 @@ export function describeEntryFields(entry) {
       return;
     }
     if (value !== null && typeof value === 'object') {
-      for (const declaredKey of Object.keys(resolved?.properties || {})) {
-        if (resolved.properties[declaredKey]?.const === undefined) dataPaths.add(fieldPath ? `${fieldPath}.${declaredKey}` : declaredKey);
+      for (const [declaredKey, declared] of Object.entries(resolved?.properties || {})) {
+        if (declared?.const !== undefined || declared?.hidden) inertPaths.add(fieldPath ? `${fieldPath}.${declaredKey}` : declaredKey);
       }
       for (const [childKey, childValue] of Object.entries(value)) {
         const childSchema = resolved?.properties?.[childKey] || null;
@@ -128,7 +161,8 @@ export function describeEntryFields(entry) {
       values.set('body', entry.body);
     }
   }
-  return { textFields, values, dataPaths };
+  const controls = editorControls(entry, inertPaths) || dataPaths;
+  return { textFields, values, controls };
 }
 
 /**
@@ -155,24 +189,21 @@ export function isRenderedAsText(value, page) {
 }
 
 /**
- * The paths a field path is reached through: itself, then each ancestor. A
- * block list (`blocks`) and a whole block (`blocks[2]`) are not controls, so a
- * click on an element annotated with one does not focus anything.
+ * The control a field is edited through: the field's own control, else the
+ * nearest enclosing one (`blocks[2].items[0].title` is edited through
+ * `blocks[2].items`). Null when no control holds it (a gallery's items, which
+ * are edited in a modal opened from a group with no name).
+ * @param {string} fieldPath
+ * @param {Set<string>} controls
  */
-function reachingPaths(fieldPath, blockArrays) {
-  const paths = [fieldPath];
+function owningControl(fieldPath, controls) {
   let current = fieldPath;
   for (;;) {
+    if (controls.has(current)) return current;
     const parent = current.replace(/(\.[^.[\]]+|\[\d+\])$/, '');
-    if (parent === current || parent === '') break;
+    if (parent === current || parent === '') return null;
     current = parent;
-    paths.push(current);
   }
-  return paths.filter((candidate) => !blockArrays.some((key) => candidate === key || new RegExp(`^${escapeRegExp(key)}\\[\\d+\\]$`).test(candidate)));
-}
-
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** The data-aa-entry value that names an entry. */
@@ -213,19 +244,25 @@ function placesShowing(entry, pages) {
  * @param {Map<string, import('./html-scan.js').PageScan>} pages
  */
 export function computeFieldCoverage(entries, pages) {
-  const report = { totalFields: 0, coveredFields: 0, notRendered: 0, entries: [], unchecked: [] };
+  const report = { totalFields: 0, coveredFields: 0, notRendered: 0, noControl: 0, entries: [], unchecked: [], unmapped: [] };
   for (const entry of entries) {
     const places = placesShowing(entry, pages);
     if (places.length === 0) {
-      // An entry with no page of its own and no card is not on any page we
-      // can check; one whose page was not built is reported.
+      // Not on any page we can check: an entry whose own page was not built
+      // (unchecked: the build or the route is wrong), or one with no page of
+      // its own and no card naming it (unmapped: shown nowhere clickable).
       if (entry.pagePath) report.unchecked.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath });
+      else report.unmapped.push({ collection: entry.collection, slug: entry.slug });
       continue;
     }
-    const { textFields, values } = describeEntryFields(entry);
-    const blockArrays = entry.blockArrays || [];
-    const isCovered = (fieldPath) => reachingPaths(fieldPath, blockArrays)
-      .some((candidate) => places.some((place) => place.names.has(candidate)));
+    const { textFields: allTextFields, values, controls } = describeEntryFields(entry);
+    // A field no control holds cannot be reached by any annotation.
+    const textFields = allTextFields.filter((fieldPath) => owningControl(fieldPath, controls) !== null);
+    report.noControl += allTextFields.length - textFields.length;
+    const isCovered = (fieldPath) => {
+      const control = owningControl(fieldPath, controls);
+      return places.some((place) => place.names.has(control));
+    };
     const isRendered = (fieldPath) => places.some((place) => isRenderedAsText(values.get(fieldPath), place.page));
     const counted = textFields.filter((fieldPath) => isCovered(fieldPath) || isRendered(fieldPath));
     const missing = counted.filter((fieldPath) => !isCovered(fieldPath));
@@ -280,11 +317,11 @@ export function findUnknownFieldNames(entries, pages) {
   const validByPage = new Map();
   const validByRef = new Map();
   for (const entry of entries) {
-    const { dataPaths } = describeEntryFields(entry);
-    validByRef.set(entryRef(entry), dataPaths);
+    const { controls } = describeEntryFields(entry);
+    validByRef.set(entryRef(entry), controls);
     if (!entry.pagePath) continue;
     if (!validByPage.has(entry.pagePath)) validByPage.set(entry.pagePath, new Set());
-    for (const dataPath of dataPaths) validByPage.get(entry.pagePath).add(dataPath);
+    for (const control of controls) validByPage.get(entry.pagePath).add(control);
   }
   const unknown = [];
   for (const [pagePath, page] of pages) {
@@ -325,26 +362,56 @@ export function findUnknownEntryRefs(entries, pages) {
 }
 
 /**
- * Blocks with no data-block-index on their page. Without it the integration
- * guesses block roots by counting top-level <section> elements, which
- * misaligns as soon as one block renders something else.
+ * Block roots that the integration would match to the wrong block. It picks
+ * the root for block i by POSITION among the page's [data-block-index]
+ * elements, not by the attribute's value, so the roots must carry 0..n-1 in
+ * document order: one per block, none missing, none extra, none nested inside
+ * another. Without any, it guesses by counting top-level <section> elements,
+ * which misaligns as soon as one block renders something else.
+ *
+ * A page whose entry has two block lists cannot be checked by position (the
+ * roots of both share one sequence), so only the indexes' presence is checked
+ * there.
  * @param {DoctorEntry[]} entries
  * @param {Map<string, import('./html-scan.js').PageScan>} pages
  */
 export function findUnindexedBlocks(entries, pages) {
-  const report = { totalBlocks: 0, indexedBlocks: 0, pages: [] };
+  const report = { totalBlocks: 0, indexedBlocks: 0, pages: [], unchecked: [] };
   for (const entry of entries) {
+    const lists = (entry.blockArrays || [])
+      .map((key) => ({ key, blocks: entry.data?.[key] }))
+      .filter(({ blocks }) => Array.isArray(blocks) && blocks.length > 0);
+    if (lists.length === 0 || !entry.pagePath) continue;
     const page = pages.get(entry.pagePath);
-    if (!page) continue;
-    const present = new Set(page.blockIndexes);
-    for (const key of entry.blockArrays || []) {
-      const blocks = entry.data?.[key];
-      if (!Array.isArray(blocks) || blocks.length === 0) continue;
-      const missing = blocks.map((block, index) => index).filter((index) => !present.has(index));
-      report.totalBlocks += blocks.length;
-      report.indexedBlocks += blocks.length - missing.length;
-      if (missing.length > 0) {
-        report.pages.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath, field: key, blocks: blocks.length, missing });
+    if (!page) {
+      report.unchecked.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath });
+      continue;
+    }
+    const indexes = page.blockIndexes || [];
+    const nested = page.blockNested || [];
+    for (const { key, blocks } of lists) {
+      const count = blocks.length;
+      const expected = blocks.map((block, index) => index);
+      const missing = expected.filter((index) => !indexes.includes(index));
+      const problems = [];
+      let correct;
+      if (lists.length > 1) {
+        correct = count - missing.length;
+      } else {
+        correct = expected.filter((index) => indexes[index] === index && !nested[index]).length;
+        const seen = new Set();
+        const duplicates = new Set(indexes.filter((value) => (seen.has(value) ? true : (seen.add(value), false))));
+        const extra = indexes.filter((value) => value === null || value < 0 || value >= count);
+        if (duplicates.size > 0) problems.push(`duplicated ${[...duplicates].join(', ')}`);
+        if (extra.length > 0) problems.push(`${extra.length} root(s) with no matching block (${extra.map((value) => (value === null ? 'not a number' : value)).join(', ')})`);
+        if (nested.some(Boolean)) problems.push(`nested roots at position(s) ${nested.flatMap((isNested, position) => (isNested ? [position] : [])).join(', ')}`);
+        if (problems.length === 0 && missing.length === 0 && correct < count) problems.push(`out of order (${indexes.join(', ')} in page order)`);
+      }
+      if (missing.length > 0) problems.unshift(`missing ${missing.join(', ')}`);
+      report.totalBlocks += count;
+      report.indexedBlocks += correct;
+      if (problems.length > 0) {
+        report.pages.push({ collection: entry.collection, slug: entry.slug, pagePath: entry.pagePath, field: key, blocks: count, missing, problems });
       }
     }
   }

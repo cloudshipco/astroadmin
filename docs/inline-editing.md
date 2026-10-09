@@ -309,7 +309,13 @@ The value of `data-aa-field` is the editor control's form name, exactly:
 | A field of a block | `blocks[2].heading` |
 | A list of objects (see [Arrays](#arrays)) | `blocks[1].items` |
 | One string in a list of strings | `credentials[2]` |
+| A field of an item in a list of one-property objects | `points[0].text` |
 | A Markdown entry's body | `body` |
+
+Only controls have names. A nested object (`hero`), a whole block
+(`blocks[2]`), a list of strings (`credentials`) and a single item of a list
+edited as cards (`blocks[1].items[0]`) are not controls, so annotating one
+does nothing.
 
 A field inside a block is qualified with the block's index: `blocks[2].text`,
 not `text`. In a template that maps over blocks, build the name from the
@@ -361,6 +367,10 @@ so the attribute must go on:
 - exactly one root element per rendered block,
 - in the same order as the block list,
 - with none nested inside another.
+
+An element with the `hidden` attribute still takes a position (it is in the
+page), so a hidden block root must still be in order. Content of a
+`<template>` or `<noscript>` is not in the page and takes none.
 
 Without any `data-block-index` on the page, the preview guesses by counting
 top-level `<section>` elements, which goes wrong as soon as one block renders

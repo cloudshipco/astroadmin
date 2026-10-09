@@ -6,7 +6,7 @@
  */
 
 import { createRequire } from 'module';
-import { CHECKS, DOCS_BASE } from './checks.js';
+import { CHECKS, DOCS_BASE, NO_HTML_MESSAGE } from './checks.js';
 import { listBuiltPagePaths, scanBuiltPages } from './html-scan.js';
 import { readAstroConfigFacts } from './project.js';
 
@@ -55,12 +55,16 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
     cleanups: [],
     astroConfig: () => remember('astroConfig', () => readAstroConfigFacts(projectRoot)),
     built: () => remember('built', async () => {
+      // A build with no HTML (an empty or missing directory) has nothing to
+      // check; every built check says so rather than reporting a clean result.
+      const builtPagePaths = await listBuiltPagePaths(context.distDir);
+      if (builtPagePaths.length === 0) throw new Error(NO_HTML_MESSAGE);
       const load = loadEntries || (async () => (await import('./entries.js')).collectEntries());
       const { entries } = await load();
       // Every built page, not only the entries' own: a page no entry owns can
       // still show other entries' cards (data-aa-entry).
       const pagePaths = entries.map((entry) => entry.pagePath).filter(Boolean);
-      const pages = await scanBuiltPages(context.distDir, [...pagePaths, ...await listBuiltPagePaths(context.distDir)]);
+      const pages = await scanBuiltPages(context.distDir, [...pagePaths, ...builtPagePaths]);
       return { entries, pages };
     }),
   };

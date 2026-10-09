@@ -7,6 +7,24 @@
  *
  * Uses Bun's HTMLRewriter (a real HTML tokenizer), so attributes inside
  * <script> or comments are never mistaken for elements.
+ *
+ * What a visitor never sees is left out, the same way for annotations, entry
+ * references and text:
+ * - <template>, <noscript>, <script> and <style> content is not in the page's
+ *   DOM at all (a browser with scripting on parses <noscript> as text), so its
+ *   annotations, block roots and text are all ignored.
+ * - An element with the `hidden` attribute (and everything inside it) is in
+ *   the DOM but not rendered: its annotations cannot be clicked and its text
+ *   is not read, so neither counts. Its data-block-index DOES count, because
+ *   the integration picks block roots by position among every
+ *   [data-block-index] in the DOM, hidden or not.
+ * - `aria-hidden="true"` hides an element from assistive technology only; it
+ *   is still visible and clickable, so it is treated as rendered.
+ * - Text inside <svg> (icon titles) and <title> is not body text.
+ * CSS (`display: none`, a `hidden` class) is not evaluated.
+ *
+ * A page with no <body> tag (a fragment, or a template that leaves the tag
+ * implicit) has an implicit body: everything outside <head> is body text.
  */
 
 import fs from 'fs/promises';
@@ -29,7 +47,10 @@ import path from 'path';
  * @typedef {Object} PageScan
  * @property {AnnotatedElement[]} fields
  * @property {string[]} entryRefs - every distinct data-aa-entry value, in document order
- * @property {number[]} blockIndexes - every data-block-index value, in document order
+ * @property {Array<number|null>} blockIndexes - every data-block-index value in
+ *   the DOM, in document order (null for a value that is not an integer)
+ * @property {boolean[]} blockNested - for each of blockIndexes, whether it sits
+ *   inside another data-block-index element
  * @property {string} clickableText - the body's visible text outside links,
  *   reduced by comparableText(): what a click-to-edit annotation could cover
  * @property {string} clickableWords - the same text as comparableWords(), with
@@ -77,16 +98,24 @@ export async function scanHtml(html) {
   /** @type {AnnotatedElement[]} */
   const fields = [];
   const blockIndexes = [];
+  const blockNested = [];
   const entryRefs = [];
   // Open elements carrying data-aa-entry, innermost last.
   const openEntries = [];
-  // Text is collected only inside <body>, outside links and non-rendered elements.
   const textChunks = [];
   const linkChunks = [];
   const bodyChunks = [];
   let bodyDepth = 0;
+  let headDepth = 0;
+  let sawBody = false;
   let linkDepth = 0;
+  // Content that is not in the DOM (template, noscript, script, style).
+  let absentDepth = 0;
+  // Inside an element carrying `hidden`: in the DOM, not rendered.
   let hiddenDepth = 0;
+  // Text that is rendered but is not body text (svg, title).
+  let nonTextDepth = 0;
+  let blockDepth = 0;
   const isNavigatingLink = (element) => {
     const tag = element.tagName.toLowerCase();
     return (tag === 'a' || tag === 'area') && element.hasAttribute('href');
@@ -96,17 +125,31 @@ export async function scanHtml(html) {
     change(1);
     element.onEndTag(() => change(-1));
   };
+  const isRendered = (element) => absentDepth === 0 && hiddenDepth === 0 && !element.hasAttribute('hidden');
 
+  // Handler order matters: for one element, handlers run in registration
+  // order, so the depth trackers that describe an element's ANCESTORS must
+  // not yet have counted the element itself when the recorders below look at
+  // them (an annotated <a href> is "is a link", not "inside a link"; a block
+  // root is nested only inside ANOTHER block root).
   const rewriter = new HTMLRewriter()
-    .on('body', { element(element) { trackDepth(element, (delta) => { bodyDepth += delta; }); } })
-    .on('script, style, template, noscript, svg', { element(element) { trackDepth(element, (delta) => { hiddenDepth += delta; }); } })
-    // Registered before the link handler, so an annotated <a href> has not yet
-    // counted itself when it is recorded: linkDepth > 0 here means an
-    // enclosing link.
+    .on('body', { element(element) { sawBody = true; trackDepth(element, (delta) => { bodyDepth += delta; }); } })
+    .on('head', { element(element) { trackDepth(element, (delta) => { headDepth += delta; }); } })
+    .on('template, noscript, script, style', { element(element) { trackDepth(element, (delta) => { absentDepth += delta; }); } })
+    .on('[data-block-index]', {
+      element(element) {
+        if (absentDepth > 0) return;
+        const value = Number.parseInt(element.getAttribute('data-block-index'), 10);
+        blockIndexes.push(Number.isInteger(value) ? value : null);
+        blockNested.push(blockDepth > 0);
+        trackDepth(element, (delta) => { blockDepth += delta; });
+      },
+    })
     // Registered before the data-aa-field handler, so an element carrying both
     // is already the innermost entry when its field is recorded.
     .on('[data-aa-entry]', {
       element(element) {
+        if (!isRendered(element)) return;
         const value = element.getAttribute('data-aa-entry') || '';
         if (!entryRefs.includes(value)) entryRefs.push(value);
         if (!element.canHaveContent || element.selfClosing) return;
@@ -114,23 +157,24 @@ export async function scanHtml(html) {
         element.onEndTag(() => { openEntries.pop(); });
       },
     })
+    // Registered before the link handler, so an annotated <a href> has not yet
+    // counted itself when it is recorded: linkDepth > 0 here means an
+    // enclosing link.
     .on('[data-aa-field]', {
       element(element) {
+        if (!isRendered(element)) return;
         const link = isNavigatingLink(element) ? 'is' : linkDepth > 0 ? 'inside' : null;
         const entry = element.hasAttribute('data-aa-entry') ? element.getAttribute('data-aa-entry') || '' : openEntries.at(-1) ?? null;
         fields.push({ name: element.getAttribute('data-aa-field') || '', tag: element.tagName.toLowerCase(), link, entry });
       },
     })
+    .on('[hidden]', { element(element) { trackDepth(element, (delta) => { hiddenDepth += delta; }); } })
+    .on('svg, title', { element(element) { trackDepth(element, (delta) => { nonTextDepth += delta; }); } })
     .on('a[href]', { element(element) { trackDepth(element, (delta) => { linkDepth += delta; }); } })
-    .on('[data-block-index]', {
-      element(element) {
-        const value = Number.parseInt(element.getAttribute('data-block-index'), 10);
-        if (Number.isInteger(value)) blockIndexes.push(value);
-      },
-    })
     .onDocument({
       text(chunk) {
-        if (bodyDepth === 0 || hiddenDepth > 0) return;
+        const inBody = bodyDepth > 0 || (!sawBody && headDepth === 0);
+        if (!inBody || absentDepth > 0 || hiddenDepth > 0 || nonTextDepth > 0) return;
         const target = linkDepth > 0 ? linkChunks : textChunks;
         target.push(chunk.text);
         bodyChunks.push(chunk.text);
@@ -145,6 +189,7 @@ export async function scanHtml(html) {
     fields,
     entryRefs,
     blockIndexes,
+    blockNested,
     clickableText: comparableText(visibleText),
     clickableWords: ` ${comparableWords(visibleText)} `,
     linkText: comparableText(linkChunks.join('')),

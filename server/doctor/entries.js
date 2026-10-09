@@ -8,11 +8,17 @@
  * detected from src/pages). Default locale only.
  *
  * Entries with no page of their own are included too (pagePath null): a page
- * can still show them as cards, named by data-aa-entry.
+ * can still show them as cards, named by data-aa-entry. The coverage check
+ * reports the ones shown nowhere.
+ *
+ * Everything is read from the editor's ASTROADMIN_PROJECT_ROOT. In the editor,
+ * the doctor's scan runs in a child process whose root is the publish check's
+ * worktree (./editor-scan.js), so entries, schemas and routes are the commit's.
  */
 
 import { getConfig } from '../config.js';
 import { loadSchemas } from '../utils/collections.js';
+import { enrichSchemaWithBlockTypes } from '../utils/block-types.js';
 import { listSlugs, readContent } from '../utils/content-store.js';
 import { getPreviewRoute } from '../utils/routes.js';
 
@@ -33,14 +39,12 @@ function pagePathFor(collection, slug, route) {
 }
 
 /**
- * @returns {Promise<{entries: import('./coverage.js').DoctorEntry[], withoutPage: Array<{collection: string, slug: string}>}>}
- *   withoutPage: the entries (also in `entries`, with pagePath null) that have no page of their own
+ * @returns {Promise<{entries: import('./coverage.js').DoctorEntry[]}>}
  */
 export async function collectEntries() {
   const fullConfig = await getConfig();
   const schemas = await loadSchemas();
   const entries = [];
-  const withoutPage = [];
   for (const [collection, info] of Object.entries(schemas)) {
     const route = collection === 'pages' ? null : await getPreviewRoute(collection, fullConfig);
     let slugs = [];
@@ -51,7 +55,6 @@ export async function collectEntries() {
     }
     for (const slug of slugs) {
       const pagePath = pagePathFor(collection, slug, route);
-      if (!pagePath) withoutPage.push({ collection, slug });
       let content;
       try {
         content = await readContent(collection, slug);
@@ -64,10 +67,11 @@ export async function collectEntries() {
         pagePath,
         data: content.data || {},
         body: typeof content.body === 'string' ? content.body : null,
-        schema: info.schema || null,
+        // As the editor's form receives it, so its control names are the editor's.
+        schema: info.schema ? enrichSchemaWithBlockTypes(info.schema, info.discriminatedUnions) : null,
         blockArrays: blockArrayKeys(info.discriminatedUnions),
       });
     }
   }
-  return { entries, withoutPage };
+  return { entries };
 }

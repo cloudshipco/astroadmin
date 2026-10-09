@@ -81,6 +81,10 @@ const blockSchema = {
   ],
 };
 
+// The editor's form reads block types from `blockTypes`, which the collections
+// API adds beside the union (enrichSchemaWithBlockTypes); entries.js does the same.
+const blockTypes = Object.fromEntries(blockSchema.anyOf.map((option) => [option.properties.type.const, option]));
+
 const aboutEntry = {
   collection: 'pages',
   slug: 'about',
@@ -93,7 +97,7 @@ const aboutEntry = {
       standfirst: { type: 'string' },
       metaDescription: { type: 'string' },
       navLabel: { type: 'string', enum: ['About', 'Company'] },
-      blocks: { type: 'array', items: blockSchema },
+      blocks: { type: 'array', items: blockSchema, blockTypes },
     },
   },
   blockArrays: ['blocks'],
@@ -429,6 +433,159 @@ await check('built pages: every page in the build is listed, including pages no 
     fs.writeFileSync(path.join(distDir, 'contact.html'), '');
     fs.writeFileSync(path.join(distDir, '_astro', 'x.js'), '');
     assert.deepEqual((await listBuiltPagePaths(distDir)).sort(), ['/', '/contact', '/services/all']);
+  } finally {
+    fs.rmSync(distDir, { recursive: true, force: true });
+  }
+});
+
+console.log('\n🧪 doctor: review findings (control paths, hidden markup, links, block order, unchecked pages)\n' + '='.repeat(40));
+
+const heroEntry = {
+  collection: 'pages', slug: 'home', pagePath: '/',
+  schema: { type: 'object', properties: { hero: { type: 'object', properties: { headline: { type: 'string' } } } } },
+  data: { hero: { headline: 'Welcome' } },
+};
+
+await check('control paths: annotating a nested OBJECT covers nothing and is an unknown name (only hero.headline is a control)', async () => {
+  const page = '<html><body><section data-aa-field="hero"><h1>Welcome</h1></section></body></html>';
+  const pages = await pagesFor(page, '/');
+  const report = computeFieldCoverage([heroEntry], pages);
+  assert.deepEqual({ total: report.totalFields, covered: report.coveredFields, missing: report.entries[0]?.missing }, { total: 1, covered: 0, missing: ['hero.headline'] });
+  assert.deepEqual(findUnknownFieldNames([heroEntry], pages), [{ pagePath: '/', name: 'hero' }]);
+  // Control: the control's own name covers it and is known.
+  const fixed = await pagesFor('<html><body><section><h1 data-aa-field="hero.headline">Welcome</h1></section></body></html>', '/');
+  assert.equal(computeFieldCoverage([heroEntry], fixed).coveredFields, 1);
+  assert.deepEqual(findUnknownFieldNames([heroEntry], fixed), []);
+});
+
+await check('control paths: strings get a control per item, a one-property object list per item field, a 2+ property list one control', async () => {
+  const entry = {
+    collection: 'pages', slug: 'home', pagePath: '/',
+    schema: {
+      type: 'object',
+      properties: {
+        credentials: { type: 'array', items: { type: 'string' } },
+        points: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' } } } },
+        cards: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } } } },
+        image: { type: 'string' },
+      },
+    },
+    data: {
+      credentials: ['Member of the example guild'],
+      points: [{ text: 'A point worth making here' }],
+      cards: [{ title: 'Card title for the example', body: 'Card body text for the example' }],
+      image: '/images/x.jpg',
+    },
+  };
+  const good = await pagesFor(`<html><body>
+    <p data-aa-field="credentials[0]">Member of the example guild</p>
+    <p data-aa-field="points[0].text">A point worth making here</p>
+    <h3 data-aa-field="cards">Card title for the example</h3><p data-aa-field="cards">Card body text for the example</p>
+    <img data-aa-field="image" src="/images/x.jpg"></body></html>`, '/');
+  assert.deepEqual(findUnknownFieldNames([entry], good), []);
+  const report = computeFieldCoverage([entry], good);
+  assert.deepEqual({ total: report.totalFields, covered: report.coveredFields }, { total: 4, covered: 4 });
+  // The list containers of strings and of one-property objects are not controls;
+  // neither is an item of a 2+ property list.
+  const bad = await pagesFor(`<html><body>
+    <ul data-aa-field="credentials"><li>Member of the example guild</li></ul>
+    <ul data-aa-field="points"><li>A point worth making here</li></ul>
+    <h3 data-aa-field="cards[0].title">Card title for the example</h3><p>Card body text for the example</p></body></html>`, '/');
+  assert.deepEqual(findUnknownFieldNames([entry], bad).map((item) => item.name), ['credentials', 'points', 'cards[0].title']);
+  assert.equal(computeFieldCoverage([entry], bad).coveredFields, 0);
+});
+
+await check('links: an annotation inside a link (the review\'s exact input) is reported', async () => {
+  const pages = await pagesFor('<html><body><a href="/x"><span data-aa-field="headline">Welcome</span></a></body></html>', '/');
+  assert.deepEqual(findAnnotatedLinks(pages), [{ pagePath: '/', name: 'headline', problem: 'is inside a link' }]);
+});
+
+await check('hidden markup: an annotation inside <template> or a [hidden] element covers nothing', async () => {
+  const entry = { collection: 'pages', slug: 'home', pagePath: '/', schema: { type: 'object', properties: { headline: { type: 'string' } } }, data: { headline: 'Welcome' } };
+  for (const hiddenCopy of [
+    '<template><h1 data-aa-field="headline">Welcome</h1></template>',
+    '<div hidden><h1 data-aa-field="headline">Welcome</h1></div>',
+    '<h1 hidden data-aa-field="headline">Welcome</h1>',
+    '<noscript><h1 data-aa-field="headline">Welcome</h1></noscript>',
+  ]) {
+    const report = computeFieldCoverage([entry], await pagesFor(`<html><body>${hiddenCopy}<h1>Welcome</h1></body></html>`, '/'));
+    assert.deepEqual({ html: hiddenCopy, total: report.totalFields, covered: report.coveredFields }, { html: hiddenCopy, total: 1, covered: 0 });
+  }
+  // Control: the same annotation on the visible heading covers it.
+  const visible = computeFieldCoverage([entry], await pagesFor('<html><body><h1 data-aa-field="headline">Welcome</h1></body></html>', '/'));
+  assert.equal(visible.coveredFields, 1);
+});
+
+await check('hidden markup: block roots and entry references inside <template> are not on the page', async () => {
+  const scan = await scanHtml('<html><body><template><section data-block-index="0" data-aa-entry="services/x"></section></template><section data-block-index="0"></section></body></html>');
+  assert.deepEqual(scan.blockIndexes, [0]);
+  assert.deepEqual(scan.entryRefs, []);
+});
+
+await check('implicit body: a page with no <body> tag still has its text read', async () => {
+  const entry = { collection: 'pages', slug: 'home', pagePath: '/', schema: { type: 'object', properties: { headline: { type: 'string' } } }, data: { headline: 'Welcome' } };
+  const report = computeFieldCoverage([entry], await pagesFor('<h1>Welcome</h1>', '/'));
+  assert.deepEqual({ total: report.totalFields, missing: report.entries[0]?.missing }, { total: 1, missing: ['headline'] });
+  // ...but a <title> in an implicit <head> is still not body text.
+  const titled = computeFieldCoverage([entry], await pagesFor('<title>Welcome</title><p>Other text</p>', '/'));
+  assert.equal(titled.totalFields, 0);
+});
+
+const twoBlocks = {
+  collection: 'pages', slug: 'home', pagePath: '/', blockArrays: ['blocks'],
+  schema: { type: 'object', properties: { blocks: { type: 'array', items: blockSchema, blockTypes } } },
+  data: { blocks: [{ type: 'heading', text: 'One' }, { type: 'heading', text: 'Two' }] },
+};
+
+await check('block order: roots in the right order pass; out of order, duplicated, extra or nested are reported', async () => {
+  const blockReport = async (inner) => findUnindexedBlocks([twoBlocks], await pagesFor(`<html><body>${inner}</body></html>`, '/'));
+  const good = await blockReport('<section data-block-index="0"></section><section data-block-index="1"></section>');
+  assert.deepEqual(good.pages, []);
+  assert.equal(good.indexedBlocks, 2);
+  for (const [label, inner] of [
+    ['out of order', '<section data-block-index="1"></section><section data-block-index="0"></section>'],
+    ['duplicated', '<section data-block-index="0"></section><section data-block-index="0"></section><section data-block-index="1"></section>'],
+    ['extra', '<section data-block-index="0"></section><section data-block-index="1"></section><section data-block-index="2"></section>'],
+    ['nested', '<section data-block-index="0"><div data-block-index="1"></div></section>'],
+  ]) {
+    const report = await blockReport(inner);
+    assert.equal(report.pages.length, 1, `${label}: ${JSON.stringify(report)}`);
+    assert.ok(report.pages[0].problems?.length > 0, `${label}: names the problem`);
+  }
+});
+
+await check('unmapped: an entry with no page and no card is carried in the report, not dropped', async () => {
+  const report = computeFieldCoverage([homeEntry, ...serviceEntries], await pagesFor(HOME_WITH_CARDS.replace(/ data-aa-entry="[^"]*"/g, ''), '/'));
+  assert.deepEqual(report.unmapped, [{ collection: 'services', slug: 'garden-design' }, { collection: 'services', slug: 'hedge-trimming' }]);
+});
+
+await check('a missing or empty build is not reported as clean', async () => {
+  const { runDoctor } = await import('../server/doctor/index.js');
+  const emptyDist = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-empty-'));
+  try {
+    for (const distDir of [emptyDist, path.join(emptyDist, 'does-not-exist')]) {
+      const report = await runDoctor({ projectRoot: emptyDist, distDir, build: false, phases: ['built'], loadEntries: async () => ({ entries: [aboutEntry] }) });
+      const severities = Object.fromEntries(report.results.map((result) => [result.id, result.severity]));
+      for (const [id, severity] of Object.entries(severities)) {
+        assert.ok(severity === 'warn' || severity === 'fail', `${distDir}: ${id} is ${severity}`);
+      }
+    }
+  } finally {
+    fs.rmSync(emptyDist, { recursive: true, force: true });
+  }
+});
+
+await check('an entry whose page was not built keeps coverage from passing, and the message says so', async () => {
+  const { runDoctor } = await import('../server/doctor/index.js');
+  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-partial-'));
+  try {
+    fs.mkdirSync(path.join(distDir, 'about'));
+    fs.writeFileSync(path.join(distDir, 'about', 'index.html'), ANNOTATED_PAGE);
+    const missingPage = { ...heroEntry, slug: 'contact', pagePath: '/contact' };
+    const report = await runDoctor({ projectRoot: distDir, distDir, build: false, phases: ['built'], loadEntries: async () => ({ entries: [aboutEntry, missingPage] }) });
+    const coverage = report.results.find((result) => result.id === 'click-to-edit-coverage');
+    assert.equal(coverage.severity, 'warn', JSON.stringify(coverage));
+    assert.match(coverage.message, /1 entr(y|ies) .*not built/, coverage.message);
   } finally {
     fs.rmSync(distDir, { recursive: true, force: true });
   }
