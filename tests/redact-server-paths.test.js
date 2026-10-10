@@ -132,6 +132,29 @@ try {
     assert.equal(cleanCheckOutput(`built ${projectRoot}/dist/index.html`), 'built dist/index.html');
   });
 
+  check('a quoted path is redacted whole: a sibling with a space after the server dir name reveals nothing', () => {
+    const out = redactServerPaths("open '/srv/site backup/private/a.md' failed", ['/srv/site']);
+    assert.ok(!out.includes('backup') && !out.includes('private'), out);
+    assert.ok(out.includes("'a.md'"), `positive control: the file name stays: ${out}`);
+  });
+
+  check('a double-quoted path with an apostrophe in it is redacted whole', () => {
+    const out = redactServerPaths('open "/srv/client\'s site/private/a.md" failed', ['/srv/site']);
+    assert.ok(!out.includes('site/private') && !out.includes("client's"), out);
+    assert.ok(out.includes('"a.md"'), `positive control: the file name stays: ${out}`);
+  });
+
+  check('a URL that contains a server dir path is left alone', () => {
+    const text = 'see http://example.com:4321/srv/site/x.md and https://example.com/srv/site';
+    assert.equal(redactServerPaths(text, ['/srv/site']), text);
+  });
+
+  check('controls: a server dir is still stripped quoted, unquoted and bare', () => {
+    assert.equal(redactServerPaths("x '/srv/site/y.md' z", ['/srv/site']), "x 'y.md' z");
+    assert.equal(redactServerPaths('x /srv/site/y.md z', ['/srv/site']), 'x y.md z');
+    assert.equal(redactServerPaths('/srv/site is not writable', ['/srv/site']), '. is not writable');
+  });
+
   check('a server dir is stripped only at a path boundary, not inside a longer sibling name', () => {
     const out = redactServerPaths('see /srv/site-b/x.md and /srv/site/y.md and /srv/site', ['/srv/site']);
     assert.ok(!out.includes('.-b'), `a sibling name was mangled: ${out}`);

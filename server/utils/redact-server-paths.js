@@ -89,13 +89,34 @@ function stripDirectories(text, directories) {
       return encodedPath;
     }
   });
+  // A quoted absolute path is one token, spaces and the other quote character
+  // included ("/srv/client's site/x", '/srv/site backup/x'): redact it whole.
+  cleaned = cleaned.replace(/'(\/[^'\n]*)'|"(\/[^"\n]*)"/g, (match, single, double) => {
+    const quote = single !== undefined ? "'" : '"';
+    return quote + redactAbsoluteToken(single ?? double, directories) + quote;
+  });
   for (const prefix of directories) {
-    // The bare directory only at a path boundary: `/srv/site` must not match
-    // inside a sibling such as `/srv/site-b/x`.
+    // Only at a path start (not inside a URL or another path), and the bare
+    // directory only where the path ends: `/srv/site` must not match inside
+    // `/srv/site-b/x` or `http://host/srv/site/x`.
     const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    cleaned = cleaned.split(`${prefix}/`).join('').replace(new RegExp(`${escaped}(?![\\w.-])`, 'g'), '.');
+    cleaned = cleaned
+      .replace(new RegExp(`(?<![\\w./:~-])${escaped}/`, 'g'), '')
+      .replace(new RegExp(`(?<![\\w./:~-])${escaped}(?=$|[\\s'"\`:,;)\\]])`, 'g'), '.');
   }
   return cleaned.trim();
+}
+
+/**
+ * One whole absolute path: relative to the server directory it is inside, the
+ * directory itself as `.`, anything else reduced to its last segment.
+ */
+function redactAbsoluteToken(absolutePath, directories) {
+  for (const directory of directories) {
+    if (absolutePath === directory) return '.';
+    if (absolutePath.startsWith(`${directory}/`)) return absolutePath.slice(directory.length + 1);
+  }
+  return absolutePath.includes('/', 1) ? path.basename(absolutePath) : absolutePath;
 }
 
 /**
@@ -155,8 +176,7 @@ export function redactServerPaths(text, serverPaths = []) {
     .replace(/(['"])((?:\.\.\/)+[^'"\n]+)\1/g, (match, quote, relativePath) => quote + redactRelativeClimb(relativePath, directories) + quote)
     .replace(/(^|[\s"'(=:])((?:\.\.\/)+[^\s"'()]+)/g, (match, lead, relativePath) => lead + redactRelativeClimb(relativePath, directories));
   return stripDirectories(climbsResolved, directories)
-    // A quoted absolute path, spaces and all, then an unquoted one.
-    .replace(/(['"])\/([^'"\n]*\/[^'"\n]*)\1/g, (match, quote, absolutePath) => quote + path.basename(`/${absolutePath}`) + quote)
+    // Any other unquoted absolute path (quoted ones were redacted whole above).
     .replace(/(^|[\s"'(=:])\/(?:[^\s"'()/]+\/)+([^\s"'()/]*)/g, '$1$2');
 }
 
