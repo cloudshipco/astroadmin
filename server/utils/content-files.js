@@ -19,9 +19,8 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import matter from 'gray-matter';
 import { getConfig } from '../config.js';
-import { dateFieldsFromSchema, orderLike, serializeJson, serializeMarkdown } from './content-format.js';
+import { dateFieldsFromSchema, orderLike, parseFrontmatter, serializeJson, serializeMarkdown } from './content-format.js';
 import { loadSchemas } from './collections.js';
 import {
   getGlobBaseDirectory,
@@ -210,7 +209,7 @@ export async function readContent(collection, slug, locale = null) {
   if (path.extname(filePath).toLowerCase() === '.json') {
     return { type: 'data', data: JSON.parse(raw), body: null, filePath, locale };
   }
-  const parsed = matter(raw);
+  const parsed = parseFrontmatter(raw);
   return { type: 'content', data: parsed.data, body: parsed.content, filePath, locale };
 }
 
@@ -298,7 +297,7 @@ export async function writeContent(collection, slug, { data, body, type, keepSto
       }
       content = serializeJson(orderLike(original, data), originalText);
     } else {
-      const bodyText = keepStoredBody ? (originalText === null ? '' : matter(originalText, {}).content) : body || '';
+      const bodyText = keepStoredBody ? (originalText === null ? '' : parseFrontmatter(originalText).content) : body || '';
       content = serializeMarkdown(bodyText, data, originalText, { dateFields: dateFieldsFromSchema(info.jsonSchema) });
     }
     await atomicWriteFile(filePath, content);

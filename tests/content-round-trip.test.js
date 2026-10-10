@@ -281,6 +281,24 @@ try {
     assert.match(written, /^publishDate: 2026-05-01$/m, written);
   });
 
+  await check('an entry with broken frontmatter fails to read EVERY time, never as empty data with the YAML in its body', async () => {
+    // gray-matter caches by input text when called without options: the first
+    // parse throws, and a second read of the same text returned data {} and the
+    // whole file as the body, which the next save would have written back.
+    const broken = '---\ntitle: [unclosed\n---\nBody\n';
+    fsSync.writeFileSync(path.join(tmpRoot, 'src/content/pages/broken.md'), broken);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      let entry = null;
+      try {
+        entry = await readContent('pages', 'broken');
+      } catch {
+        continue;
+      }
+      assert.fail(`read ${attempt} returned data ${JSON.stringify(entry.data)} and body ${JSON.stringify(entry.body)}`);
+    }
+    fsSync.rmSync(path.join(tmpRoot, 'src/content/pages/broken.md'));
+  });
+
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed, ${failed} failed.\n`);
   if (failed > 0) process.exitCode = 1;

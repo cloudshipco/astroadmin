@@ -18,7 +18,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import matter from 'gray-matter';
+import { parseFrontmatter } from './content-format.js';
 import { getConfig } from '../config.js';
 import { loadSchemas } from './collections.js';
 import { activeStoreMode } from './content-store.js';
@@ -56,7 +56,7 @@ async function collectGlobCollectionEntries(name, schema, i18nConfig) {
       body = null;
     } else {
       type = 'content';
-      const parsed = matter(raw);
+      const parsed = parseFrontmatter(raw);
       data = parsed.data;
       body = parsed.content;
     }

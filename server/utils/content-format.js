@@ -53,6 +53,17 @@ function parseTimestamp(text) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+/**
+ * Parse a markdown file's frontmatter. Always pass an options object: called
+ * without one, gray-matter caches by input text, so after a parse of invalid
+ * frontmatter throws, the next parse of the same text returns data {} and the
+ * whole file as the body, which a save would then write back.
+ * @param {string} raw
+ */
+export function parseFrontmatter(raw) {
+  return matter(raw, {});
+}
+
 export function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date);
 }
