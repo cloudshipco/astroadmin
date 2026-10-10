@@ -102,6 +102,46 @@ await check('open the gallery and save without a change: the stored value is kep
   assert.deepEqual(data.gallery, [], JSON.stringify(data));
 });
 
+const richSchema = z.toJSONSchema(z.object({
+  title: z.string(),
+  gallery: z.array(z.object({
+    src: z.string(),
+    alt: z.string().optional(),
+    note: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+  })).optional(),
+}), { unrepresentable: 'any' });
+
+await check('after an add and a remove, a surviving image keeps its empty optional fields, on this save and the next', async () => {
+  document.body.innerHTML = '';
+  const stored = { title: 'T', gallery: [{ src: '/images/kept.png', alt: '', note: '', tags: [] }] };
+  const form = document.createElement('form');
+  form.innerHTML = generateForm(richSchema, stored);
+  document.body.appendChild(form);
+  setupFormHandlers(form, () => {});
+  bindOriginalValues(form, structuredClone(stored));
+  click(form.querySelector('[data-edit-gallery]'));
+  await settle();
+  const galleryModal = document.getElementById('galleryEditorModal');
+  click(galleryModal.querySelector('[data-add]'));
+  await settle();
+  const library = document.getElementById('imageLibraryModal');
+  click(library.querySelector('.image-library-item[data-url="/images/a.png"]'));
+  click(library.querySelector('[data-select]'));
+  await settle();
+  assert.ok(galleryModal.querySelector('[data-remove="1"]'), 'positive control: the second image was added');
+  click(galleryModal.querySelector('[data-remove="1"]'));
+  click(galleryModal.querySelector('[data-save]'));
+  await settle();
+  assert.deepEqual(extractFormData(form, richSchema).gallery, stored.gallery, 'first save');
+  const title = form.querySelector('[name="title"]');
+  title.value = 'T2';
+  title.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const second = extractFormData(form, richSchema);
+  assert.equal(second.title, 'T2', 'positive control: the title edit is read');
+  assert.deepEqual(second.gallery, stored.gallery, 'a later title-only save');
+});
+
 console.log('='.repeat(40));
 console.log(`\n📊 ${passed} checks passed, ${failed} failed.\n`);
 if (failed > 0) process.exit(1);

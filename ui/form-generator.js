@@ -1413,6 +1413,15 @@ function extractValues(container, schema) {
   container.querySelectorAll('input[data-array-data]').forEach((input) => {
     for (const itemPath of finalItemPaths(getNestedValue(data, input.name), input.name)) kept.add(itemPath);
   });
+  // A gallery's images come from its lossless JSON value, never from form
+  // controls, so they are final too: a structural edit (data-structural-edit)
+  // makes the gallery read from the DOM, and cleanup must not then strip a
+  // surviving image's empty optional fields. The emptied gallery itself can
+  // still be dropped.
+  container.querySelectorAll('.gallery-field[data-field]').forEach((gallery) => {
+    const listPath = gallery.dataset.field;
+    for (const itemPath of finalItemPaths(getNestedValue(data, listPath), listPath)) kept.add(itemPath);
+  });
 
   // Strip empty optional fields, but keep required ones (see cleanEmptyValues) —
   // walking the schema so this holds at every level, not just the top.
