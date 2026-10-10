@@ -15,11 +15,11 @@
 import express from 'express';
 import path from 'path';
 import simpleGit from 'simple-git';
-import { recordDoctorAfterCheck } from '../doctor/editor.js';
+import { recordDoctorAfterCheck, redactServerPaths } from '../doctor/editor.js';
 import { getConfig } from '../config.js';
 import { deploy, validateDeployConfig } from '../utils/deploy.js';
 import { runProductionBuild } from '../utils/build.js';
-import { checkHeadWithAstro, cleanCheckOutput } from '../utils/astro-check.js';
+import { checkHeadWithAstro } from '../utils/astro-check.js';
 import { listSlugs } from '../utils/content.js';
 // Shared with the editor's "View live site" link (ui/ is served to the browser).
 import { resolveLiveUrl } from '../../ui/live-url.js';
@@ -337,7 +337,9 @@ export async function publishHandler(req, res) {
 /**
  * What the editor is told when publishing fails outright. A missing git
  * identity (the first publish on a fresh machine or container) gets the fix;
- * anything else keeps git's text with server paths stripped.
+ * anything else keeps git's text with server paths redacted: the given roots
+ * (and their resolved paths) made relative, any other absolute path reduced
+ * to its last segment (the doctor's redaction, redactServerPaths).
  * @param {Error} error
  * @param {string[]} serverPaths - absolute paths to strip from the text
  * @returns {string}
@@ -349,7 +351,7 @@ export function publishFailureMessage(error, serverPaths = []) {
       + 'Set one in the site repository (git config user.name "Your Name" and git config user.email you@example.com), '
       + 'or set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL for AstroAdmin, then publish again.';
   }
-  return cleanCheckOutput(text, serverPaths) || 'Publishing failed.';
+  return redactServerPaths(text, serverPaths).trim() || 'Publishing failed.';
 }
 
 /**

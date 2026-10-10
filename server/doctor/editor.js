@@ -60,12 +60,33 @@ function bounded(text, maxLength) {
 }
 
 /**
- * An error for the API: the given server directories made relative, any other
- * absolute path reduced to its last segment, whitespace collapsed, bounded.
+ * Error text that names no server path: the given server directories (and
+ * their resolved paths, so a symlinked checkout is caught) made relative, then
+ * any other absolute path reduced to its last segment (an external git
+ * directory, a resolved temp dir). URLs are kept: `https://host/x` has no
+ * path start after a delimiter. Shared by the doctor and the publish route.
+ * @param {string} text
+ * @param {Array<string|null|undefined>} serverPaths
+ * @returns {string}
+ */
+export function redactServerPaths(text, serverPaths = []) {
+  const directories = serverPaths.filter(Boolean);
+  for (const directory of [...directories]) {
+    try {
+      directories.push(fs.realpathSync(directory));
+    } catch {
+      // gone: nothing more to strip
+    }
+  }
+  return cleanCheckOutput(String(text), directories)
+    .replace(/(^|[\s"'(=:])\/(?:[^\s"'()/]+\/)+([^\s"'()/]*)/g, '$1$2');
+}
+
+/**
+ * An error for the API: server paths redacted, whitespace collapsed, bounded.
  */
 function reasonForApi(text, serverPaths) {
-  return bounded(cleanCheckOutput(String(text), serverPaths)
-    .replace(/(^|[\s"'(=:])\/(?:[^\s"'()/]+\/)+([^\s"'()/]*)/g, '$1$2')
+  return bounded(redactServerPaths(text, serverPaths)
     .replace(/\s+/g, ' ')
     .trim(), MAX_REASON_LENGTH);
 }

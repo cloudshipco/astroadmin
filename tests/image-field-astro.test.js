@@ -25,6 +25,7 @@ import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
 import { spawnSync } from 'child_process';
+import { linkNodeModules, sharedAstroStore } from './link-node-modules.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-image-field-')));
@@ -64,7 +65,10 @@ function png(red, green, blue) {
   ]);
 }
 
-fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(projectRoot, 'node_modules'), 'dir');
+// Each package linked, but not node_modules/.astro: `astro build` writes its
+// content data store there, which a wholesale link would share with this
+// checkout and every other test site.
+linkNodeModules(repoRoot, projectRoot);
 writeProjectFile('package.json', JSON.stringify({ type: 'module' }));
 writeProjectFile('src/content.config.ts', `import { defineCollection, z } from 'astro:content';
 import { glob, file } from 'astro/loaders';
@@ -213,6 +217,12 @@ await check('entries saved with those values build, and each image is processed'
   for (const id of ['data-post="a"', 'data-post="2024/b"', 'data-post="c"', 'data-person="ada"']) {
     assert.match(html, new RegExp(`${id}>/_astro/[^<]+\\.png<`), `${id} not processed: ${html}`);
   }
+});
+
+await check('the builds wrote their own Astro data store, not this checkout\'s', () => {
+  const shared = sharedAstroStore(repoRoot, projectRoot);
+  assert.equal(shared, null, `node_modules/.astro resolves into this checkout: ${shared}`);
+  assert.ok(fs.existsSync(path.join(projectRoot, 'node_modules', '.astro')), 'positive control: the builds wrote a store in the site');
 });
 
 await check('refusals: undeclared collection, traversal slug, bad filename, missing image', async () => {

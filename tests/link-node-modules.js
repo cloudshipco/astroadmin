@@ -17,6 +17,28 @@
 import fs from 'fs';
 import path from 'path';
 
+/**
+ * Where the site's Astro data store would be written, if that is inside this
+ * checkout's node_modules; null when the site has its own. Compares RESOLVED
+ * paths: a site whose whole node_modules is a link (or sits under a linked
+ * parent directory) has a node_modules/.astro that is a real directory, not a
+ * link, and is still this checkout's. An lstat of the store alone misses it.
+ * @param {string} repoRoot - this checkout
+ * @param {string} siteDir - the throwaway site
+ * @returns {string|null}
+ */
+export function sharedAstroStore(repoRoot, siteDir) {
+  const checkoutModules = fs.realpathSync(path.join(repoRoot, 'node_modules'));
+  const siteModules = path.join(siteDir, 'node_modules');
+  if (!fs.existsSync(siteModules)) return null;
+  const store = path.join(siteModules, '.astro');
+  const resolved = fs.existsSync(store)
+    ? fs.realpathSync(store)
+    : path.join(fs.realpathSync(siteModules), '.astro');
+  const inside = resolved === checkoutModules || resolved.startsWith(checkoutModules + path.sep);
+  return inside ? resolved : null;
+}
+
 export function linkNodeModules(repoRoot, siteDir, { skip = [] } = {}) {
   const target = path.join(siteDir, 'node_modules');
   fs.mkdirSync(target, { recursive: true });

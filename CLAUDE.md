@@ -87,6 +87,12 @@ runner aggregating them). Most run server-less and need env vars:
   The rule it pins: an empty array survives `extractFormData` only when its key is REQUIRED;
   an empty array the schema proves optional is dropped (`[]` fails `.optional().min(1)`),
   inside block items too.
+- `bun tests/date-marker.test.js` — the schema parser's `x-astroadmin-date` marker for zod 3
+  (`zod/v3`) and zod 4: a real date is marked through optional/nullable/default/catch, union
+  and discriminated-union branches, intersections, objects and arrays; date-format strings
+  are not. zod 4 marks through its serializer override; zod 3 through `markZod3Dates`, which
+  must walk every wrapper beside its JSON Schema (it once skipped unions, so a new date in a
+  `z.union([z.date(), z.null()])` field was written quoted and failed the schema).
 - `bun tests/content-validation.test.js` — the editor's schema WARNINGS: what a stored entry
   is judged as (dropped required array, nested block field, quoted vs unquoted YAML date,
   `file()` items, an EMPTY required `image()` — the bundled stand-in is `z.string()`, so ''

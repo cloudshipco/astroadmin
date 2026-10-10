@@ -356,37 +356,91 @@ const DATE_MARKER = 'x-astroadmin-date';
 
 /**
  * zod 3 has no serializer override, so walk the zod schema beside its JSON
- * Schema and mark the ZodDate nodes (through optional/nullable/default/effects,
- * objects and arrays).
+ * Schema (as zod-to-json-schema lays it out) and mark the ZodDate nodes:
+ * through the wrappers (optional, nullable, default, catch, effects, branded,
+ * readonly, lazy, a pipeline's input), union and discriminated-union branches,
+ * intersections, objects, records, arrays and tuples. zod 4 needs none of
+ * this: its serializer's override marks a date wherever it sits.
  */
-function markZod3Dates(zodSchema, jsonNode) {
+function markZod3Dates(zodSchema, jsonNode, depth = 0) {
   const def = zodSchema?._def;
-  if (!def || !jsonNode || typeof jsonNode !== 'object') return;
+  if (!def || !jsonNode || typeof jsonNode !== 'object' || depth > 64) return;
+  const next = (childSchema, childNode) => markZod3Dates(childSchema, childNode, depth + 1);
+  // Branches of a union-like node, paired with the zod schemas by position.
+  // zod-to-json-schema keeps a union's options in order as anyOf; when it
+  // collapses primitives into `type: [...]` there is no branch to mark, and
+  // none of those primitives is a date.
+  const pairBranches = (options, branches) => {
+    if (!Array.isArray(branches) || branches.length !== options.length) return;
+    options.forEach((option, index) => next(option, branches[index]));
+  };
   switch (def.typeName) {
     case 'ZodDate':
       jsonNode[DATE_MARKER] = true;
       return;
-    case 'ZodOptional':
+    case 'ZodOptional': {
+      // At the root, an optional serialises as anyOf [{not: {}}, inner].
+      const branches = jsonNode.anyOf;
+      const wrapped = Array.isArray(branches) && branches.length === 2
+        && branches[0] && typeof branches[0] === 'object' && 'not' in branches[0];
+      next(def.innerType, wrapped ? branches[1] : jsonNode);
+      return;
+    }
     case 'ZodDefault':
-      markZod3Dates(def.innerType, jsonNode);
+    case 'ZodCatch':
+    case 'ZodReadonly':
+      next(def.innerType, jsonNode);
+      return;
+    case 'ZodBranded':
+      next(def.type, jsonNode);
+      return;
+    case 'ZodLazy':
+      next(typeof def.getter === 'function' ? def.getter() : null, jsonNode);
       return;
     case 'ZodNullable': {
       const member = (jsonNode.anyOf || []).find((m) => m?.type !== 'null');
-      markZod3Dates(def.innerType, member || jsonNode);
+      next(def.innerType, member || jsonNode);
       return;
     }
     case 'ZodEffects':
-      markZod3Dates(def.schema, jsonNode);
+      next(def.schema, jsonNode);
+      return;
+    case 'ZodPipeline':
+      // The stored value is the pipeline's INPUT; allOf [in, out].
+      next(def.in, Array.isArray(jsonNode.allOf) ? jsonNode.allOf[0] : jsonNode);
+      return;
+    case 'ZodUnion':
+    case 'ZodDiscriminatedUnion': {
+      // zod 3 keeps both kinds' options as an array, serialised in order.
+      const options = def.options;
+      if (!Array.isArray(options)) return;
+      const branches = jsonNode.anyOf || jsonNode.oneOf;
+      // A one-option union serialises as that option itself.
+      if (!branches && options.length === 1) next(options[0], jsonNode);
+      else pairBranches(options, branches);
+      return;
+    }
+    case 'ZodIntersection':
+      if (Array.isArray(jsonNode.allOf) && jsonNode.allOf.length === 2) {
+        next(def.left, jsonNode.allOf[0]);
+        next(def.right, jsonNode.allOf[1]);
+      }
       return;
     case 'ZodObject': {
       const shape = typeof def.shape === 'function' ? def.shape() : def.shape;
       for (const [key, child] of Object.entries(shape || {})) {
-        markZod3Dates(child, jsonNode.properties?.[key]);
+        next(child, jsonNode.properties?.[key]);
       }
       return;
     }
+    case 'ZodRecord':
+      next(def.valueType, jsonNode.additionalProperties);
+      return;
     case 'ZodArray':
-      markZod3Dates(def.type, jsonNode.items);
+      next(def.type, jsonNode.items);
+      return;
+    case 'ZodTuple':
+      if (Array.isArray(jsonNode.items)) def.items.forEach((item, index) => next(item, jsonNode.items[index]));
       return;
     default:
   }

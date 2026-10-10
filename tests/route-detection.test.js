@@ -9,6 +9,11 @@
  * collection `<name>s`, or `<name>` when that is the declared one (`teamIds`
  * -> `team`).
  *
+ * And that a schema reload (clearSchemaCache, which the content-config watcher
+ * calls) re-derives the routes: a collection added for an existing dynamic
+ * page used to stay route-less until restart, because the route cache was
+ * never cleared.
+ *
  *   bun tests/route-detection.test.js
  */
 
@@ -46,6 +51,8 @@ export const collections = {
 writeFile('src/pages/[...slug].astro', '---\n---\n');
 writeFile('src/pages/blog/[post].astro', '---\n---\n');
 writeFile('src/pages/team.astro', '---\n---\n');
+// A dynamic page whose collection is not declared yet (added mid-test).
+writeFile('src/pages/docs/[slug].astro', '---\n---\n');
 
 let passed = 0;
 async function check(name, fn) {
@@ -87,6 +94,22 @@ try {
     const { getCollectionUsedByBlocks } = await import('../server/utils/collections.js');
     assert.deepEqual(await getCollectionUsedByBlocks('testimonials'), [{ type: 'quotes', field: 'testimonialIds' }], 'plural (positive control)');
     assert.deepEqual(await getCollectionUsedByBlocks('team'), [{ type: 'team', field: 'teamIds' }], 'teamIds -> team');
+  });
+
+  await check('a schema reload picks up a collection added for an existing dynamic page', async () => {
+    const { clearSchemaCache, getCollectionNames } = await import('../server/utils/collections.js');
+    assert.equal((await detectPreviewRoutes()).docs, undefined, 'control: docs is not declared yet, so no route');
+    const configPath = path.join(tmpRoot, 'src/content.config.ts');
+    const original = fs.readFileSync(configPath, 'utf8');
+    const added = original.replace('export const collections = {',
+      "export const collections = {\n  docs: defineCollection({ loader: glob({ pattern: '**/*.md', base: './src/content/docs' }), schema: z.object({ title: z.string() }) }),");
+    assert.notEqual(added, original, 'the config edit applied');
+    fs.writeFileSync(configPath, added);
+    clearSchemaCache();
+    assert.ok((await getCollectionNames()).includes('docs'), 'control: the reloaded schemas declare docs');
+    const reloaded = await detectPreviewRoutes();
+    assert.equal(reloaded.docs, '/docs/{slug}', JSON.stringify(reloaded));
+    assert.equal(reloaded.posts, '/blog/{slug}', 'existing routes survive the reload');
   });
 
   console.log('='.repeat(40));

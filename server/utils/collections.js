@@ -22,6 +22,15 @@ import { isContentPathError } from './glob-files.js';
 let cachedSchemas = null;
 let schemasLoading = null;
 let schemaWatcher = null;
+// Bumped by every clearSchemaCache, so caches derived from the schemas (the
+// preview routes, which keep only declared collections) can tell a reload
+// happened, including one that lands while they are being computed.
+let schemaGeneration = 0;
+
+/** The current schema generation (see clearSchemaCache). */
+export function getSchemaGeneration() {
+  return schemaGeneration;
+}
 
 /**
  * Load and cache schemas from config.ts
@@ -62,6 +71,7 @@ export async function loadSchemas() {
 export function clearSchemaCache() {
   cachedSchemas = null;
   schemasLoading = null;
+  schemaGeneration++;
 }
 
 /**

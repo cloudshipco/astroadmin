@@ -168,7 +168,12 @@ try {
     await deleteContent('team', 'ada');
     const after = fsSync.readFileSync(teamPath, 'utf-8');
     assert.equal(JSON.parse(after).length, 1, 'deleted');
-    assert.ok(after.includes('"skills": ["compilers"]'), `grace kept as written:\n${after}`);
+    // The whole surviving entry, byte for byte as written: a check on one of
+    // its lines passed with its name (or any other field) changed.
+    const graceStart = TEAM_JSON.indexOf('  {\n    "id": "grace"');
+    assert.ok(graceStart > 0, 'control: the fixture holds grace as written');
+    const graceText = TEAM_JSON.slice(graceStart, TEAM_JSON.lastIndexOf('  }') + 3);
+    assert.equal(after, `[\n${graceText}\n]\n`, `grace kept as written:\n${after}`);
   });
 
   await check('file(): a file with one-item-per-line arrays keeps that style for the edited entry', async () => {

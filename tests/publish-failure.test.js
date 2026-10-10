@@ -79,9 +79,78 @@ await check('any other error keeps its text, with server paths stripped', () => 
   assert.ok(!message.includes(repo), `server path leaked: ${message}`);
 });
 
-await check('the editor shows the server\'s message, not just the error label', () => {
+await check('a path through a symlinked checkout, or outside every configured root, is not named', () => {
+  // The configured root is a symlink; git reports the resolved path.
+  const realSite = path.join(scratch, 'real-site');
+  const linkedSite = path.join(scratch, 'linked-site');
+  fs.mkdirSync(realSite);
+  fs.symlinkSync(realSite, linkedSite, 'dir');
+  const external = '/srv/elsewhere/git-dirs/site.git';
+  const message = publishFailureMessage(new Error(
+    `fatal: Unable to create '${realSite}/.git/index.lock': File exists.\n`
+    + `error: could not lock config file ${external}/config: Permission denied`
+  ), [linkedSite]);
+  assert.ok(message.includes('Unable to create'), `control: the git text is kept: ${message}`);
+  assert.ok(message.includes('index.lock'), `control: the file name is kept: ${message}`);
+  assert.ok(!message.includes(realSite), `resolved checkout path leaked: ${message}`);
+  assert.ok(!message.includes(scratch), `server path leaked: ${message}`);
+  assert.ok(!message.includes('/srv/elsewhere'), `external git directory leaked: ${message}`);
+  assert.ok(!/(^|[\s'"(=:])\/[^\s'"()/]+\//m.test(message), `an absolute path survived: ${message}`);
+});
+
+await check('a remote URL in a push error is kept (the redaction is for server paths only)', () => {
+  const message = publishFailureMessage(new Error('fatal: unable to access \'https://git.example.com/site-a/site.git/\': Could not resolve host'), []);
+  assert.ok(message.includes('https://git.example.com/site-a/site.git/'), message);
+});
+
+await check('the editor shows the server\'s message, not just the error label', async () => {
+  // The dashboard's real Publish click handler, extracted from ui/dashboard.js
+  // (it boots on import) and run with its globals stubbed, answering the 500
+  // body the publish route sends. A source check here passed with the toast
+  // reduced to (result.error); this reads the notification it emits.
   const source = fs.readFileSync(path.join(repoRoot, 'ui/dashboard.js'), 'utf8');
-  assert.ok(!source.includes("'Failed to publish: ' + result.error"), 'the publish toast still shows only result.error');
+  const handler = source.match(/document\.getElementById\('publishBtn'\)\.addEventListener\('click', async \(\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(handler, 'the Publish click handler was not found in ui/dashboard.js');
+  const serverMessage = publishFailureMessage(identityError, [repo, scratch]);
+  const body = { success: false, error: 'Failed to publish', message: serverMessage };
+  let click = null;
+  const button = {
+    textContent: 'Publish', disabled: false,
+    addEventListener: (type, listener) => { if (type === 'click') click = listener; },
+  };
+  const notifications = [];
+  const requests = [];
+  const stubs = {
+    document: { getElementById: (id) => (id === 'publishBtn' ? button : null), querySelector: () => null },
+    window: { dispatchEvent() {} },
+    CustomEvent: class { constructor(type) { this.type = type; } },
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return { status: 500, json: async () => body };
+    },
+    showPublishDialog: async () => 'Content update',
+    getCurrentPagePath: () => null,
+    liveSiteHref: () => null,
+    publicUrl: '',
+    fetchLiveHash: async () => null,
+    updateChangesBadge() {},
+    showPublishStatus: () => ({ update() {} }),
+    pollUntilLive() {},
+    friendlyPublishMessage: () => 'published',
+    showPublishProblems: () => notifications.push({ text: 'problems panel', type: 'panel' }),
+    showNotification: (text, type) => notifications.push({ text, type }),
+    console: { log() {}, warn() {}, error() {} },
+  };
+  new Function(...Object.keys(stubs), handler)(...Object.values(stubs));
+  assert.ok(click, 'the handler registered a click listener');
+  await click();
+  assert.equal(requests.length, 1, 'positive control: the handler posted to the publish route');
+  assert.equal(requests[0].url, '/api/publish');
+  assert.equal(notifications.length, 1, JSON.stringify(notifications));
+  assert.equal(notifications[0].type, 'error');
+  assert.equal(notifications[0].text, `Failed to publish: ${serverMessage}`, notifications[0].text);
+  assert.match(notifications[0].text, /user\.email/, 'the toast carries the fix');
+  assert.equal(button.disabled, false, 'the button is re-enabled');
 });
 
 fs.rmSync(scratch, { recursive: true, force: true });

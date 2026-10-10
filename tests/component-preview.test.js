@@ -17,7 +17,7 @@ import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { linkNodeModules } from './link-node-modules.js';
+import { linkNodeModules, sharedAstroStore } from './link-node-modules.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const siteDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-component-preview-')));
@@ -93,9 +93,8 @@ try {
   };
 
   await check('the site does not share this checkout\'s Astro data store (node_modules/.astro)', async () => {
-    const siteStore = path.join(siteDir, 'node_modules', '.astro');
-    const shared = fs.existsSync(siteStore) && fs.lstatSync(siteStore).isSymbolicLink();
-    assert.ok(!shared, 'node_modules/.astro is a link into this checkout, so test sites share one content store');
+    const shared = sharedAstroStore(repoRoot, siteDir);
+    assert.equal(shared, null, `the site's node_modules/.astro resolves into this checkout (${shared}), so test sites share one content store`);
     assert.ok(fs.existsSync(path.join(siteDir, 'node_modules', '.bin')), 'positive control: .bin is still linked');
   });
 

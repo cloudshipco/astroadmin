@@ -6,10 +6,12 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { config } from '../config.js';
-import { getCollectionNames } from './collections.js';
+import { getCollectionNames, getSchemaGeneration } from './collections.js';
 
-// Cache for detected routes
+// Cache for detected routes, valid for one schema generation: the routes keep
+// only DECLARED collections, so a schema reload must re-derive them.
 let cachedRoutes = null;
+let cachedRoutesGeneration = -1;
 
 /**
  * Pluralize a word (simple English rules)
@@ -58,7 +60,8 @@ function extractParamName(filename) {
  * Returns a map of collection name -> route pattern
  */
 export async function detectPreviewRoutes() {
-  if (cachedRoutes) {
+  const generation = getSchemaGeneration();
+  if (cachedRoutes && cachedRoutesGeneration === generation) {
     return cachedRoutes;
   }
 
@@ -72,7 +75,12 @@ export async function detectPreviewRoutes() {
     // collections, or the log reports routes for collections that do not exist.
     const declared = new Set(await getCollectionNames());
     const routes = Object.fromEntries(Object.entries(candidates).filter(([name]) => declared.has(name)));
-    cachedRoutes = routes;
+    // A reload that landed mid-scan makes this result stale: return it, but
+    // do not cache it.
+    if (getSchemaGeneration() === generation) {
+      cachedRoutes = routes;
+      cachedRoutesGeneration = generation;
+    }
 
     if (Object.keys(routes).length > 0) {
       console.log(`🔍 Auto-detected preview routes:`);
