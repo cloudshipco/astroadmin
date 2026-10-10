@@ -44,11 +44,15 @@ const { block, slug } = Astro.params;
 // Read from the raw pathname, each segment decoded once, the exact inverse of
 // componentPreviewPath: Astro's param is decodeURI'd, which leaves an id's
 // `?` and `#` as %3F and %23.
+// The route's prefix is the site's base plus `component-preview/`, at the
+// START of the path: an id may itself hold `component-preview/`
+// (`regional/component-preview/ada`), so the prefix is never searched for.
 function entryIdFromPath(pathname: string, fallback: string | undefined) {
-  const marker = '/component-preview/';
-  const start = pathname.lastIndexOf(marker);
-  if (start === -1) return fallback || '';
-  const rest = pathname.slice(start + marker.length).replace(/\/+$/, '');
+  const base = import.meta.env.BASE_URL || '/';
+  // (No nested template literal: the Astro compiler rejects one here.)
+  const prefix = (base.endsWith('/') ? base : base + '/') + 'component-preview/';
+  if (!pathname.startsWith(prefix)) return fallback || '';
+  const rest = pathname.slice(prefix.length).replace(/\/+$/, '');
   const separator = rest.indexOf('/');
   if (separator === -1) return '';
   try {

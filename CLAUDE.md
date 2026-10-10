@@ -155,13 +155,25 @@ runner aggregating them). Most run server-less and need env vars:
   errors keep git's text with server paths stripped, and the toast shows that message.
 - `bun tests/publish-refusal-paths.test.js` — the 422 refusal names no server path, including
   one the check did not know to strip: a real `git worktree add` failure in a site whose git
-  directory lives elsewhere (`--separate-git-dir`). `checkRefusalBody` redacts too.
+  directory lives elsewhere (`--separate-git-dir`). `checkRefusalBody` redacts too, and a
+  quoted path with spaces (`'/srv/git store/repo.git/...'`) is reduced whole, there and in
+  `publishFailureMessage`.
 - `bun tests/error-paths.test.js` — API errors name no server path, over HTTP: an image()
   preview whose file vanishes after its stat() (sendFile's callback, not the error
   middleware), an unreadable `/images` file, upload/delete/metadata writes on a read-only
   folder, and a content config that does not bundle (esbuild's `../../..`-relative path comes
-  back relative to the project). Every route's error text goes through `clientErrorMessage`
-  (`server/utils/redact-server-paths.js`, the one redactor the doctor and publish check share).
+  back relative to the project). The admin runs BESIDE the site (cwd `admin-cwd/`, site
+  `site-a/`), so esbuild names `../site-a/src/content.config.ts`; the content routes, which
+  passed no directory, must answer `src/content.config.ts`. Every route's error text goes
+  through `clientErrorMessage` (`server/utils/redact-server-paths.js`, the one redactor the
+  doctor and publish check share).
+- `bun tests/redact-server-paths.test.js` — that redactor's rules. The server's directories
+  (project root, its realpath, the cwd, anything `createServer` registered with
+  `addServerPaths`) are stripped with NO argument, so a caller cannot forget them; the home
+  directory and above are never a prefix (they would leave `Code/x/y` named). A quoted path
+  is one path, spaces and all. A `../` climb: into a server directory -> relative to it; to
+  the root, or into a directory that exists beside the one it climbed to (a sibling
+  checkout) -> last segment; otherwise kept as the site's own value (`../assets/x.png`).
 - `bun tests/preview-live-link.test.js` — the preview's pageNavigation message -> live link and
   entry, with and without a base path (the iframe reports its pathname WITH the preview base,
   which must be stripped before the live link adds publicUrl's).
@@ -250,7 +262,10 @@ runner aggregating them). Most run server-less and need env vars:
   a real `astro dev` (Astro's dev() API, port 4728): no `src/styles/global.css` needed,
   props spread and as `block`, `?field=`; a nested entry id (`regional/ada`) reaches the
   component whole, and an id's `?`/`#` survive (the route decodes the raw path, since Astro's
-  param is only decodeURI'd). ~10 s; `COMPONENT_PREVIEW_PORT` overrides the port.
+  param is only decodeURI'd). An id holding the route's own name
+  (`regional/component-preview/ada`) is that id: the prefix is the site's `BASE_URL` plus
+  `component-preview/` at the START of the path, checked with and without a `base` (a
+  second dev() on the next port). ~15 s; `COMPONENT_PREVIEW_PORT` overrides the port.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 - `bun tests/date-round-trip.test.js` — a date-time through render -> `extractFormData` ->

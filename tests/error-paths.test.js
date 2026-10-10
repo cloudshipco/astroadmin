@@ -27,7 +27,16 @@ import path from 'path';
 import fsPromises from 'fs/promises';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
-const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-error-paths-')));
+// The site and the admin's working directory are siblings, as on a server
+// where both are checked out side by side: esbuild then names the config
+// `../site-a/src/content.config.ts`, a climb that does not reach the root.
+const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-error-paths-')));
+const projectRoot = path.join(scratch, 'site-a');
+const adminDir = path.join(scratch, 'admin-cwd');
+fs.mkdirSync(projectRoot);
+fs.mkdirSync(adminDir);
+// Before anything starts esbuild, whose service keeps the directory it began in.
+process.chdir(adminDir);
 process.env.ASTROADMIN_PROJECT_ROOT = projectRoot;
 process.env.GIT_ENABLED = 'false';
 process.env.ADMIN_USERNAME = 'admin';
@@ -66,7 +75,7 @@ const lockedPublicImage = writeProjectFile('public/images/locked.png', PNG);
 writeProjectFile('public/images/keep.png', PNG);
 const imagesDir = path.join(projectRoot, 'public/images');
 
-const SERVER_PATH_SIGNS = [projectRoot, os.tmpdir(), fs.realpathSync(os.tmpdir()), os.homedir(), '/private/', '/var/folders/', '/Users/'];
+const SERVER_PATH_SIGNS = [projectRoot, 'site-a', 'admin-cwd', 'aa-error-paths-', os.tmpdir(), fs.realpathSync(os.tmpdir()), os.homedir(), '/private/', '/var/folders/', '/Users/'];
 function assertNoServerPath(label, body) {
   for (const sign of SERVER_PATH_SIGNS) {
     assert.equal(body.includes(sign), false, `${label}: the response names a server path (${sign}): ${body}`);
@@ -194,12 +203,46 @@ try {
     assert.equal(restored.status, 200, `positive control: the restored config reloads (${restored.body})`);
   });
 
+  // Most API routes passed no server directory to the redactor, so an
+  // esbuild failure reached the editor naming
+  // `../site-a/src/content.config.ts`: a climb that stops short of the root
+  // was kept as the site's own relative path. (The collection routes fall
+  // back to empty lists when the schemas fail, so the content route carries it.)
+  assert.equal(process.cwd(), adminDir, 'the server runs beside the site');
+  try {
+    const cases = [
+      ['GET', '/api/content/posts/a', undefined],
+      ['PUT', '/api/content/posts/a', { frontmatter: { title: 'A' }, body: '' }],
+    ];
+    for (const [method, route, payload] of cases) {
+      await check(`${method} ${route}: a config that does not bundle names no server directory`, async () => {
+        fs.writeFileSync(configPath, `${CONFIG}\nexport const broken = ;\n`);
+        const { clearSchemaCache } = await import('../server/utils/collections.js');
+        clearSchemaCache();
+        const response = await request(route, payload
+          ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+          : { method });
+        assert.ok(response.status >= 400, `the failure happened (${response.status}): ${response.body}`);
+        const parsed = JSON.parse(response.body);
+        const message = `${parsed.message || ''} ${parsed.error || ''}`;
+        // Positive controls: esbuild's own words and the file it names survive.
+        assert.match(message, /Unexpected/, `esbuild's message is kept: ${message}`);
+        assert.match(message, /(^|\s)src\/content\.config\.ts:\d+/, `the file is named relative to the site: ${message}`);
+        assertNoServerPath(route, response.body);
+      });
+    }
+  } finally {
+    fs.writeFileSync(configPath, CONFIG);
+    const { clearSchemaCache } = await import('../server/utils/collections.js');
+    clearSchemaCache();
+  }
+
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed.\n`);
 } finally {
   server.close();
   for (const target of [lockedEntryImage, lockedPublicImage]) fs.chmodSync(target, 0o644);
   fs.chmodSync(imagesDir, 0o755);
-  fs.rmSync(projectRoot, { recursive: true, force: true });
+  fs.rmSync(scratch, { recursive: true, force: true });
 }
 process.exit(process.exitCode || 0);

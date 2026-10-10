@@ -284,7 +284,7 @@ export async function publishHandler(req, res) {
     let deployResult = null;
 
     if (deployConfig?.adapter) {
-      const serverPaths = [fullConfig.paths.projectRoot, process.env.HOME];
+      const serverPaths = [fullConfig.paths.projectRoot];
       buildResult = redactBuildResult(await runProductionBuild(), serverPaths);
 
       if (!buildResult.success) {
@@ -330,7 +330,7 @@ export async function publishHandler(req, res) {
   } catch (error) {
     console.error('Error publishing:', error);
     const projectRoot = (await getConfig().catch(() => null))?.paths?.projectRoot;
-    const serverPaths = [projectRoot, process.env.HOME];
+    const serverPaths = [projectRoot];
     res.status(500).json({
       success: false,
       error: 'Failed to publish',

@@ -24,12 +24,15 @@ import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collec
 import { maybeAutoImport } from './utils/import-files.js';
 import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
 import { requireSameOrigin } from './utils/same-origin.js';
-import { clientErrorMessage } from './utils/redact-server-paths.js';
+import { addServerPaths, clientErrorMessage } from './utils/redact-server-paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export async function createServer() {
   const fullConfig = await getConfig();
+  // Every error message the routes send is redacted against the configured
+  // root too (astroadmin.config.js can move it), without each route passing it.
+  addServerPaths(fullConfig.paths.projectRoot);
   const app = express();
 
   // Trust proxy (for secure cookies behind nginx/reverse proxy)

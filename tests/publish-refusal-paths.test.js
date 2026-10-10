@@ -105,6 +105,33 @@ try {
     assertNoServerPath('checkRefusalBody', JSON.stringify(body));
   });
 
+  // An external path with a space in it was cut at the space: the redactor
+  // reduced `/srv/git` to `git` and left ` store/repo.git/worktrees/check`,
+  // naming the directories below it.
+  await check('checkRefusalBody: a quoted external path with spaces is reduced whole', async () => {
+    const body = await checkRefusalBody({
+      commit: 'abc1234',
+      output: `fatal: could not create '/srv/git store/repo.git/worktrees/check': Permission denied\n`
+        + `error: unable to read "/srv/other place/site b/x.lock"`,
+      entries: [],
+    });
+    const output = body.check.output;
+    assert.match(output, /fatal: could not create 'check': Permission denied/, `control: the message and file name are kept: ${output}`);
+    assert.match(output, /unable to read "x\.lock"/, `control: a double-quoted path keeps its file name: ${output}`);
+    for (const fragment of ['git store', 'repo.git', 'worktrees/', 'other place', 'site b', '/srv']) {
+      assert.equal(output.includes(fragment), false, `names a server directory (${fragment}): ${output}`);
+    }
+  });
+
+  await check('publishFailureMessage: a quoted path with spaces is reduced whole', async () => {
+    const { publishFailureMessage } = await import('../server/api/publish.js');
+    const message = publishFailureMessage(new Error("fatal: Unable to create '/srv/git store/repo.git/index.lock': File exists."));
+    assert.match(message, /Unable to create 'index\.lock': File exists\./, `control: the git text is kept: ${message}`);
+    for (const fragment of ['git store', 'repo.git', '/srv']) {
+      assert.equal(message.includes(fragment), false, `names a server directory (${fragment}): ${message}`);
+    }
+  });
+
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed.\n`);
 } finally {

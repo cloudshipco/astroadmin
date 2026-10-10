@@ -6,21 +6,80 @@
  * sends (clientErrorMessage). Synchronous fs only, like the doctor and the
  * publish check that import it (see CLAUDE.md: Bun can lose an fs/promises
  * completion while child processes start and exit).
+ *
+ * The server's own directories are ALWAYS stripped, whatever a caller passes:
+ * the project root (ASTROADMIN_PROJECT_ROOT, else the working directory, as
+ * config.js resolves it), the working directory, anything registered with
+ * addServerPaths (createServer registers the configured root), and the
+ * resolved path of each. A caller adds to that list; it cannot forget it.
+ * The home directory and anything above it are never used as a prefix: a
+ * path under them would come out naming the folders below it (`Code/x/y`),
+ * where the absolute-path rule reduces it to its last segment.
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+
+const registeredServerPaths = new Set();
+
+/**
+ * Register more directories every redaction in this process strips (e.g. the
+ * project root a site's astroadmin.config.js configured).
+ * @param {...(string|null|undefined)} directories
+ */
+export function addServerPaths(...directories) {
+  for (const directory of directories) {
+    if (directory) registeredServerPaths.add(path.resolve(String(directory)));
+  }
+}
+
+/** `/`, the home directory and its ancestors: too broad to make paths relative to. */
+function isTooBroad(directory) {
+  if (!directory || directory === path.sep) return true;
+  const home = os.homedir();
+  return Boolean(home) && (home === directory || home.startsWith(`${directory}/`));
+}
+
+/**
+ * The directories to strip: the defaults, the caller's, and the resolved
+ * path of each, absolute and de-duplicated, longest first (so a worktree
+ * inside a stripped directory is removed whole).
+ * @param {Array<string|null|undefined>} serverPaths
+ * @returns {string[]}
+ */
+function serverDirectories(serverPaths = []) {
+  const candidates = [
+    process.env.ASTROADMIN_PROJECT_ROOT || process.cwd(),
+    process.cwd(),
+    ...registeredServerPaths,
+    ...serverPaths,
+  ].filter(Boolean).map((directory) => path.resolve(String(directory)));
+  for (const directory of [...candidates]) {
+    try {
+      candidates.push(fs.realpathSync(directory));
+    } catch {
+      // gone: nothing more to strip
+    }
+  }
+  return [...new Set(candidates)].filter((directory) => !isTooBroad(directory))
+    .sort((a, b) => b.length - a.length);
+}
 
 /**
  * Make check output fit to show an editor: no terminal colour codes, no stack
- * trace or stack frames, and no server paths (each given directory becomes
+ * trace or stack frames, and no server paths (each server directory becomes
  * relative, including inside file:// URLs).
  * @param {string} text
- * @param {string[]} [serverPaths] - directories to strip
+ * @param {Array<string|null|undefined>} [serverPaths] - directories to strip, beyond the defaults
  */
 export function cleanCheckOutput(text, serverPaths = []) {
+  return stripDirectories(text, serverDirectories(serverPaths));
+}
+
+function stripDirectories(text, directories) {
   // eslint-disable-next-line no-control-regex
-  let cleaned = text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
+  let cleaned = String(text).replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
   cleaned = cleaned.replace(/^\s*Stack trace:[\s\S]*$/m, '');
   cleaned = cleaned.replace(/^\s+at .*$\n?/gm, '');
   cleaned = cleaned.replace(/file:\/\/(\S+)/g, (match, encodedPath) => {
@@ -30,67 +89,82 @@ export function cleanCheckOutput(text, serverPaths = []) {
       return encodedPath;
     }
   });
-  // Longest first, so a worktree inside a stripped directory is removed whole.
-  const prefixes = [...new Set(serverPaths.filter(Boolean))].sort((a, b) => b.length - a.length);
-  for (const prefix of prefixes) {
+  for (const prefix of directories) {
     cleaned = cleaned.split(`${prefix}/`).join('').split(prefix).join('.');
   }
   return cleaned.trim();
 }
 
 /**
- * A `../../..`-relative path (esbuild names files relative to the process's
- * working directory) as the server would resolve it: made relative to the
- * server directory it falls in, or, when it climbs to the filesystem root
- * and is in none of them, reduced to its last segment. Any other relative
- * path is the site's own (`../assets/x.png`) and is kept.
+ * A `../`-relative path (esbuild names files relative to the process's
+ * working directory), resolved against the working directory:
+ * - inside a server directory: made relative to it (`src/content.config.ts`);
+ * - climbing to the filesystem root, or into a directory that EXISTS beside
+ *   the one it climbed to (`../site-a/...`, a sibling checkout): reduced to
+ *   its last segment, since anything more names server directories;
+ * - otherwise kept: it names nothing on this server, so it is the site's own
+ *   relative value (`../assets/images/x.png` from a content file).
  */
 function redactRelativeClimb(relativePath, directories) {
-  const resolved = path.resolve(process.cwd(), relativePath);
-  const inside = [...directories].sort((a, b) => b.length - a.length)
-    .find((directory) => resolved === directory || resolved.startsWith(`${directory}/`));
+  const cwd = process.cwd();
+  const resolved = path.resolve(cwd, relativePath);
+  const inside = directories.find((directory) => resolved === directory || resolved.startsWith(`${directory}/`));
   if (inside) return path.relative(inside, resolved) || '.';
-  const climbs = relativePath.match(/^(?:\.\.\/)+/)[0].length / 3;
-  const depth = process.cwd().split('/').filter(Boolean).length;
-  return climbs >= depth ? path.basename(resolved) : relativePath;
+  const climbPrefix = relativePath.match(/^(?:\.\.\/)+/)[0];
+  const climbs = climbPrefix.length / 3;
+  const depth = cwd.split('/').filter(Boolean).length;
+  if (climbs >= depth) return path.basename(resolved);
+  const firstSegment = relativePath.slice(climbPrefix.length).split('/')[0];
+  if (firstSegment && fs.existsSync(path.join(path.resolve(cwd, climbPrefix), firstSegment))) {
+    return path.basename(resolved);
+  }
+  return relativePath;
 }
 
 /**
- * Error text that names no server path: the given server directories (and
- * their resolved paths, so a symlinked checkout is caught) made relative, then
- * any other absolute path reduced to its last segment (an external git
- * directory, a resolved temp dir), and a relative path that climbs out of the
- * working directory to the root treated as the absolute path it is. URLs are
- * kept: `https://host/x` has no path start after a delimiter.
+ * Error text that names no server path: the server directories (the defaults
+ * above plus the caller's, and their resolved paths) made relative, then any
+ * other absolute path reduced to its last segment (an external git directory,
+ * a resolved temp dir), and a relative path that climbs out of the working
+ * directory handled as redactRelativeClimb says. A quoted path ('...' or
+ * "...") is one path even with spaces in it; an unquoted one ends at the first
+ * space (a server directory's own path is matched whole even so; an unknown,
+ * unquoted, spaced path is the one thing that can leave a fragment). URLs are kept: `https://host/x` has no path start after a delimiter.
  * @param {string} text
- * @param {Array<string|null|undefined>} serverPaths
+ * @param {Array<string|null|undefined>} [serverPaths] - directories to strip, beyond the defaults
  * @returns {string}
  */
 export function redactServerPaths(text, serverPaths = []) {
-  const directories = serverPaths.filter(Boolean);
-  for (const directory of [...directories]) {
-    try {
-      directories.push(fs.realpathSync(directory));
-    } catch {
-      // gone: nothing more to strip
-    }
+  const directories = serverDirectories(serverPaths);
+  // Each server directory's own climb (`../my site/`, as esbuild names it)
+  // goes first and whole, since an unquoted one would end at the space.
+  // Only at a path start: `../../my site/` is somewhere else.
+  let withoutOwnClimbs = String(text);
+  for (const directory of directories) {
+    const climb = path.relative(process.cwd(), directory);
+    if (!climb.startsWith('../')) continue;
+    const escaped = climb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    withoutOwnClimbs = withoutOwnClimbs.replace(new RegExp(`(?<![./])${escaped}/`, 'g'), '');
   }
-  // Climbs first: a climb's tail (`../../private/var/site/x`) holds the
+  // Climbs next: a climb's tail (`../../private/var/site/x`) holds the
   // directory as a substring, which the prefix strip would cut out of it.
-  const climbsResolved = String(text)
+  const climbsResolved = withoutOwnClimbs
+    .replace(/(['"])((?:\.\.\/)+[^'"\n]+)\1/g, (match, quote, relativePath) => quote + redactRelativeClimb(relativePath, directories) + quote)
     .replace(/(^|[\s"'(=:])((?:\.\.\/)+[^\s"'()]+)/g, (match, lead, relativePath) => lead + redactRelativeClimb(relativePath, directories));
-  return cleanCheckOutput(climbsResolved, directories)
+  return stripDirectories(climbsResolved, directories)
+    // A quoted absolute path, spaces and all, then an unquoted one.
+    .replace(/(['"])\/([^'"\n]*\/[^'"\n]*)\1/g, (match, quote, absolutePath) => quote + path.basename(`/${absolutePath}`) + quote)
     .replace(/(^|[\s"'(=:])\/(?:[^\s"'()/]+\/)+([^\s"'()/]*)/g, '$1$2');
 }
 
 /**
  * An error's message as an API response may carry it: server paths redacted
- * (the given directories made relative, any other absolute path reduced to
+ * (the server directories made relative, any other absolute path reduced to
  * its last segment, so `unlink '/srv/site/public/images/x.png'` reads
- * `unlink 'public/images/x.png'` with the project root given, `'x.png'`
- * without).
+ * `unlink 'public/images/x.png'` when /srv/site is the project root, `'x.png'`
+ * when it is not).
  * @param {unknown} error - an Error, or anything with a message, or a string
- * @param {Array<string|null|undefined>} [serverPaths] - e.g. the project root
+ * @param {Array<string|null|undefined>} [serverPaths] - directories to strip, beyond the defaults
  * @returns {string}
  */
 export function clientErrorMessage(error, serverPaths = []) {

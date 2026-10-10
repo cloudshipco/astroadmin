@@ -16,8 +16,12 @@
  *   into `regional` and `ada`, and a `?` or `#` in an id survives the trip
  *   (Astro's param is decodeURI'd, so the route decodes the raw path).
  *
- * Port: COMPONENT_PREVIEW_PORT, default 4728.
- *   bun tests/component-preview.test.js     (~10 s; port 4728)
+ * - an id holding the route's own name (`regional/component-preview/ada`) is
+ *   that id: the prefix is found after the site's base, with and without one.
+ *
+ * Port: COMPONENT_PREVIEW_PORT, default 4728 (and the next port, for the
+ * restart with a `base`).
+ *   bun tests/component-preview.test.js     (~15 s; ports 4728-4729)
  */
 
 import assert from 'assert';
@@ -59,6 +63,10 @@ writeFile('src/content/team.json', JSON.stringify([
   { id: 'regional', name: 'Not this one' },
   { id: 'regional/ada', name: 'Ada from the regional team' },
   { id: 'north east/o?brien#1', name: 'An id with a space, ? and #' },
+  // The route's own name inside an id: the route found its prefix with
+  // lastIndexOf, so these decoded to '' and to 'ada'.
+  { id: 'regional/component-preview/ada', name: 'Ada with the route name in her id' },
+  { id: 'regional/component-preview/team/ada', name: 'Ada two levels down' },
 ]));
 writeFile('src/content/testimonials.json', JSON.stringify([{ id: 'sue', quote: 'A quote from Sue' }]));
 writeFile('src/pages/index.astro', '<h1>Home</h1>\n');
@@ -203,12 +211,57 @@ try {
     assert.match(preview.text, /<p class="author"[^>]*>An id with a space, \? and #<\/p>/, preview.text.match(/<main[\s\S]*<\/main>/)?.[0]);
   });
 
+  await check('an id containing the route name reaches the component whole', async () => {
+    for (const [id, name] of [
+      ['regional/component-preview/ada', 'Ada with the route name in her id'],
+      ['regional/component-preview/team/ada', 'Ada two levels down'],
+    ]) {
+      const preview = await get(componentPreviewPath({ type: 'team' }, 'team', id));
+      assert.equal(preview.status, 200, preview.text.slice(0, 400));
+      const members = [...preview.text.matchAll(/<li class="member"[^>]*>([^<]*)<\/li>/g)].map((match) => match[1]);
+      assert.deepEqual(members, [name], `${id}: one id, the whole one`);
+    }
+  });
+
   await check('a global.css, when the site has one, is still loaded', async () => {
     writeFile('src/styles/global.css', '.member { color: rgb(1, 2, 3); }\n');
     await new Promise((resolve) => setTimeout(resolve, 500));
     const preview = await get('/component-preview/team/ada');
     assert.equal(preview.status, 200);
     assert.match(preview.text, /global\.css|rgb\(1, 2, 3\)/, 'the stylesheet is linked or inlined');
+  });
+
+  // The same route on a site with a `base`: the prefix is found after the
+  // base, never searched for inside the id.
+  await Promise.race([server.stop(), new Promise((resolve) => setTimeout(resolve, 10000))]);
+  server = null;
+  // Inline: a rewritten astro.config.mjs is not re-read by a second dev() in
+  // the same process.
+  server = await dev({ root: siteDir, base: '/docs', logLevel: 'error', server: { port: PORT + 1, host: 'localhost' } });
+  const getWithBase = async (pathname) => {
+    const response = await fetch(`http://localhost:${PORT + 1}/docs${pathname}`);
+    return { status: response.status, text: await response.text() };
+  };
+
+  await check('with a base: a plain and a nested id reach the component (positive control)', async () => {
+    for (const [id, name] of [['ada', 'Ada from the team'], ['regional/ada', 'Ada from the regional team']]) {
+      const preview = await getWithBase(componentPreviewPath({ type: 'team' }, 'team', id));
+      assert.equal(preview.status, 200, preview.text.slice(0, 400));
+      const members = [...preview.text.matchAll(/<li class="member"[^>]*>([^<]*)<\/li>/g)].map((match) => match[1]);
+      assert.deepEqual(members, [name], `${id} under /docs`);
+    }
+  });
+
+  await check('with a base: an id containing the route name reaches the component whole', async () => {
+    for (const [id, name] of [
+      ['regional/component-preview/ada', 'Ada with the route name in her id'],
+      ['regional/component-preview/team/ada', 'Ada two levels down'],
+    ]) {
+      const preview = await getWithBase(componentPreviewPath({ type: 'team' }, 'team', id));
+      assert.equal(preview.status, 200, preview.text.slice(0, 400));
+      const members = [...preview.text.matchAll(/<li class="member"[^>]*>([^<]*)<\/li>/g)].map((match) => match[1]);
+      assert.deepEqual(members, [name], `${id} under /docs`);
+    }
   });
 
   console.log('='.repeat(40));
