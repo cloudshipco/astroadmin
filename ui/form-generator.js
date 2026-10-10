@@ -126,13 +126,18 @@ function generateTopLevelArrayForm(schema, data) {
 /**
  * Render a nullable field as its non-null type.
  *
- * zod 4 serialises `.nullable()` as `{anyOf: [<type>, {type: 'null'}]}`, which
- * carries no top-level `type`, so a nullable integer, boolean or date fell
- * through to the textarea. Any other union is returned unchanged.
+ * A nullable reaches the editor in two shapes, and both converters use both:
+ * `{anyOf: [<type>, {type: 'null'}]}` (an object, an enum, an integer), which
+ * carries no top-level `type`, and `{type: [<type>, 'null']}` (zod 3 and zod 4
+ * for a plain number, boolean or string). Unwrapped, a nullable integer,
+ * boolean or date no longer falls through to the textarea. Any other union is
+ * returned unchanged.
  * @param {object} schema - a field's JSON Schema
  * @returns {object}
  */
 export function unwrapNullable(schema) {
+  const nullableType = nullableTypeName(schema);
+  if (nullableType !== null) return { ...schema, type: nullableType };
   const union = schema?.anyOf || schema?.oneOf;
   if (!Array.isArray(union) || schema.type !== undefined) return schema || {};
   const nonNull = union.filter((member) => member?.type !== 'null');
@@ -142,15 +147,35 @@ export function unwrapNullable(schema) {
 }
 
 /**
+ * The one non-null type of a `type: [<type>, 'null']` schema, or null for any
+ * other schema.
+ * @param {object} schema
+ * @returns {?string}
+ */
+function nullableTypeName(schema) {
+  if (!Array.isArray(schema?.type)) return null;
+  const nonNull = schema.type.filter((type) => type !== 'null');
+  return nonNull.length === 1 && nonNull.length !== schema.type.length ? nonNull[0] : null;
+}
+
+/**
  * Whether a field's schema is a nullable one that unwrapNullable unwraps: a
- * union of exactly one type and `null`.
+ * union of exactly one type and `null`, in either shape.
  */
 function isNullableSchema(schema) {
+  if (nullableTypeName(schema) !== null) return true;
   const union = schema?.anyOf || schema?.oneOf;
   if (!Array.isArray(union) || schema.type !== undefined) return false;
   const nonNull = union.filter((member) => member?.type !== 'null');
   return nonNull.length === 1 && nonNull.length !== union.length;
 }
+
+/**
+ * The keyword the schema parser marks a REAL date with (z.date(),
+ * z.coerce.date(); DATE_MARKER in server/utils/schema-parser.js), as opposed
+ * to a string with a date format.
+ */
+const DATE_MARKER = 'x-astroadmin-date';
 
 // A timestamp with no zone, as YAML and the serialiser's parseTimestamp read it: UTC.
 const ZONELESS_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
@@ -201,11 +226,11 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   const fullPath = path ? `${path}.${name}` : name;
   const id = idPrefix + fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
   // A nullable field renders as its non-null type, whose empty control would
-  // save '' (or false). These attributes let extractFields save null instead:
-  // `data-nullable` on the control, `data-null` while the stored value is null
-  // (see nullableControlValue).
+  // save ''. `data-nullable` lets extractFields save null for a control the
+  // editor CLEARED (see nullableControlValue). An untouched null needs nothing:
+  // an untouched control saves its stored value (bindOriginalValues).
   const nullable = isNullableSchema(rawSchema);
-  const nullableAttributes = nullable ? `data-nullable${value === null ? ' data-null' : ''}` : '';
+  const nullableAttributes = nullable ? 'data-nullable' : '';
 
   // A `const` (Zod's z.literal) is fixed by the schema, so it is not a decision
   // an editor can make — and this UI is for non-technical people, who gain
@@ -216,9 +241,10 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   // all would be dropped from the entry on the next save. A single-entry file()
   // collection is found by its `id`, so losing it would orphan the entry and
   // fail the consuming site's build. A hidden input carries the value through
-  // untouched while showing the editor nothing.
+  // untouched while showing the editor nothing. `data-schema-const` keeps it
+  // out of bindOriginalValues: its value is the schema's, never the editor's.
   if (schema.const !== undefined) {
-    return `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(String(schema.const))}">`;
+    return `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(String(schema.const))}" data-schema-const>`;
   }
 
   // Handle blocks array (discriminated union)
@@ -230,7 +256,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     const nestedData = value || {};
     return `
       <div class="mb-6">
-        <fieldset class="nested-fieldset">
+        <fieldset class="nested-fieldset" data-object-field="${fullPath}">
           <legend class="text-sm font-semibold text-gray-700 mb-3">${formatLabel(name)}</legend>
           <div class="space-y-4">
             ${generateFields(schema.properties, nestedData, { path: fullPath, idPrefix, pickerVariant })}
@@ -244,7 +270,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   // them (z.array(reference('c')), `<name>Ids`).
   const refCollection = detectReferenceCollection(schema);
   if (refCollection) {
-    return generateReferenceField(name, schema, value, fullPath, id, refCollection);
+    return generateReferenceField(name, schema, value, fullPath, id, refCollection, nullableAttributes);
   }
 
   if (schema.type === 'array') {
@@ -393,12 +419,12 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     // renders last silently wins.
     const explicitAlt = findAltProperty(name, siblingProps);
     const altValue = siblingData[`${name}Alt`] || siblingData[`${name}_alt`] || '';
-    return generateImageField(name, schema, value, fullPath, id, altValue, Boolean(explicitAlt), pickerVariant);
+    return generateImageField(name, schema, value, fullPath, id, altValue, Boolean(explicitAlt), pickerVariant, nullableAttributes);
   }
 
   // Check if this is a color field
   if (isColorField(name, schema)) {
-    return generateColorField(name, schema, value, fullPath, id);
+    return generateColorField(name, schema, value, fullPath, id, nullableAttributes);
   }
 
   // Check if this is a date field by name or schema
@@ -417,25 +443,25 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   // input instead, or editing the day would drop the time. Both show UTC: the
   // serialiser reads a zoneless timestamp as UTC, as YAML does, and
   // extractFields gives a datetime input's value back its zone (dateControlValue).
-  // The stored text rides along in data-original-value, so an unedited control
-  // saves exactly what it was given (its zone, milliseconds and spelling).
+  // An unedited control saves its stored text as it was (its zone, sub-millisecond
+  // digits and spelling), because an untouched control saves its stored value.
   if (isDateField) {
     let formattedValue = value ?? '';
     let dateInputType = 'date';
     let stepAttribute = '';
-    const originalText = value instanceof Date
-      ? (Number.isNaN(value.getTime()) ? null : value.toISOString())
-      : (typeof value === 'string' && value !== '' ? value : null);
-    // A date-time string (z.iso.datetime()) always needs a time: a date input
-    // would save YYYY-MM-DD, which it refuses.
-    if (schema.format === 'date-time') dateInputType = 'datetime-local';
+    // A date-time STRING (z.iso.datetime()) always needs a time: a date input
+    // would save YYYY-MM-DD, which it refuses. A real z.date() is not one, even
+    // though zod 3 serialises it as format date-time: it takes a date-only
+    // value, and forcing a time made changing only the day write midnight UTC.
+    const timeRequired = schema.format === 'date-time' && schema[DATE_MARKER] !== true;
+    if (timeRequired) dateInputType = 'datetime-local';
     if (formattedValue) {
       const dateObj = parseStoredDate(formattedValue);
       if (!isNaN(dateObj.getTime())) {
         const iso = dateObj.toISOString();
         const time = iso.slice(11, 19);
         const milliseconds = dateObj.getUTCMilliseconds();
-        if (time === '00:00:00' && milliseconds === 0 && schema.format !== 'date-time') {
+        if (time === '00:00:00' && milliseconds === 0 && !timeRequired) {
           formattedValue = iso.slice(0, 10);
         } else {
           dateInputType = 'datetime-local';
@@ -458,7 +484,6 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
           id="${id}"
           value="${escapeHtml(formattedValue)}"
           class="form-input"
-          ${originalText !== null ? `data-original-value="${escapeHtml(originalText)}"` : ''}
           ${stepAttribute}
           ${nullableAttributes}
           ${schema.required ? 'required' : ''}
@@ -928,7 +953,7 @@ function getImageFieldInfo(name) {
  * @param {string} [variant] - Size variant: 'thumb', 'compact', or '' for full size.
  *   The picker owns its own sizes; a container never reaches in to override them.
  */
-function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false, variant = '') {
+function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false, variant = '', nullableAttributes = '') {
   // Only show the image preview for a value that is actually an image path.
   // A non-path value (e.g. a `placeholder:banner` marker a site uses to render
   // an outline) would otherwise load as a broken <img>. The value is still kept
@@ -987,6 +1012,7 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
           id="${id}"
           value="${escapeHtml(value || '')}"
           class="image-picker-input"
+          ${nullableAttributes}
           ${schema.required ? 'required' : ''}
         >${altFieldHtml}
       </div>
@@ -1016,7 +1042,7 @@ function isColorField(name, schema) {
 /**
  * Generate a color picker field
  */
-function generateColorField(name, schema, value, fullPath, id) {
+function generateColorField(name, schema, value, fullPath, id, nullableAttributes = '') {
   // Convert named colors or other formats to hex for the picker
   const colorValue = value || '';
 
@@ -1036,6 +1062,7 @@ function generateColorField(name, schema, value, fullPath, id) {
           id="${id}"
           value="${escapeHtml(colorValue)}"
           class="form-input color-picker-text"
+          ${nullableAttributes}
           placeholder="#ffffff or color name"
           ${schema.required ? 'required' : ''}
         >
@@ -1165,27 +1192,15 @@ export function referenceId(value) {
 }
 
 /**
- * The attributes of a reference's hidden input for a stored value. A string id
- * is the input's plain value. Any other shape Astro accepts (a number, a lookup
- * object) rides as JSON on a data-array-data input, which extractFields parses
- * back as it was, so an unrelated edit saves it unchanged. Choosing another
- * entry writes a plain id (setReferenceInputValue).
- */
-function referenceInputAttrs(value) {
-  if (typeof value === 'string') return `value="${escapeHtml(value)}"`;
-  return `value="${jsonAttr(value)}" data-array-data`;
-}
-
-/**
  * Set a reference's hidden input to a chosen entry id ('' clears a single
- * reference). The dashboard's picker calls this, so a number or lookup object
- * the input held is replaced by the plain id rather than parsed as JSON.
+ * reference). The dashboard's picker calls this. A chosen entry is saved as
+ * its plain id; a stored number or lookup object ({collection, id}) the input
+ * stood for is kept only while the input is untouched (bindOriginalValues).
  * @param {HTMLInputElement} input
  * @param {string} entryId
  */
 export function setReferenceInputValue(input, entryId) {
   if (!input) return;
-  input.removeAttribute('data-array-data');
   input.value = entryId;
 }
 
@@ -1195,14 +1210,18 @@ export function setReferenceInputValue(input, entryId) {
  * A list (z.array(reference('c')), `<name>Ids`) renders one hidden input per
  * card, `<path>[i]`, and is marked data-array-items so zero cards still save
  * as []. A single reference (reference('c')) renders ONE hidden input named
- * `<path>`, and at most one card. A stored value keeps its shape (see
- * referenceInputAttrs).
+ * `<path>`, and at most one card. Each input holds the id; an untouched one
+ * saves the stored value whatever its shape (a number, a lookup object).
  */
-function generateReferenceField(name, schema, value, fullPath, id, collectionName) {
+function generateReferenceField(name, schema, value, fullPath, id, collectionName, nullableAttributes = '') {
   const single = schema.type === 'string';
+  // A list item with no id is not shown, so a card's index can differ from its
+  // item's index in the stored list; each card carries the stored index.
   const items = single
-    ? (referenceId(value) !== '' ? [value] : [])
-    : (Array.isArray(value) ? value.filter((item) => referenceId(item) !== '') : []);
+    ? (referenceId(value) !== '' ? [{ itemId: referenceId(value), storedIndex: 0 }] : [])
+    : (Array.isArray(value) ? value : [])
+      .map((item, storedIndex) => ({ itemId: referenceId(item), storedIndex }))
+      .filter((item) => item.itemId !== '');
   const singularName = collectionName.endsWith('s') ? collectionName.slice(0, -1) : collectionName;
   // A `testimonialIds` list is labelled by its collection ("Testimonials", not
   // "Testimonial Ids"); any other name is the field's own label.
@@ -1212,10 +1231,10 @@ function generateReferenceField(name, schema, value, fullPath, id, collectionNam
     <div class="form-group">
       <label class="form-label">${escapeHtml(label)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
       <div class="reference-field" data-field="${fullPath}" ${single ? 'data-reference-single' : 'data-array-items'} data-collection="${escapeHtml(collectionName)}">
-        ${single ? `<input type="hidden" name="${fullPath}" id="${id}" ${referenceInputAttrs(items.length ? items[0] : '')} data-reference-value>` : ''}
+        ${single ? `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(items.length ? items[0].itemId : '')}" data-reference-value ${nullableAttributes}>` : ''}
         <div class="reference-cards" data-reference-cards>
           ${items.length === 0 ? REFERENCE_EMPTY_HTML : ''}
-          ${items.map((item, index) => referenceCardHtml(referenceId(item), { index, fullPath, single, storedValue: item })).join('')}
+          ${items.map((item, index) => referenceCardHtml(item.itemId, { index, fullPath, single, storedIndex: item.storedIndex })).join('')}
         </div>
         <button type="button" class="btn btn-secondary btn-sm reference-cards-add add-reference-item${single && items.length ? ' hidden' : ''}" data-field="${fullPath}" data-collection="${escapeHtml(collectionName)}">
           ${single ? 'Choose' : '+ Add'} ${escapeHtml(formatLabel(singularName))}
@@ -1241,10 +1260,11 @@ export const REFERENCE_EMPTY_HTML = '<div class="reference-empty">No items selec
  * @param {string} [options.title] - display title (defaults to the id)
  * @param {?string} [options.preview] - preview text; null shows "Loading..."
  *   until the dashboard fills it in
- * @param {*} [options.storedValue] - a list item's stored value, when it is
- *   not the plain id (a number or lookup object keeps its shape on save)
+ * @param {?number} [options.storedIndex] - a rendered list item's index in the
+ *   stored list, written as data-original-path when it is not `index` (an item
+ *   with no id before it is not shown); null for a card the editor adds
  */
-export function referenceCardHtml(itemId, { index = 0, fullPath, single = false, title = '', preview = null, storedValue = itemId }) {
+export function referenceCardHtml(itemId, { index = 0, fullPath, single = false, title = '', preview = null, storedIndex = null }) {
   const handle = single ? '' : `
       <div class="reference-card-handle" title="Drag to reorder">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
@@ -1253,7 +1273,7 @@ export function referenceCardHtml(itemId, { index = 0, fullPath, single = false,
           <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
         </svg>
       </div>
-      <input type="hidden" name="${fullPath}[${index}]" ${referenceInputAttrs(storedValue)}>`;
+      <input type="hidden" name="${fullPath}[${index}]" value="${escapeHtml(itemId)}"${storedIndex !== null && storedIndex !== index ? ` data-original-path="${fullPath}[${storedIndex}]"` : ''}>`;
   return `
     <div class="reference-card" data-index="${index}" data-id="${escapeHtml(itemId)}" ${single ? '' : 'draggable="true"'}>${handle}
       <div class="reference-card-content edit-reference-item" title="Click to change">
@@ -1345,13 +1365,15 @@ export function extractFormData(formElement, schema) {
     }
   }
 
-  const data = extractFields(formElement);
+  const data = readFields(formElement);
 
   // Strip empty optional fields, but keep required ones (see cleanEmptyValues) —
-  // walking the schema so this holds at every level, not just the top.
+  // walking the schema so this holds at every level, not just the top. Only
+  // what the DOM produced is cleaned: an untouched value is put back after, as
+  // it was stored (a stored '' or [] stays).
   cleanEmptyValues(data, schema, false);
 
-  return data;
+  return applyOriginalValues(formElement, data);
 }
 
 /**
@@ -1361,6 +1383,10 @@ export function extractFormData(formElement, schema) {
  * by the main form and by the array item modal, so an item picks up the same
  * gallery/array/checkbox/number handling the form has always had.
  *
+ * A container bound with bindOriginalValues gets the stored value for every
+ * control and container the editor has not changed; only changed ones are read
+ * from the DOM.
+ *
  * Empty strings are preserved — the caller decides whether to strip them, since
  * dropping the key entirely can fail a schema that requires the field.
  *
@@ -1368,7 +1394,16 @@ export function extractFormData(formElement, schema) {
  * @returns {object}
  */
 export function extractFields(container) {
+  return applyOriginalValues(container, readFields(container));
+}
+
+/**
+ * Every value the container's DOM holds, as an object: what a changed control
+ * saves.
+ */
+function readFields(container) {
   const data = {};
+  const binding = boundContainers.get(container) || null;
 
   // Hidden fields carrying JSON
   container.querySelectorAll('input[type="hidden"][data-json="true"]').forEach(input => {
@@ -1409,7 +1444,7 @@ export function extractFields(container) {
     if (input?.type === 'number') fieldValue = toNumber(value);
     else if (input?.type === 'date' || input?.type === 'datetime-local') fieldValue = dateControlValue(input, value);
     else if (input?.dataset?.valueType === 'boolean' && (value === 'true' || value === 'false')) fieldValue = value === 'true';
-    setNestedValue(data, key, nullableControlValue(input, fieldValue));
+    setNestedValue(data, key, nullableControlValue(binding, input, fieldValue));
   }
 
   // FormData omits unchecked boxes entirely
@@ -1433,20 +1468,25 @@ export function extractFields(container) {
 }
 
 /**
- * The value a date or datetime control saves. Unedited, it is the stored text
- * the renderer put in data-original-value, byte for byte. Edited, a datetime
- * input's value (shown in UTC, with no zone) becomes a UTC ISO string: saved
- * zoneless, a JSON entry was read back as the browser's local time and moved
- * on every save. A date input's YYYY-MM-DD stays date-only.
+ * The value an EDITED date or datetime control saves (an untouched one saves
+ * its stored text, see bindOriginalValues). A datetime input's value (shown in
+ * UTC, with no zone) becomes a UTC ISO string: saved zoneless, a JSON entry
+ * was read back as the browser's local time and moved on every save. A date
+ * input's YYYY-MM-DD stays date-only.
  */
 function dateControlValue(input, value) {
-  if (input.dataset.originalValue !== undefined && value === input.defaultValue) return input.dataset.originalValue;
   if (input.type !== 'datetime-local' || !ZONELESS_TIMESTAMP.test(value)) return value;
   const date = new Date(`${value}Z`);
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
-/** Whether a control's value differs from the one it was rendered with. */
+/**
+ * Whether a control's value differs from the markup it was rendered with: the
+ * fallback for a control with no recorded baseline (a field in an item added
+ * since the form was bound, or a form that was never bound). Imprecise for a
+ * hidden input, whose value IS its markup, and for a value the browser
+ * normalises; a bound control is judged against its baseline instead.
+ */
 function controlEdited(control) {
   if (control.tagName === 'SELECT') {
     // The `selected` attribute is what defaultSelected reflects.
@@ -1457,15 +1497,193 @@ function controlEdited(control) {
 }
 
 /**
- * A nullable control's value (see generateField's nullableAttributes). An
- * empty value is null when the stored value was null, or when the editor
- * cleared the control; an untouched empty control of a value that was not null
- * (an absent optional key, or '') keeps '' for cleanEmptyValues to decide.
+ * A nullable control's value (see generateField's nullableAttributes): an
+ * empty value is null when the editor CLEARED the control. An untouched one
+ * never gets here as anything but its stored value (applyOriginalValues
+ * replaces it), and a control that was always empty keeps '' for
+ * cleanEmptyValues to decide.
+ * @param {?object} binding - the container's bindOriginalValues record
  */
-function nullableControlValue(control, value) {
+function nullableControlValue(binding, control, value) {
   if (!control || control.dataset?.nullable === undefined || value !== '') return value;
-  if (control.dataset.null !== undefined || controlEdited(control)) return null;
-  return value;
+  const bound = binding?.controls.get(control);
+  const changed = bound ? controlState(control) !== bound.baseline : controlEdited(control);
+  return changed ? null : value;
+}
+
+// --- Untouched fields keep their stored values ------------------------------
+//
+// Every save rebuilds the entry from the form, so a control that reads its
+// value back from the DOM must reproduce the stored value exactly, and many
+// cannot: a null shows as an empty box, a {collection, id} reference as its
+// id, a datetime with an offset or microseconds as UTC to the millisecond, a
+// stored number in a text field as text. The rule instead: a control (or a
+// container: an object, a list, one item of a list) the editor has not
+// changed contributes the value the entry had when it was loaded, at the path
+// it was rendered from. Only what changed is read from the DOM.
+
+/**
+ * @typedef {object} ContainerBinding
+ * @property {object} original - the entry (or item) the container was rendered from
+ * @property {Map<Element, {path: string, baseline: string}>} controls - every
+ *   named control, with the path it was rendered from and its value straight
+ *   after rendering (read from the live element, so browser normalisation such
+ *   as a datetime-local's milliseconds is already applied)
+ * @property {Map<Element, {path: string, members: Element[]}>} containers -
+ *   every object, list and list item, with the path it was rendered from and
+ *   the controls it held, in order
+ */
+
+/** @type {WeakMap<Element, ContainerBinding>} */
+const boundContainers = new WeakMap();
+
+// The elements extractFields reads a value from: named inputs, selects and
+// textareas, and a gallery (whose value is a data attribute). A const input is
+// the schema's value, not the editor's, so it is never bound.
+const CONTROL_SELECTOR = 'input[name], select[name], textarea[name], .gallery-field[data-field]';
+
+// Containers: a nested object's fieldset, a list (blocks, inline array,
+// reference list), and each item of a blocks list or inline array.
+const CONTAINER_SELECTOR = '[data-object-field], [data-array-items][data-field], .blocks-list > .block-item, .array-field > .array-item';
+
+/**
+ * Record what a freshly rendered container was rendered from, so that
+ * extractFields / extractFormData give every control and container the editor
+ * leaves alone its stored value. Call it once, straight after the markup is in
+ * the document and its widgets are set up, and before any edit: the baselines
+ * are the live elements' values at that moment. Not for a NEW entry, which has
+ * no stored values to keep.
+ *
+ * Elements added later (a new block, a new item, a newly chosen reference
+ * card) are not bound, so they are read from the DOM; a list they join
+ * counts as changed.
+ *
+ * @param {HTMLElement} container - the form or item editor holding the fields
+ * @param {object} original - the values it was rendered from (the API's `data`
+ *   for the open entry; the item for an item editor)
+ */
+export function bindOriginalValues(container, original) {
+  /** @type {ContainerBinding} */
+  const binding = { original: cloneValue(original ?? {}), controls: new Map(), containers: new Map() };
+  for (const control of boundControls(container)) {
+    binding.controls.set(control, {
+      path: control.getAttribute('data-original-path') ?? controlPath(control),
+      baseline: controlState(control),
+    });
+  }
+  for (const element of container.querySelectorAll(CONTAINER_SELECTOR)) {
+    const path = containerPath(element);
+    if (path === null) continue;
+    binding.containers.set(element, { path, members: boundControls(element) });
+  }
+  boundContainers.set(container, binding);
+}
+
+/**
+ * Put the stored value back for everything the editor has not changed.
+ * Containers first, outermost first: an unchanged container yields its stored
+ * value whole (null, an unrendered key, an item's every field), and nothing
+ * inside it is looked at again. A changed container (an edit inside, or an
+ * item added, removed or moved) falls through to its contents, so a moved but
+ * otherwise untouched block is still its stored self at its new index.
+ * @param {HTMLElement} container
+ * @param {object} data - what readFields read from the DOM (mutated)
+ * @returns {object} data
+ */
+function applyOriginalValues(container, data) {
+  const binding = boundContainers.get(container);
+  if (!binding) return data;
+  const settled = [];
+  const insideSettled = (element) => settled.some((outer) => outer.contains(element));
+
+  for (const [element, bound] of binding.containers) {
+    if (!container.contains(element) || insideSettled(element)) continue;
+    const members = boundControls(element);
+    const unchanged = members.length === bound.members.length
+      && members.every((control, index) => control === bound.members[index] && controlUnchanged(binding, control));
+    if (!unchanged) continue;
+    const currentPath = containerPath(element);
+    if (currentPath === null) continue;
+    putStoredValue(data, currentPath, binding.original, bound.path);
+    settled.push(element);
+  }
+
+  for (const [control, bound] of binding.controls) {
+    if (!container.contains(control) || insideSettled(control)) continue;
+    if (!controlUnchanged(binding, control)) continue;
+    putStoredValue(data, controlPath(control), binding.original, bound.path);
+  }
+  return data;
+}
+
+/** The controls inside an element that extractFields reads, in document order. */
+function boundControls(root) {
+  return [...root.querySelectorAll(CONTROL_SELECTOR)].filter((control) => !control.hasAttribute('data-schema-const'));
+}
+
+/** Where a control's value is saved now (its name follows a reindex). */
+function controlPath(control) {
+  return control.matches('.gallery-field') ? control.dataset.field : control.name;
+}
+
+/**
+ * Where a container's value is saved now: its field path, or for a list item
+ * its list's path and the item's current index. Null for anything else.
+ */
+function containerPath(element) {
+  if (element.hasAttribute('data-object-field')) return element.dataset.objectField;
+  if (element.matches('.block-item, .array-item')) {
+    const listPath = element.parentElement?.dataset.field;
+    const index = element.dataset.index;
+    return listPath && index !== undefined ? `${listPath}[${index}]` : null;
+  }
+  return element.dataset.field ?? null;
+}
+
+/** A control's current value as one comparable string. */
+function controlState(control) {
+  if (control.matches('.gallery-field')) return control.dataset.galleryValue ?? '';
+  if (control.type === 'checkbox') return control.checked ? 'checked' : 'unchecked';
+  if (control.tagName === 'SELECT' && control.multiple) {
+    return [...control.selectedOptions].map((option) => option.value).join('\u0000');
+  }
+  return control.value;
+}
+
+/** Whether a bound control still holds its baseline value. */
+function controlUnchanged(binding, control) {
+  const bound = binding.controls.get(control);
+  return bound !== undefined && controlState(control) === bound.baseline;
+}
+
+/**
+ * Write the stored value at `storedPath` to `currentPath`. A value the entry
+ * did not have is removed rather than written: an absent key stays absent.
+ */
+function putStoredValue(data, currentPath, original, storedPath) {
+  const stored = getNestedValue(original, storedPath);
+  if (stored === undefined) {
+    deleteNestedValue(data, currentPath);
+  } else {
+    setNestedValue(data, currentPath, cloneValue(stored));
+  }
+}
+
+/** A deep copy, so a saved object never shares structure with the binding. */
+function cloneValue(value) {
+  return value === undefined ? undefined : structuredClone(value);
+}
+
+/** Remove an object key at a dot/bracket path; array slots are left alone. */
+function deleteNestedValue(obj, path) {
+  const keys = path.split(/\.|\[|\]/).filter(Boolean);
+  const last = keys.pop();
+  let current = obj;
+  for (const key of keys) {
+    if (current === undefined || current === null || typeof current !== 'object') return;
+    current = current[key];
+  }
+  if (current && typeof current === 'object' && !Array.isArray(current)) delete current[last];
 }
 
 /**
@@ -2248,7 +2466,8 @@ export function createEmptyArrayItem(schema) {
  *
  * An item carries its own path in two places: the `name` of every input, and the
  * `data-field` of any container inside it (a gallery, a nested inline array, a
- * nested blocks list, a reference field). extractFields reads both, so updating
+ * nested blocks list, a reference field), plus a nested object's
+ * `data-object-field`. extractFields reads all of them, so updating
  * only the names left a container writing to the item's OLD index — a block's
  * empty nested array was read back as a phantom extra block, and a gallery saved
  * its images onto whichever block used to sit there.
@@ -2279,6 +2498,9 @@ function repointItemPaths(item, arrayPath, oldIndex, newIndex) {
 
   item.querySelectorAll('[data-field]').forEach(element => {
     element.dataset.field = repoint(element.dataset.field);
+  });
+  item.querySelectorAll('[data-object-field]').forEach(element => {
+    element.dataset.objectField = repoint(element.dataset.objectField);
   });
   item.querySelectorAll('[data-edit-gallery]').forEach(element => {
     element.dataset.editGallery = repoint(element.dataset.editGallery);

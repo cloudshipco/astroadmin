@@ -13,6 +13,7 @@ import {
   generateFields,
   setupFieldHandlers,
   extractFields,
+  bindOriginalValues,
   getItemPreview,
   createEmptyArrayItem,
 } from './form-generator.js';
@@ -282,6 +283,9 @@ export function openSingleItemEditor(item, schema, onSave) {
   // An item's fields get exactly what the main form's fields get: image pickers,
   // galleries, colour pickers, expanding textareas, nested arrays.
   setupFieldHandlers(form);
+  // The item it was opened with is what an untouched field saves: Done after
+  // editing one field must leave every other value of the item as it was.
+  bindOriginalValues(form, item);
 
   const closeEditModal = () => editModal.remove();
 

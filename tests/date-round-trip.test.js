@@ -52,7 +52,7 @@ globalThis.HTMLElement = window.HTMLElement;
 globalThis.Node = window.Node;
 globalThis.Event = window.Event;
 
-const { generateForm, extractFormData } = await import('../ui/form-generator.js');
+const { generateForm, extractFormData, bindOriginalValues } = await import('../ui/form-generator.js');
 const { serializeJson, serializeMarkdown, orderLike } = await import('../server/utils/content-format.js');
 const matter = (await import('gray-matter')).default;
 
@@ -74,6 +74,8 @@ function renderAndExtract(schema, data, edit = () => {}) {
   const form = document.createElement('form');
   form.innerHTML = generateForm(schema, data);
   document.body.appendChild(form);
+  // As the dashboard does: the loaded entry is what an untouched control saves.
+  bindOriginalValues(form, data);
   edit(form);
   const extracted = extractFormData(form, schema);
   form.remove();

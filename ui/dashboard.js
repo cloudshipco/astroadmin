@@ -7,6 +7,7 @@ import {
   generateForm,
   extractFormData,
   setupFormHandlers,
+  bindOriginalValues,
   referenceCardHtml,
   setReferenceInputValue,
   REFERENCE_EMPTY_HTML,
@@ -1032,6 +1033,11 @@ async function renderEditor(entryData, ctx) {
     schema: schemaData.collection.schema,
     isNew: false,
   });
+  // Every save rebuilds the entry from this form, so bind it to the entry it
+  // was rendered from: a field the editor leaves alone saves its stored value
+  // (a null, a {collection, id} reference, a datetime's offset), not what its
+  // control reads back as. After the widgets are set up, before any edit.
+  bindOriginalValues(form, entryData.data);
   showEntryProblems(form, entryData.validation);
 
   // Collapse all blocks by default

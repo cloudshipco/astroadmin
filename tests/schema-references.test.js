@@ -34,7 +34,7 @@ globalThis.HTMLElement = window.HTMLElement;
 
 const { parseAstroSchemas } = await import('../server/utils/schema-parser.js');
 const { enrichSchemaWithBlockTypes } = await import('../server/utils/block-types.js');
-const { generateForm, extractFormData, setReferenceInputValue } = await import('../ui/form-generator.js');
+const { generateForm, extractFormData, setReferenceInputValue, bindOriginalValues } = await import('../ui/form-generator.js');
 const { validateAgainstSchema } = await import('../server/utils/content-validation.js');
 const { componentPreviewPath } = await import('../ui/preview-routes.js');
 const { buildCollectionBlockMap } = await import('../server/utils/collections.js');
@@ -59,6 +59,8 @@ function render(schema, data) {
   const form = document.createElement('form');
   form.innerHTML = generateForm(schema, data);
   document.body.appendChild(form);
+  // As the dashboard does: an untouched reference saves its stored value.
+  bindOriginalValues(form, data);
   return form;
 }
 

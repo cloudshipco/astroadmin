@@ -29,7 +29,7 @@ globalThis.Event = window.Event;
 globalThis.confirm = () => true;
 window.confirm = () => true;
 
-const { generateForm, extractFields, extractFormData, setupFormHandlers } =
+const { generateForm, extractFields, extractFormData, setupFormHandlers, bindOriginalValues } =
   await import('../ui/form-generator.js');
 
 // Every check runs even after one fails, so a red run names every broken case
@@ -64,6 +64,9 @@ function render(schema, data) {
     const marked = [...select.options].findIndex((option) => option.hasAttribute('selected'));
     if (marked >= 0) select.selectedIndex = marked;
   }
+  // As the dashboard does for a loaded entry: what it was rendered from is
+  // what an untouched control saves.
+  bindOriginalValues(form, data);
   return form;
 }
 
@@ -335,9 +338,17 @@ check('optional array with items is unchanged', () => {
 });
 
 check('optional min(1) array inside a block item saves as absent, not []', () => {
-  const entry = { title: 'Articles page', blocks: [{ type: 'features', heading: 'Why', tags: [] }] };
-  const form = render(pageSchema, entry);
-  equal(extractFormData(form, pageSchema), { title: 'Articles page', blocks: [{ type: 'features', heading: 'Why' }] });
+  // The entry never had one: the empty list the editor renders is not saved.
+  const entry = { title: 'Articles page', blocks: [{ type: 'features', heading: 'Why' }] };
+  equal(extractFormData(render(pageSchema, entry), pageSchema), entry, 'never had one');
+  // The editor emptied it: absent, as for any optional array.
+  const form = render(pageSchema, { ...entry, blocks: [{ ...entry.blocks[0], tags: ['fast'] }] });
+  form.querySelector('.array-item').remove();
+  equal(extractFormData(form, pageSchema), entry, 'emptied by the editor');
+  // A stored [] the editor leaves alone is left alone (untouched values keep
+  // their stored value); the editor's validation warning reports it.
+  const stored = { ...entry, blocks: [{ ...entry.blocks[0], tags: [] }] };
+  equal(extractFormData(render(pageSchema, stored), pageSchema), stored, 'stored [] untouched');
 });
 
 check('optional array inside a block item with items is unchanged', () => {
@@ -469,9 +480,12 @@ check('nullable fields: a value set on a null field is saved with its type', () 
   control(form, 'enabled').value = 'false';
   control(form, 'note').value = 'A note';
   control(form, 'tier').value = 'silver';
-  control(form, 'at').value = '2026-07-01T12:30';
+  // `at` is a real z.date() as zod 3 serialises it (format date-time, marked):
+  // with no time to keep it is a date input, and a date-only value is valid.
+  equal(control(form, 'at').type, 'date', 'a z.date() with no time is a date input');
+  control(form, 'at').value = '2026-07-01';
   equal(extractFormData(form, NULLABLE_SCHEMA), {
-    title: 'Hello', rank: 5, enabled: false, note: 'A note', tier: 'silver', at: '2026-07-01T12:30:00.000Z',
+    title: 'Hello', rank: 5, enabled: false, note: 'A note', tier: 'silver', at: '2026-07-01',
   });
 });
 

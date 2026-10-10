@@ -196,9 +196,9 @@ await check('editor: a markdown entry whose schema has blocks shows its body', a
   const schemaResponse = { json: async () => ({ collection: { schema: BLOCKS_SCHEMA } }) };
   const render = extract('async function renderEditor(entryData, ctx)',
     ['document', 'fetch', 'collectionApiPath', 'generateForm', 'installSaver', 'showEntryProblems',
-      'collapseAllBlocks', 'setupBlockFocus', 'loadSeq'],
+      'collapseAllBlocks', 'setupBlockFocus', 'loadSeq', 'bindOriginalValues'],
     [document, async () => schemaResponse, (name) => `/api/collections/${name}`, () => '<input name="title">',
-      () => {}, () => {}, () => {}, () => {}, 1]);
+      () => {}, () => {}, () => {}, () => {}, 1, () => {}]);
   document.body.innerHTML = '<div id="editorForm"></div>';
   await render({ type: 'content', data: { title: 'About' }, body: BODY }, { collection: 'pages', slug: 'about', locale: null, myLoad: 1 });
   const textarea = document.getElementById('markdown-body');
