@@ -203,6 +203,25 @@ export function isPreviewableImage(value) {
   return trimmed !== '' && !/^placeholder:/i.test(trimmed);
 }
 
+// A widget's clear button marks the control it empties. A control with no
+// recorded baseline (one in a new entry, see form-generator's
+// nullableControlValue) has nothing else to tell "cleared" from "never set":
+// a hidden input's defaultValue follows its value, and a value chosen then
+// cleared is back where it started. A nullable control so marked saves null.
+export const CLEARED_ATTRIBUTE = 'data-cleared';
+
+/**
+ * Set a widget-held control's value (an image picker's hidden input, a
+ * reference's, a colour's text box), recording a clear: '' marks it cleared,
+ * anything else unmarks it.
+ * @param {HTMLInputElement} input
+ * @param {string} value
+ */
+export function setWidgetValue(input, value) {
+  input.value = value;
+  input.toggleAttribute(CLEARED_ATTRIBUTE, value === '');
+}
+
 /**
  * Update an image picker's hidden input and preview.
  * The stored value stays exactly as chosen; only the preview src is resolved —
@@ -217,7 +236,7 @@ export function updateImagePicker(picker, url, previewUrl = '') {
   const previewImg = picker.querySelector('[data-preview-img]');
   const placeholder = picker.querySelector('[data-placeholder]');
 
-  hiddenInput.value = url;
+  setWidgetValue(hiddenInput, url);
 
   if (isPreviewableImage(url)) {
     previewImg.src = previewUrl || resolveImageUrl(url);
@@ -300,7 +319,7 @@ function setupColorPickers(container, onChange) {
     const textInput = wrapper?.querySelector('.color-picker-text');
     const swatch = wrapper?.querySelector('.color-picker-input');
 
-    if (textInput) textInput.value = '';
+    if (textInput) setWidgetValue(textInput, '');
     if (swatch) swatch.value = '#ffffff';
 
     clearBtn.remove();

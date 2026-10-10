@@ -8,7 +8,7 @@
  * widget added here shows up on all three.
  */
 
-import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage } from './field-widgets.js';
+import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, setWidgetValue, CLEARED_ATTRIBUTE } from './field-widgets.js';
 
 import { escapeHtml } from './escape-html.js';
 
@@ -344,15 +344,10 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   // A nullable boolean has three states, so it is a select, not a checkbox:
   // "Not set" (null), Yes, No. extractFields reads data-value-type back.
   if (schema.type === 'boolean' && nullable) {
-    const current = value === true ? 'true' : value === false ? 'false' : '';
     return `
       <div class="form-group">
         <label for="${id}" class="form-label">${getFieldLabel(name, schema)}</label>
-        <select name="${fullPath}" id="${id}" class="form-input" data-value-type="boolean" ${nullableAttributes}>
-          <option value="" ${current === '' ? 'selected' : ''}>Not set</option>
-          <option value="true" ${current === 'true' ? 'selected' : ''}>Yes</option>
-          <option value="false" ${current === 'false' ? 'selected' : ''}>No</option>
-        </select>
+        ${nullableBooleanSelect(fullPath, value, `id="${id}" class="form-input"`)}
       </div>
     `;
   }
@@ -570,6 +565,24 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
 }
 
 /**
+ * A nullable boolean's control, a field's or a list item's: three states, so a
+ * select rather than a checkbox. "Not set" (null), Yes, No; extractFields reads
+ * data-value-type back, and data-nullable makes a cleared one save null.
+ * @param {string} fullPath - the control's name
+ * @param {*} value - the stored value
+ * @param {string} attributes - the rest of the element's attributes (id, class)
+ */
+function nullableBooleanSelect(fullPath, value, attributes) {
+  const current = value === true ? 'true' : value === false ? 'false' : '';
+  return `
+        <select name="${fullPath}" ${attributes} data-value-type="boolean" data-nullable>
+          <option value="" ${current === '' ? 'selected' : ''}>Not set</option>
+          <option value="true" ${current === 'true' ? 'selected' : ''}>Yes</option>
+          <option value="false" ${current === 'false' ? 'selected' : ''}>No</option>
+        </select>`;
+}
+
+/**
  * Generate blocks field (array with discriminated union)
  */
 function generateBlocksField(name, schema, value, fullPath) {
@@ -714,7 +727,12 @@ function generateArrayItem(arrayPath, rawItemSchema, value, index) {
   // Simple array of primitives. The element has to carry the item's schema type:
   // extractFields reads the DOM, not the schema, to decide what a value parses back
   // as — so a number or boolean rendered into a text box saves as the string "4" or
-  // "true" and fails validation.
+  // "true" and fails validation. A nullable item is marked as a nullable field is
+  // (generateField), so a cleared one saves null rather than ''.
+  const nullable = isNullableSchema(rawItemSchema);
+  if (itemSchema?.type === 'boolean' && nullable) {
+    return nullableBooleanSelect(path, value, 'class="array-item-input form-input"');
+  }
   if (itemSchema?.type === 'boolean') {
     return `
       <label class="checkbox-label array-item-input">
@@ -732,6 +750,7 @@ function generateArrayItem(arrayPath, rawItemSchema, value, index) {
       value="${escapeHtml(isNumericType(itemSchema?.type) ? (value ?? '') : displayText(value))}"
       class="array-item-input form-input"
       placeholder="Enter value..."
+      ${nullable ? 'data-nullable' : ''}
     >
   `;
 }
@@ -1201,7 +1220,7 @@ export function referenceId(value) {
  */
 export function setReferenceInputValue(input, entryId) {
   if (!input) return;
-  input.value = entryId;
+  setWidgetValue(input, entryId);
 }
 
 /**
@@ -1353,27 +1372,76 @@ export function extractFormData(formElement, schema) {
   // Check for top-level array schema
   const topLevelArrayInput = formElement.querySelector('input[data-top-level-array="true"]');
   if (topLevelArrayInput) {
+    // The whole entry is one list of cards, each a final value (see
+    // extractValues): an untouched list is the stored one, and an edited one
+    // holds stored items as stored and edited items as their item editor
+    // settled them, so nothing here is cleaned again.
+    const binding = boundContainers.get(formElement);
+    if (binding) recordStructuralEdits(binding);
+    if (binding && Array.isArray(binding.original) && controlUnchanged(binding, topLevelArrayInput)) {
+      return cloneValue(binding.original);
+    }
     try {
-      const arr = JSON.parse(topLevelArrayInput.value || '[]');
-      // Run the same schema-aware cleanup as object entries (this path used to
-      // return raw, leaving empty optionals to fail a consumer's validation).
-      cleanEmptyValues(arr, schema);
-      return arr;
+      return JSON.parse(topLevelArrayInput.value || '[]');
     } catch (e) {
       console.error('Failed to parse top-level array:', e);
       return [];
     }
   }
 
-  const data = readFields(formElement);
+  return extractValues(formElement, schema).data;
+}
+
+/**
+ * Read a container (the form, or an item editor's form) into the value it
+ * saves: changed controls from the DOM, untouched ones as stored
+ * (applyOriginalValues), then empty optionals stripped (cleanEmptyValues).
+ *
+ * Cleanup touches only what the DOM produced. A value put back as stored is
+ * never cleaned (a stored '' or [] stays), and neither is an item of a
+ * JSON-backed list of cards: each is either a stored item, untouched, or one
+ * an item editor already settled by this same rule (extractItem).
+ *
+ * @param {HTMLElement} container
+ * @param {object} schema - the object schema the container renders
+ * @returns {{data: object, removed: string[]}} the value, and the top-level
+ *   keys cleanup removed
+ */
+function extractValues(container, schema) {
+  const data = readFields(container);
+  const kept = applyOriginalValues(container, data);
+  container.querySelectorAll('input[data-array-data]').forEach((input) => {
+    for (const itemPath of finalItemPaths(getNestedValue(data, input.name), input.name)) kept.add(itemPath);
+  });
 
   // Strip empty optional fields, but keep required ones (see cleanEmptyValues) —
-  // walking the schema so this holds at every level, not just the top. Only
-  // what the DOM produced is cleaned: an untouched value is put back after, as
-  // it was stored (a stored '' or [] stays).
-  cleanEmptyValues(data, schema, false);
+  // walking the schema so this holds at every level, not just the top.
+  const before = Object.keys(data);
+  cleanEmptyValues(data, schema, false, kept);
+  return { data, removed: before.filter((key) => !(key in data)) };
+}
 
-  return applyOriginalValues(formElement, data);
+/** The paths of a list's items (`<path>[i]`), as cleanEmptyValues walks them. */
+function finalItemPaths(items, listPath) {
+  return new Set(Array.isArray(items) ? items.map((_, index) => `${listPath}[${index}]`) : []);
+}
+
+/**
+ * What an item editor saves: the item it was opened with, with every field it
+ * renders read by the same rule as the main form (extractValues), so the item
+ * it hands back is final. An untouched field keeps its stored value, '' and
+ * [] included; a field the editor emptied is dropped when the schema makes it
+ * optional; a property the schema does not render is kept as it was.
+ * @param {HTMLElement} container - the item editor's form
+ * @param {object} item - the item it was opened with
+ * @param {object} schema - the item's object schema
+ * @returns {object}
+ */
+export function extractItem(container, item, schema) {
+  const { data, removed } = extractValues(container, schema);
+  const result = { ...item, ...data };
+  for (const key of removed) delete result[key];
+  return result;
 }
 
 /**
@@ -1394,7 +1462,9 @@ export function extractFormData(formElement, schema) {
  * @returns {object}
  */
 export function extractFields(container) {
-  return applyOriginalValues(container, readFields(container));
+  const data = readFields(container);
+  applyOriginalValues(container, data);
+  return data;
 }
 
 /**
@@ -1507,7 +1577,12 @@ function controlEdited(control) {
 function nullableControlValue(binding, control, value) {
   if (!control || control.dataset?.nullable === undefined || value !== '') return value;
   const bound = binding?.controls.get(control);
-  const changed = bound ? controlState(control) !== bound.baseline : controlEdited(control);
+  // With no baseline, a widget's clear button is the record: a hidden input's
+  // defaultValue follows its value, and a value chosen then cleared is back
+  // where it started (see setWidgetValue).
+  const changed = bound
+    ? controlState(control) !== bound.baseline
+    : control.hasAttribute(CLEARED_ATTRIBUTE) || controlEdited(control);
   return changed ? null : value;
 }
 
@@ -1532,6 +1607,9 @@ function nullableControlValue(binding, control, value) {
  * @property {Map<Element, {path: string, members: Element[]}>} containers -
  *   every object, list and list item, with the path it was rendered from and
  *   the controls it held, in order
+ * @property {Set<Element>} structurallyEdited - lists (and card lists' JSON
+ *   inputs) whose rows were added, removed or moved since binding
+ * @property {?MutationObserver} observer - watches for those row changes
  */
 
 /** @type {WeakMap<Element, ContainerBinding>} */
@@ -1563,8 +1641,15 @@ const CONTAINER_SELECTOR = '[data-object-field], [data-array-items][data-field],
  *   for the open entry; the item for an item editor)
  */
 export function bindOriginalValues(container, original) {
+  boundContainers.get(container)?.observer?.disconnect();
   /** @type {ContainerBinding} */
-  const binding = { original: cloneValue(original ?? {}), controls: new Map(), containers: new Map() };
+  const binding = {
+    original: cloneValue(original ?? {}),
+    controls: new Map(),
+    containers: new Map(),
+    structurallyEdited: new Set(),
+    observer: null,
+  };
   for (const control of boundControls(container)) {
     binding.controls.set(control, {
       path: control.getAttribute('data-original-path') ?? controlPath(control),
@@ -1576,7 +1661,54 @@ export function bindOriginalValues(container, original) {
     if (path === null) continue;
     binding.containers.set(element, { path, members: boundControls(element) });
   }
+  // Rows come and go without any control changing value: a row holding only
+  // a constant has no bound control, and a row added then removed leaves the
+  // list as it was rendered. Watch the rows themselves instead; records are
+  // read at extraction (recordStructuralEdits), and on delivery so none pile up.
+  if (typeof MutationObserver === 'function') {
+    binding.observer = new MutationObserver((records) => noteStructuralEdits(binding, records));
+    binding.observer.observe(container, { childList: true, subtree: true });
+  }
   boundContainers.set(container, binding);
+}
+
+// A list's rows: what adding, removing or moving one adds or removes.
+const LIST_ROW_SELECTOR = '.block-item, .array-item, .reference-card, .array-card';
+
+/** Read the observer's pending records (see bindOriginalValues). */
+function recordStructuralEdits(binding) {
+  if (binding.observer) noteStructuralEdits(binding, binding.observer.takeRecords());
+}
+
+/**
+ * Mark the list each added, removed or moved row belongs to as structurally
+ * edited: the list element for blocks, inline items and references, and the
+ * JSON input that holds a list of cards. Such a list saves what the DOM holds
+ * now, even when that matches what was rendered.
+ */
+function noteStructuralEdits(binding, records) {
+  for (const record of records) {
+    const rows = [...record.addedNodes, ...record.removedNodes]
+      .filter((node) => node.nodeType === 1 && node.matches(LIST_ROW_SELECTOR));
+    if (rows.length === 0) continue;
+    // The nearest list wins. A single reference's card is not a row (its
+    // hidden input's value says what changed), and must not mark a list it
+    // happens to sit in.
+    const owner = record.target.closest?.('[data-array-cards], [data-array-items][data-field], [data-reference-single]');
+    if (!owner || owner.hasAttribute('data-reference-single')) continue;
+    const list = owner.hasAttribute('data-array-cards')
+      ? owner.parentElement?.querySelector('input[data-array-data]')
+      : owner;
+    if (list) binding.structurallyEdited.add(list);
+  }
+}
+
+/** Whether rows were added, removed or moved in this element or anywhere inside it. */
+function structurallyEditedWithin(binding, element) {
+  for (const edited of binding.structurallyEdited) {
+    if (element === edited || element.contains(edited)) return true;
+  }
+  return false;
 }
 
 /**
@@ -1586,18 +1718,25 @@ export function bindOriginalValues(container, original) {
  * inside it is looked at again. A changed container (an edit inside, or an
  * item added, removed or moved) falls through to its contents, so a moved but
  * otherwise untouched block is still its stored self at its new index.
+ * A list whose rows were added, removed or moved is changed even when no
+ * control in it changed (see noteStructuralEdits), and so is everything
+ * holding it.
  * @param {HTMLElement} container
  * @param {object} data - what readFields read from the DOM (mutated)
- * @returns {object} data
+ * @returns {Set<string>} the current paths given their stored values, which
+ *   cleanEmptyValues must leave alone
  */
 function applyOriginalValues(container, data) {
+  const restored = new Set();
   const binding = boundContainers.get(container);
-  if (!binding) return data;
+  if (!binding) return restored;
+  recordStructuralEdits(binding);
   const settled = [];
   const insideSettled = (element) => settled.some((outer) => outer.contains(element));
 
   for (const [element, bound] of binding.containers) {
     if (!container.contains(element) || insideSettled(element)) continue;
+    if (structurallyEditedWithin(binding, element)) continue;
     const members = boundControls(element);
     const unchanged = members.length === bound.members.length
       && members.every((control, index) => control === bound.members[index] && controlUnchanged(binding, control));
@@ -1605,6 +1744,7 @@ function applyOriginalValues(container, data) {
     const currentPath = containerPath(element);
     if (currentPath === null) continue;
     putStoredValue(data, currentPath, binding.original, bound.path);
+    restored.add(currentPath);
     settled.push(element);
   }
 
@@ -1612,8 +1752,9 @@ function applyOriginalValues(container, data) {
     if (!container.contains(control) || insideSettled(control)) continue;
     if (!controlUnchanged(binding, control)) continue;
     putStoredValue(data, controlPath(control), binding.original, bound.path);
+    restored.add(controlPath(control));
   }
-  return data;
+  return restored;
 }
 
 /** The controls inside an element that extractFields reads, in document order. */
@@ -1653,7 +1794,8 @@ function controlState(control) {
 /** Whether a bound control still holds its baseline value. */
 function controlUnchanged(binding, control) {
   const bound = binding.controls.get(control);
-  return bound !== undefined && controlState(control) === bound.baseline;
+  return bound !== undefined && controlState(control) === bound.baseline
+    && !binding.structurallyEdited.has(control);
 }
 
 /**
@@ -1709,8 +1851,12 @@ function toNumber(value) {
  * @param {object} [schemaNode] - The JSON schema for `obj` (properties/required,
  *   or `items` for arrays). Omit at a level to fail safe (keep empties).
  * @param {boolean} [isBlockItem] - True inside a discriminated-union block item.
+ * @param {?Set<string>} [kept] - Paths (as controls name them: `a.b[0].c`) of
+ *   values that are not the DOM's to clean: stored values put back as they
+ *   were, and items an item editor already settled. Each is left whole.
+ * @param {string} [path] - The path of `obj` itself ('' at the top).
  */
-export function cleanEmptyValues(obj, schemaNode, isBlockItem = false) {
+export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = null, path = '') {
   if (Array.isArray(obj)) {
     const itemSchema = schemaNode && schemaNode.items;
     // Prefer the schema to decide block-ness: a discriminated-union block array
@@ -1719,7 +1865,9 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false) {
     // an ordinary record that merely has a `type` field (e.g. {type:'external'})
     // would be misread as a block and keep its empty optionals.
     const schemaSaysBlock = !!(schemaNode && schemaNode.blockTypes);
-    obj.forEach(item => {
+    obj.forEach((item, index) => {
+      const itemPath = `${path}[${index}]`;
+      if (kept?.has(itemPath)) return;
       const itemIsBlock = schemaNode
         ? schemaSaysBlock
         : (item && typeof item === 'object' && 'type' in item);
@@ -1731,7 +1879,7 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false) {
       const blockSchema = schemaSaysBlock && item && typeof item === 'object'
         ? schemaNode.blockTypes[item.type]
         : undefined;
-      cleanEmptyValues(item, blockSchema || itemSchema, itemIsBlock);
+      cleanEmptyValues(item, blockSchema || itemSchema, itemIsBlock, kept, itemPath);
     });
     return;
   }
@@ -1744,13 +1892,15 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false) {
   );
 
   for (const key of Object.keys(obj)) {
+    const keyPath = path ? `${path}.${key}` : key;
+    if (kept?.has(keyPath)) continue;
     const value = obj[key];
     const isRequired = required.has(key);
     if (value === '') {
       // Only ever drop a value the schema proves optional.
       if (!isBlockItem && schemaKnown && !isRequired) delete obj[key];
     } else if (value && typeof value === 'object') {
-      cleanEmptyValues(value, props ? props[key] : undefined, isBlockItem);
+      cleanEmptyValues(value, props ? props[key] : undefined, isBlockItem, kept, keyPath);
       // Drop a now-empty object only when we can prove that key is optional.
       if (
         !isBlockItem && schemaKnown && !isRequired &&
@@ -2273,7 +2423,7 @@ function setupArrayHandlers(formElement, onBlockChange) {
 
       // Trigger change callback
       if (onBlockChange) onBlockChange();
-    });
+    }, { isNew: true });
   });
 
   // Initialize sortable for array cards (features, stats, etc.)

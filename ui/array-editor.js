@@ -12,7 +12,7 @@ import { escapeHtml } from './escape-html.js';
 import {
   generateFields,
   setupFieldHandlers,
-  extractFields,
+  extractItem,
   bindOriginalValues,
   getItemPreview,
   createEmptyArrayItem,
@@ -132,7 +132,7 @@ function setupModalEvents(modal) {
     currentItems.push(createEmptyArrayItem(currentSchema));
     renderItems();
     // Open editor for new item
-    openItemEditor(currentItems.length - 1);
+    openItemEditor(currentItems.length - 1, { isNew: true });
   });
 
   modal.querySelector('[data-save]').addEventListener('click', () => {
@@ -217,14 +217,14 @@ function renderItems() {
 /**
  * Open the editor for one item of the array currently being edited
  */
-function openItemEditor(index) {
+function openItemEditor(index, { isNew = false } = {}) {
   const item = currentItems[index];
   if (!item) return;
 
   openSingleItemEditor(item, currentSchema, (updatedItem) => {
     currentItems[index] = updatedItem;
     renderItems();
-  });
+  }, { isNew });
 }
 
 /**
@@ -232,8 +232,12 @@ function openItemEditor(index) {
  * @param {Object} item - The item to edit
  * @param {Object} schema - Schema for the item
  * @param {Function} onSave - Called with the updated item
+ * @param {object} [options]
+ * @param {boolean} [options.isNew] - The item is new (the schema's empty
+ *   placeholders, not stored values), so it is not bound: its fields are read
+ *   from the DOM and its empty optionals cleaned away, as a new entry's are.
  */
-export function openSingleItemEditor(item, schema, onSave) {
+export function openSingleItemEditor(item, schema, onSave, { isNew = false } = {}) {
   // A fresh overlay per call, never a shared one. An item can itself contain an
   // array of objects, and editing one of those opens a second item editor on top of
   // this one — reusing a single element would overwrite the parent mid-edit and
@@ -285,13 +289,14 @@ export function openSingleItemEditor(item, schema, onSave) {
   setupFieldHandlers(form);
   // The item it was opened with is what an untouched field saves: Done after
   // editing one field must leave every other value of the item as it was.
-  bindOriginalValues(form, item);
+  if (!isNew) bindOriginalValues(form, item);
 
   const closeEditModal = () => editModal.remove();
 
   const saveAndClose = () => {
-    // Spread over the original so a property the schema doesn't render survives
-    if (onSave) onSave({ ...item, ...extractFields(form) });
+    // Final, by the main form's rule: untouched fields as stored, emptied
+    // optionals dropped, unrendered properties kept (extractItem).
+    if (onSave) onSave(extractItem(form, item, schema));
     closeEditModal();
   };
 

@@ -57,6 +57,59 @@ export function findFieldForPath(form, issuePath) {
   return null;
 }
 
+// A list with too few items, as zod 4 and zod 3 word it.
+const TOO_FEW_ITEMS = /^(?:Too small: expected array to have >=?(\d+) items?|Array must contain at least (\d+) element\(s\))$/;
+
+/**
+ * An issue's message, in terms of what the editor can do. A list with too few
+ * items says how many it needs, and, when the schema lets the key be absent,
+ * how to leave it out: an editor-emptied optional list is saved as not set
+ * (form-generator's cleanEmptyValues), so adding an item and deleting it does
+ * that, even for an empty list stored that way.
+ * @param {{path: string, message: string}} issue
+ * @param {?object} schema
+ * @returns {string}
+ */
+export function adviseOn(issue, schema) {
+  const match = TOO_FEW_ITEMS.exec(issue.message);
+  if (!match) return issue.message;
+  const count = Number(match[1] ?? match[2]);
+  const needs = `Needs at least ${count} item${count === 1 ? '' : 's'}.`;
+  return optionalAtPath(schema, issue.path)
+    ? `${needs} Or leave it out: add an item and delete it, and it is saved as not set.`
+    : needs;
+}
+
+/** A schema node without its null branch (`anyOf: [x, {type: 'null'}]`). */
+function withoutNull(node) {
+  const union = node?.anyOf || node?.oneOf;
+  if (!Array.isArray(union) || node.type !== undefined) return node;
+  const nonNull = union.filter((member) => member?.type !== 'null');
+  return nonNull.length === 1 ? nonNull[0] : node;
+}
+
+/**
+ * Whether the schema PROVES the key at an issue path optional: every step is
+ * an object property or a list item it can follow. Anything it cannot follow
+ * (a block, a union) is not proof.
+ */
+function optionalAtPath(schema, issuePath) {
+  const segments = String(issuePath || '').match(/[^.[\]]+/g) || [];
+  let node = withoutNull(schema);
+  for (const [index, segment] of segments.entries()) {
+    const last = index === segments.length - 1;
+    if (/^\d+$/.test(segment)) {
+      if (node?.type !== 'array' || node.blockTypes || last) return false;
+      node = withoutNull(node.items);
+      continue;
+    }
+    if (!node?.properties || !(segment in node.properties)) return false;
+    if (last) return !(node.required || []).includes(segment);
+    node = withoutNull(node.properties[segment]);
+  }
+  return false;
+}
+
 /** Remove every mark a previous showEntryProblems call left on the form. */
 export function clearEntryProblems(form) {
   form.querySelectorAll(`.${SUMMARY_CLASS}, .${FIELD_MESSAGE_CLASS}`).forEach((el) => el.remove());
@@ -69,10 +122,13 @@ export function clearEntryProblems(form) {
  * first, so a fixed entry loses its marks on the next save.
  * @param {HTMLFormElement} form
  * @param {{status: string, issues: Array<{path: string, message: string}>}|undefined} validation
+ * @param {?object} [schema] - the entry's schema, for advice that depends on
+ *   it (whether a too-short list may be left out instead)
  */
-export function showEntryProblems(form, validation) {
+export function showEntryProblems(form, validation, schema = null) {
   clearEntryProblems(form);
   if (validation?.status !== 'invalid' || validation.issues.length === 0) return;
+  const issues = validation.issues.map((issue) => ({ ...issue, message: adviseOn(issue, schema) }));
 
   const summary = document.createElement('div');
   summary.className = SUMMARY_CLASS;
@@ -81,7 +137,7 @@ export function showEntryProblems(form, validation) {
   intro.textContent = 'Your changes are saved, but the site cannot be published until this is fixed:';
   summary.appendChild(intro);
   const list = document.createElement('ul');
-  for (const issue of validation.issues) {
+  for (const issue of issues) {
     const item = document.createElement('li');
     item.textContent = `${describeIssuePath(issue.path)}: ${issue.message}`;
     list.appendChild(item);
@@ -89,7 +145,7 @@ export function showEntryProblems(form, validation) {
   summary.appendChild(list);
   form.prepend(summary);
 
-  for (const issue of validation.issues) {
+  for (const issue of issues) {
     const field = findFieldForPath(form, issue.path);
     if (!field) continue; // the summary still names it
     if (field.matches('input:not([type="hidden"]), select, textarea')) {

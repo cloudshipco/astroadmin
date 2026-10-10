@@ -69,3 +69,27 @@ forced to `datetime-local`).
   an unrelated edit leaves the value byte-identical in the saved file.
 - Reorder a block list and an array: values move with their items unchanged.
 - Each test is seen red with the rule disabled.
+
+## Review round 3: lists, cleanup, clearing (done)
+
+- Cleanup ran on the DOM's data before stored values were put back, so it
+  stripped `''` and `[]` from every card of a JSON-backed list once any card
+  changed. Now restore runs first and returns its paths, cleanup skips them,
+  and card items are final: the item modal saves through `extractItem` (read,
+  restore, clean), a new item is opened unbound. The top-level-array entry
+  returns the stored list when untouched and does not re-clean items.
+- A row with no bound control (a `z.literal`-only object) was invisible to
+  the membership check. A MutationObserver started by `bindOriginalValues`
+  marks lists whose rows were added, removed or moved.
+- Primitive list items carry `data-nullable` (a nullable boolean item is the
+  same three-state select as a field). A widget's clear marks the control
+  (`setWidgetValue`), so an unbound (new) entry's cleared image or reference
+  saves null. Binding new entries to their defaults was considered and not
+  done: a value chosen then cleared is back at its baseline, so it would not
+  tell a clear from never set, and bound defaults would escape cleanup.
+- A stored invalid `[]` on an optional key: a list the editor structurally
+  changed saves its DOM value, so adding an item and deleting it leaves the
+  key unset (the optional-`[]` cleanup). The warning for a too-short list says
+  how many items it needs and, only when the schema proves the key optional,
+  how to leave it out. No new control.
+- Tests: `tests/untouched-structure.test.js`.

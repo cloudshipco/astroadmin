@@ -56,6 +56,17 @@ loaded entry (never a new one); the item modal binds the item it was opened with
 surface that renders stored data must bind it, or every lossy value is rewritten on the next
 save. Edited controls still need their own rules: a cleared nullable saves null, a chosen
 reference saves its id, a real `z.date()` with a date-only value is a date input.
+Three corollaries. (1) **Cleanup (`cleanEmptyValues`) touches only what the DOM produced**:
+`applyOriginalValues` returns the paths it restored and cleanup skips them, and the items of
+a JSON-backed card list are final (the item modal saves through `extractItem`, the same
+read-restore-clean rule, so it is not cleaned again; a NEW item is opened unbound, so its
+placeholders are cleaned). (2) **Rows are tracked, not just controls**: a MutationObserver
+from `bindOriginalValues` marks a list whose rows were added, removed or moved, so a row
+with no bound control (only a `z.literal`) counts, and a list emptied by the editor saves
+its DOM value even when it matches the stored one (an optional emptied list is then
+dropped, which is how a stored invalid `[]` gets unset). (3) **A widget's clear button
+records intent** (`setWidgetValue`, `data-cleared`): a hidden input's `defaultValue`
+follows its value, so in an unbound (new) form nothing else tells "cleared" from "never set".
 Verify a change here in a real browser too (recipe below): Chrome normalises values that
 happy-dom does not (`datetime-local` `.100` reads back as `.1`).
 
@@ -289,6 +300,16 @@ runner aggregating them). Most run server-less and need env vars:
   saving its id, a list item with no id before others, an unknown block type kept, and a
   zod 3 `z.date()` holding a date-only value rendered as a date input and saved date-only
   after changing the day. ~2 s.
+- `bun tests/untouched-structure.test.js` — the same rule for lists, cleanup and clearing,
+  through the same real app and converters: editing one card in the item modal leaves
+  every other card (and the edited card's untouched `''` and `[]`) as stored, in a field
+  and in a top-level-array JSON entry, while an emptied optional and a new card's
+  placeholders are still cleaned; rows holding only a `z.literal` are saved when added or
+  deleted (also inside an untouched object); a cleared nullable list item saves null
+  (zod 4 and zod 3; a nullable boolean item is three-state); a new entry's image or
+  reference chosen then cleared saves null; a stored invalid `[]` on an optional key is
+  left unset by adding an item and deleting it (inline list and cards), and the warning
+  says so only when the key is optional. Each check was seen red by mutating its fix. ~2 s.
 - `bun tests/serializer-fidelity.test.js` — every serialiser output, preserving candidate
   and every fallback, parses back to the data and body it was given: a body that starts
   with a `---` block stays body (`matter.stringify` reparsed it, so a CRLF file moved its

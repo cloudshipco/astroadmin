@@ -70,11 +70,14 @@ check('the save path threads the schema into cleanEmptyValues (keeps required fi
     /cleanEmptyValues\s*\(\s*data\s*,\s*schema\b/.test(fg),
     'extractFormData must pass the schema to cleanEmptyValues (else required fields drop)'
   );
-  // The top-level-ARRAY branch must ALSO clean (it returns before the object path,
-  // so a missing call there silently reinstates over-retention for array entries).
+  // The top-level-ARRAY branch does not clean again: its items are final (stored
+  // ones as stored, edited and new ones settled by the item editor's
+  // extractItem, which cleans what the DOM produced). That a new item still
+  // loses its empty placeholders is pinned by behaviour in
+  // untouched-structure.test.js ("a top-level list: a new item ...").
   assert.ok(
-    /cleanEmptyValues\s*\(\s*arr\s*,\s*schema\b/.test(fg),
-    'the top-level-array branch must clean the array against its schema'
+    /extractItem\(form,\s*item,\s*schema\)/.test(readFileSync(path.join(dir, '../ui/array-editor.js'), 'utf8')),
+    'the item editor must save through extractItem (it cleans what the DOM produced)'
   );
   // Both installSaver targets must carry `schema`, or that entry's saves lose the
   // required-field protection.

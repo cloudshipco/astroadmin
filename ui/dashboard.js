@@ -1038,7 +1038,7 @@ async function renderEditor(entryData, ctx) {
   // (a null, a {collection, id} reference, a datetime's offset), not what its
   // control reads back as. After the widgets are set up, before any edit.
   bindOriginalValues(form, entryData.data);
-  showEntryProblems(form, entryData.validation);
+  showEntryProblems(form, entryData.validation, schemaData.collection.schema);
 
   // Collapse all blocks by default
   collapseAllBlocks();
@@ -1477,7 +1477,7 @@ function makeSaver(target) {
         const needsFixing = result.validation?.status === 'invalid';
         // Not 'Saved', so it stays up rather than fading after two seconds.
         updateSaveStatus(needsFixing ? 'Saved, needs fixing' : 'Saved');
-        showEntryProblems(target.form, result.validation);
+        showEntryProblems(target.form, result.validation, target.schema);
         if (!silent) showNotification('Changes saved!', 'success');
       }
 
