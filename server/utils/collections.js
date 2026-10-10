@@ -239,7 +239,7 @@ export async function getCollectionSchema(collectionName) {
  * @param {Object} schemas - Loaded schemas from parseAstroSchemas
  * @returns {Object} - Map of collectionName -> [{ type, field }]
  */
-function buildCollectionBlockMap(schemas) {
+export function buildCollectionBlockMap(schemas) {
   /** @type {Record<string, Array<{type: string, field: string}>>} */
   const collectionBlockMap = {};
 
@@ -257,6 +257,10 @@ function buildCollectionBlockMap(schemas) {
         collectionBlockMap[collectionName].push({
           type: ref.blockType,
           field: ref.field,
+          // A single id or reference() (not a list), and whether it is an
+          // Astro reference(): the preview builds the field value from these.
+          ...(ref.single ? { single: true } : {}),
+          ...(ref.reference ? { reference: true } : {}),
         });
       }
     }

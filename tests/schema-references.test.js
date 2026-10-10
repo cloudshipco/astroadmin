@@ -37,6 +37,7 @@ const { enrichSchemaWithBlockTypes } = await import('../server/utils/block-types
 const { generateForm, extractFormData, setReferenceInputValue } = await import('../ui/form-generator.js');
 const { validateAgainstSchema } = await import('../server/utils/content-validation.js');
 const { componentPreviewPath } = await import('../ui/preview-routes.js');
+const { buildCollectionBlockMap } = await import('../server/utils/collections.js');
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-references-'));
@@ -162,6 +163,16 @@ export const collections = { team, categories, boxes, authors, posts };
       assert.deepEqual(refs.find((ref) => ref.field === 'author'), { blockType: 'byline', field: 'author', single: true, reference: true });
       assert.deepEqual(refs.find((ref) => ref.field === 'teamId'), { blockType: 'byline', field: 'teamId', single: true });
       assert.deepEqual(refs.find((ref) => ref.field === 'teamIds'), { blockType: 'quotes', field: 'teamIds' }, 'control: a list stays a list');
+    });
+
+    check('the collection -> block map the dashboard reads keeps single and reference', () => {
+      // The dashboard builds the component preview URL from usedByBlocks, which
+      // buildCollectionBlockMap derives: without the flags it never sends single=1.
+      assert.equal(typeof buildCollectionBlockMap, 'function', 'buildCollectionBlockMap is exported');
+      const used = buildCollectionBlockMap(schemas).team;
+      assert.deepEqual(used.find((ref) => ref.field === 'author'), { type: 'byline', field: 'author', single: true, reference: true });
+      assert.deepEqual(used.find((ref) => ref.field === 'teamId'), { type: 'byline', field: 'teamId', single: true });
+      assert.deepEqual(used.find((ref) => ref.field === 'teamIds'), { type: 'quotes', field: 'teamIds' }, 'control: a list has no flags');
     });
 
     check('the preview path tells the route a single field from a list', () => {
