@@ -135,7 +135,10 @@ function setupImagePickers(container, onChange) {
       const galleryField = e.target.closest('.gallery-field');
       const currentValue = decodeGalleryValue(galleryField.dataset.galleryValue);
 
-      openGalleryEditor(currentValue, (newImages) => {
+      openGalleryEditor(currentValue, (newImages, { structural = false } = {}) => {
+        // An add, remove or reorder is an edit even when the result equals the
+        // stored value: the form must then read the gallery, not restore it.
+        if (structural) galleryField.setAttribute(STRUCTURAL_EDIT_ATTRIBUTE, '');
         galleryField.dataset.galleryValue = encodeGalleryValue(newImages);
         updateGalleryFieldPreview(galleryField, newImages);
         if (onChange) onChange();
@@ -209,6 +212,13 @@ export function isPreviewableImage(value) {
 // a hidden input's defaultValue follows its value, and a value chosen then
 // cleared is back where it started. A nullable control so marked saves null.
 export const CLEARED_ATTRIBUTE = 'data-cleared';
+
+/**
+ * Marks a control a widget changed structurally (items added, removed or
+ * reordered out of the form's sight), so it counts as edited even when its
+ * value is back at its baseline. Read by form-generator's controlUnchanged.
+ */
+export const STRUCTURAL_EDIT_ATTRIBUTE = 'data-structural-edit';
 
 /**
  * Set a widget-held control's value (an image picker's hidden input, a

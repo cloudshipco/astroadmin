@@ -9,6 +9,9 @@ import { escapeHtml } from './escape-html.js';
 
 let currentCallback = null;
 let currentImages = []; // Array of { src, alt } objects
+// Whether images were added, removed or reordered since the editor opened: the
+// result can equal the stored value (add then remove) and still be an edit.
+let structuralEdit = false;
 let draggedItem = null;
 let draggedIndex = null;
 let dropPosition = null; // { index, position: 'before' | 'after' }
@@ -22,6 +25,7 @@ let allImageMetadata = {}; // Cache of image metadata
 export async function openGalleryEditor(images, onSave) {
   currentCallback = onSave;
   currentImages = JSON.parse(JSON.stringify(images || [])); // Deep clone
+  structuralEdit = false;
 
   // Create modal if it doesn't exist
   let modal = document.getElementById('galleryEditorModal');
@@ -139,6 +143,7 @@ function setupModalEvents(modal) {
         src: url,
         alt: metadata.alt || '',
       });
+      structuralEdit = true;
       renderImages();
     });
   });
@@ -146,7 +151,7 @@ function setupModalEvents(modal) {
   // Save button
   modal.querySelector('[data-save]').addEventListener('click', () => {
     if (currentCallback) {
-      currentCallback(currentImages);
+      currentCallback(currentImages, { structural: structuralEdit });
       closeGalleryEditor();
     }
   });
@@ -159,6 +164,7 @@ function setupModalEvents(modal) {
     if (removeBtn) {
       const index = parseInt(removeBtn.dataset.remove, 10);
       currentImages.splice(index, 1);
+      structuralEdit = true;
       renderImages();
     }
   });
@@ -287,6 +293,7 @@ function handleDrop(e) {
     // Reorder the array
     const [moved] = currentImages.splice(fromIndex, 1);
     currentImages.splice(toIndex, 0, moved);
+    structuralEdit = true;
     renderImages();
   }
 

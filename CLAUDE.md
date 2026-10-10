@@ -160,6 +160,10 @@ runner aggregating them). Most run server-less and need env vars:
   `//host`, such as `/.//host`) falling back to the site root.
 - `bun tests/clean-nullable.test.js` — `cleanEmptyValues` reads through a nullable wrapper
   (both converters' shapes), so an emptied optional array inside a nullable object is dropped.
+- `bun tests/gallery-structural.test.js` — a gallery add/remove/reorder made in its modal marks
+  the field (`data-structural-edit`), so adding an image and removing it leaves an optional
+  `.min(1)` gallery unset instead of restoring a stored `[]`; an unchanged save keeps it. Real
+  buttons in happy-dom, fetch stubbed.
 - `bun tests/preview-cache-bust.test.js` — preview reloads and polls add `t=<timestamp>` through
   `withCacheBuster` (`ui/cache-bust.js`), never `'?t='` by hand: a URL that already has a query
   (the component preview's `?field=`) must keep it, or the block renders empty.

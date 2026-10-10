@@ -1795,7 +1795,8 @@ function controlState(control) {
 function controlUnchanged(binding, control) {
   const bound = binding.controls.get(control);
   return bound !== undefined && controlState(control) === bound.baseline
-    && !binding.structurallyEdited.has(control);
+    && !binding.structurallyEdited.has(control)
+    && !control.hasAttribute('data-structural-edit');
 }
 
 /**
