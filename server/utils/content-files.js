@@ -235,7 +235,14 @@ function newEntryExtension(effectiveType, allowedExtensions) {
   return preference.find((extension) => allowedExtensions.includes(extension)) || preference[0];
 }
 
-export async function writeContent(collection, slug, { data, body, type }, locale = null) {
+/**
+ * @param {{data: Object, body?: string, type?: string, keepStoredBody?: boolean}} entry -
+ *   `keepStoredBody`: the save says nothing about the body, so the body stored
+ *   when the write runs is kept. It is read inside the file's write queue: read
+ *   any earlier, a save queued ahead could replace the body in between and the
+ *   old one would be written back.
+ */
+export async function writeContent(collection, slug, { data, body, type, keepStoredBody = false }, locale = null) {
   sanitizePath(collection);
   sanitizePath(slug);
 
@@ -291,7 +298,8 @@ export async function writeContent(collection, slug, { data, body, type }, local
       }
       content = serializeJson(orderLike(original, data), originalText);
     } else {
-      content = serializeMarkdown(body || '', data, originalText, { dateFields: dateFieldsFromSchema(info.jsonSchema) });
+      const bodyText = keepStoredBody ? (originalText === null ? '' : matter(originalText, {}).content) : body || '';
+      content = serializeMarkdown(bodyText, data, originalText, { dateFields: dateFieldsFromSchema(info.jsonSchema) });
     }
     await atomicWriteFile(filePath, content);
   });

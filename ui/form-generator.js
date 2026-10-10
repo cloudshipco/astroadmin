@@ -141,6 +141,31 @@ export function unwrapNullable(schema) {
   return { ...nonNull[0], ...rest };
 }
 
+/**
+ * Whether a field's schema is a nullable one that unwrapNullable unwraps: a
+ * union of exactly one type and `null`.
+ */
+function isNullableSchema(schema) {
+  const union = schema?.anyOf || schema?.oneOf;
+  if (!Array.isArray(union) || schema.type !== undefined) return false;
+  const nonNull = union.filter((member) => member?.type !== 'null');
+  return nonNull.length === 1 && nonNull.length !== union.length;
+}
+
+// A timestamp with no zone, as YAML and the serialiser's parseTimestamp read it: UTC.
+const ZONELESS_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
+
+/**
+ * A stored date value as a Date. A zoneless timestamp is UTC, as the server
+ * reads it; `new Date()` alone would read it as the browser's local time, so
+ * each save of a JSON entry moved it by the browser's offset.
+ */
+function parseStoredDate(value) {
+  if (value instanceof Date) return value;
+  const text = String(value);
+  return new Date(ZONELESS_TIMESTAMP.test(text) ? `${text.replace(' ', 'T')}Z` : text);
+}
+
 /** JSON Schema numeric types: zod's z.number() is 'number', .int() is 'integer'. */
 function isNumericType(type) {
   return type === 'number' || type === 'integer';
@@ -175,6 +200,12 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   const schema = unwrapNullable(rawSchema);
   const fullPath = path ? `${path}.${name}` : name;
   const id = idPrefix + fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
+  // A nullable field renders as its non-null type, whose empty control would
+  // save '' (or false). These attributes let extractFields save null instead:
+  // `data-nullable` on the control, `data-null` while the stored value is null
+  // (see nullableControlValue).
+  const nullable = isNullableSchema(rawSchema);
+  const nullableAttributes = nullable ? `data-nullable${value === null ? ' data-null' : ''}` : '';
 
   // A `const` (Zod's z.literal) is fixed by the schema, so it is not a decision
   // an editor can make — and this UI is for non-technical people, who gain
@@ -284,6 +315,22 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     `;
   }
 
+  // A nullable boolean has three states, so it is a select, not a checkbox:
+  // "Not set" (null), Yes, No. extractFields reads data-value-type back.
+  if (schema.type === 'boolean' && nullable) {
+    const current = value === true ? 'true' : value === false ? 'false' : '';
+    return `
+      <div class="form-group">
+        <label for="${id}" class="form-label">${getFieldLabel(name, schema)}</label>
+        <select name="${fullPath}" id="${id}" class="form-input" data-value-type="boolean" ${nullableAttributes}>
+          <option value="" ${current === '' ? 'selected' : ''}>Not set</option>
+          <option value="true" ${current === 'true' ? 'selected' : ''}>Yes</option>
+          <option value="false" ${current === 'false' ? 'selected' : ''}>No</option>
+        </select>
+      </div>
+    `;
+  }
+
   if (schema.type === 'boolean') {
     return `
       <div class="form-group">
@@ -310,8 +357,9 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
           type="number"
           name="${fullPath}"
           id="${id}"
-          value="${escapeHtml(value ?? schema.default ?? '')}"
+          value="${escapeHtml(nullable && value === null ? '' : value ?? schema.default ?? '')}"
           class="form-input"
+          ${nullableAttributes}
           ${schema.type === 'integer' ? 'step="1"' : 'step="any"'}
           ${numberBound('min', schema.minimum)}
           ${numberBound('max', schema.maximum)}
@@ -327,7 +375,8 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     return `
       <div class="form-group">
         <label for="${id}" class="form-label">${getFieldLabel(name, schema)}</label>
-        <select name="${fullPath}" id="${id}" class="form-input">
+        <select name="${fullPath}" id="${id}" class="form-input" ${nullableAttributes}>
+          ${nullable ? `<option value="" ${value === null || value === undefined ? 'selected' : ''}>Not set</option>` : ''}
           ${schema.enum.map(opt => `
             <option value="${escapeHtml(opt)}" ${value === opt ? 'selected' : ''}>${escapeHtml(formatLabel(opt))}</option>
           `).join('')}
@@ -366,22 +415,37 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
 
   // Date fields use a date input; a value with a time of day uses a datetime
   // input instead, or editing the day would drop the time. Both show UTC: the
-  // serialiser reads a zoneless timestamp as UTC, as YAML does.
+  // serialiser reads a zoneless timestamp as UTC, as YAML does, and
+  // extractFields gives a datetime input's value back its zone (dateControlValue).
+  // The stored text rides along in data-original-value, so an unedited control
+  // saves exactly what it was given (its zone, milliseconds and spelling).
   if (isDateField) {
     let formattedValue = value ?? '';
     let dateInputType = 'date';
     let stepAttribute = '';
+    const originalText = value instanceof Date
+      ? (Number.isNaN(value.getTime()) ? null : value.toISOString())
+      : (typeof value === 'string' && value !== '' ? value : null);
+    // A date-time string (z.iso.datetime()) always needs a time: a date input
+    // would save YYYY-MM-DD, which it refuses.
+    if (schema.format === 'date-time') dateInputType = 'datetime-local';
     if (formattedValue) {
-      const dateObj = new Date(formattedValue);
+      const dateObj = parseStoredDate(formattedValue);
       if (!isNaN(dateObj.getTime())) {
         const iso = dateObj.toISOString();
         const time = iso.slice(11, 19);
-        if (time === '00:00:00' && dateObj.getUTCMilliseconds() === 0) {
+        const milliseconds = dateObj.getUTCMilliseconds();
+        if (time === '00:00:00' && milliseconds === 0 && schema.format !== 'date-time') {
           formattedValue = iso.slice(0, 10);
         } else {
           dateInputType = 'datetime-local';
-          formattedValue = `${iso.slice(0, 10)}T${time.endsWith(':00') ? time.slice(0, 5) : time}`;
-          if (!time.endsWith(':00')) stepAttribute = 'step="1"';
+          if (milliseconds !== 0) {
+            formattedValue = iso.slice(0, 23);
+            stepAttribute = 'step="0.001"';
+          } else {
+            formattedValue = `${iso.slice(0, 10)}T${time.endsWith(':00') ? time.slice(0, 5) : time}`;
+            if (!time.endsWith(':00')) stepAttribute = 'step="1"';
+          }
         }
       }
     }
@@ -394,7 +458,9 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
           id="${id}"
           value="${escapeHtml(formattedValue)}"
           class="form-input"
+          ${originalText !== null ? `data-original-value="${escapeHtml(originalText)}"` : ''}
           ${stepAttribute}
+          ${nullableAttributes}
           ${schema.required ? 'required' : ''}
         >
       </div>
@@ -443,6 +509,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
             id="${id}"
             rows="${initialRows}"
             class="form-input textarea-autogrow"
+            ${nullableAttributes}
             ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
             ${schema.required ? 'required' : ''}
           >${escapeHtml(content)}</textarea>
@@ -469,6 +536,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
         id="${id}"
         value="${escapeHtml(displayText(value))}"
         class="form-input"
+        ${nullableAttributes}
         ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
         ${schema.required ? 'required' : ''}
       >
@@ -1275,7 +1343,11 @@ export function extractFields(container) {
     // Only coerce fields the schema actually declared as numbers. Sniffing the
     // string instead would turn a title of "2024" into the number 2024, and a
     // reference id of "123" into an integer.
-    setNestedValue(data, key, input?.type === 'number' ? toNumber(value) : value);
+    let fieldValue = value;
+    if (input?.type === 'number') fieldValue = toNumber(value);
+    else if (input?.type === 'date' || input?.type === 'datetime-local') fieldValue = dateControlValue(input, value);
+    else if (input?.dataset?.valueType === 'boolean' && (value === 'true' || value === 'false')) fieldValue = value === 'true';
+    setNestedValue(data, key, nullableControlValue(input, fieldValue));
   }
 
   // FormData omits unchecked boxes entirely
@@ -1296,6 +1368,42 @@ export function extractFields(container) {
   });
 
   return data;
+}
+
+/**
+ * The value a date or datetime control saves. Unedited, it is the stored text
+ * the renderer put in data-original-value, byte for byte. Edited, a datetime
+ * input's value (shown in UTC, with no zone) becomes a UTC ISO string: saved
+ * zoneless, a JSON entry was read back as the browser's local time and moved
+ * on every save. A date input's YYYY-MM-DD stays date-only.
+ */
+function dateControlValue(input, value) {
+  if (input.dataset.originalValue !== undefined && value === input.defaultValue) return input.dataset.originalValue;
+  if (input.type !== 'datetime-local' || !ZONELESS_TIMESTAMP.test(value)) return value;
+  const date = new Date(`${value}Z`);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+}
+
+/** Whether a control's value differs from the one it was rendered with. */
+function controlEdited(control) {
+  if (control.tagName === 'SELECT') {
+    // The `selected` attribute is what defaultSelected reflects.
+    return [...control.options].some((option) => option.selected !== option.hasAttribute('selected'));
+  }
+  if (control.type === 'checkbox') return control.checked !== control.defaultChecked;
+  return control.value !== control.defaultValue;
+}
+
+/**
+ * A nullable control's value (see generateField's nullableAttributes). An
+ * empty value is null when the stored value was null, or when the editor
+ * cleared the control; an untouched empty control of a value that was not null
+ * (an absent optional key, or '') keeps '' for cleanEmptyValues to decide.
+ */
+function nullableControlValue(control, value) {
+  if (!control || control.dataset?.nullable === undefined || value !== '') return value;
+  if (control.dataset.null !== undefined || controlEdited(control)) return null;
+  return value;
 }
 
 /**

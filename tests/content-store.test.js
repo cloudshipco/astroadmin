@@ -58,6 +58,16 @@ await check('write + read markdown content entry', async () => {
   assert.equal(entry.filePath, 'db:pages/home', 'read filePath');
 });
 
+await check('keepStoredBody keeps the stored body; a new entry gets an empty one', async () => {
+  await writeContent('pages', 'home', { data: { title: 'Home again' }, keepStoredBody: true, type: 'content' }, null);
+  const entry = await readContent('pages', 'home', null);
+  assert.equal(entry.data.title, 'Home again', 'positive control: the save landed');
+  assert.equal(entry.body, '# Welcome', 'stored body kept');
+  await writeContent('pages', 'kept-new', { data: { title: 'New' }, keepStoredBody: true, type: 'content' }, null);
+  assert.equal((await readContent('pages', 'kept-new', null)).body, '', 'new entry: empty body');
+  await deleteContent('pages', 'kept-new', null);
+});
+
 await check('contentExists reflects presence', async () => {
   assert.equal(await contentExists('pages', 'home', null), true, 'exists');
   assert.equal(await contentExists('pages', 'missing', null), false, 'absent');

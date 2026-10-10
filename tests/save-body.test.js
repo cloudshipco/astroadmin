@@ -127,6 +127,46 @@ await check('API POST: a new entry with no body key is created with an empty bod
   assert.equal(fresh.content.trim(), '');
 });
 
+// A save with no body must never put back a body it read before a concurrent
+// save replaced it. The stored body used to be read in the route, outside the
+// file's write queue, so the no-body save could read the old body, queue
+// behind a save that wrote a new one, and then restore the old one.
+const NEW_BODY = 'The body a concurrent save wrote.\n';
+
+await check('API: a no-body save racing a body save never restores the old body', async () => {
+  const attempts = 20;
+  const lost = [];
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    fs.writeFileSync(pagePath, PAGE);
+    // The no-body save is sent first, so it reads (or would read) the old body first.
+    const [omitted, sent] = await Promise.all([
+      save('POST', { data: DATA(`No body ${attempt}`), type: 'content' }),
+      save('POST', { data: DATA(`With body ${attempt}`), body: NEW_BODY, type: 'content' }),
+    ]);
+    assert.equal(omitted.status, 200, await omitted.clone().text());
+    assert.equal(sent.status, 200, await sent.clone().text());
+    assert.match(storedTitle(), new RegExp(` ${attempt}$`), 'positive control: this attempt saved');
+    if (storedBody() !== NEW_BODY) lost.push(attempt);
+  }
+  assert.deepEqual(lost, [], `the new body was overwritten with the old one in ${lost.length} of ${attempts} attempts`);
+});
+
+const { writeContent: storeWrite } = await import('../server/utils/content.js');
+
+await check('store: keepStoredBody is resolved inside the write queue, in either order', async () => {
+  for (const order of ['omitted first', 'body first']) {
+    fs.writeFileSync(pagePath, PAGE);
+    const omitted = () => storeWrite('pages', 'about', { data: DATA('No body'), keepStoredBody: true, type: 'content' });
+    const sent = () => storeWrite('pages', 'about', { data: DATA('With body'), body: NEW_BODY, type: 'content' });
+    await Promise.all(order === 'omitted first' ? [omitted(), sent()] : [sent(), omitted()]);
+    assert.equal(storedBody(), NEW_BODY, order);
+  }
+  fs.writeFileSync(pagePath, PAGE);
+  await storeWrite('pages', 'about', { data: DATA('Kept'), keepStoredBody: true, type: 'content' });
+  assert.equal(storedTitle(), 'Kept', 'positive control: the save landed');
+  assert.equal(storedBody(), BODY, 'alone, it keeps the stored body');
+});
+
 server.close();
 
 // --- The editor side (happy-dom) ---

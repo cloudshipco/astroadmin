@@ -68,18 +68,21 @@ async function validateSavedEntry(collection, slug, locale) {
 }
 
 /**
- * The body to write for a save. A request with NO `body` key says nothing
- * about the body, so the stored one is kept (an explicit `body: ''` still
- * clears it). Without this a client that omitted the body, as the editor did
- * for a schema with `blocks`, deleted the entry's markdown on every save.
+ * The body part of a save. A request with NO `body` key says nothing about the
+ * body, so the store keeps the stored one (an explicit `body: ''` still clears
+ * it). Without this a client that omitted the body, as the editor did for a
+ * schema with `blocks`, deleted the entry's markdown on every save.
+ *
+ * The store reads the stored body itself, inside the file's write queue
+ * (`keepStoredBody`). Reading it here, before queueing, let a concurrent save
+ * that wrote a new body land in between, and this save then wrote the old
+ * body back.
  * @param {Object} requestBody - the parsed request body
- * @returns {Promise<string|null|undefined>}
+ * @returns {{body?: string, keepStoredBody?: boolean}}
  */
-async function bodyToWrite(requestBody, collection, slug, locale) {
-  if (Object.prototype.hasOwnProperty.call(requestBody, 'body')) return requestBody.body;
-  if (!(await contentExists(collection, slug, locale))) return undefined;
-  const stored = await readContent(collection, slug, locale);
-  return stored.body ?? undefined;
+function bodyToWrite(requestBody) {
+  if (Object.prototype.hasOwnProperty.call(requestBody, 'body')) return { body: requestBody.body };
+  return { keepStoredBody: true };
 }
 
 /**
@@ -143,10 +146,9 @@ router.post('/:collection/:slug', async (req, res) => {
     }
 
     // Write content
-    const body = await bodyToWrite(req.body, collection, slug, locale);
     const result = await writeContent(collection, slug, {
       data,
-      body,
+      ...bodyToWrite(req.body),
       type: type || 'content',
     }, locale);
 
@@ -193,10 +195,9 @@ router.put('/:collection/:slug', async (req, res) => {
     }
 
     // Write content
-    const body = await bodyToWrite(req.body, collection, slug, locale);
     const result = await writeContent(collection, slug, {
       data,
-      body,
+      ...bodyToWrite(req.body),
       type: type || 'content',
     }, locale);
 

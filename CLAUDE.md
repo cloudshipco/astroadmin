@@ -201,6 +201,25 @@ runner aggregating them). Most run server-less and need env vars:
   props spread and as `block`, `?field=`. ~10 s.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
+- `bun tests/date-round-trip.test.js` — a date-time through render -> `extractFormData` ->
+  serialiser, three saves in a row, for a JSON `file()` entry and a markdown entry, in
+  Europe/London, America/New_York and UTC (one child process per zone, each proving its
+  zone took effect). The rules it pins: a `datetime-local` input shows UTC and an edited
+  value is saved as a UTC ISO string (zoneless, a JSON entry was read back as local time
+  and moved an hour per save in London's summer); an unedited date control saves its
+  stored text byte for byte (`data-original-value`), milliseconds and zone included.
+- `bun tests/serializer-fidelity.test.js` — every serialiser output, preserving candidate
+  and every fallback, parses back to the data and body it was given: a body that starts
+  with a `---` block stays body (`matter.stringify` reparsed it, so a CRLF file moved its
+  keys into the frontmatter, and invalid YAML there threw), a final keep-chomp (`|+`)
+  scalar keeps its trailing newlines, and an own `__proto__` key survives `orderLike`,
+  `restoreDates` and both serialisers. A markdown entry no rendering can hold is refused.
+
+`extract-fields` also pins nullable fields: a null stays null until edited, clearing a
+nullable control saves null (a nullable boolean is a Not set / Yes / No select), and an
+absent optional nullable key stays absent. `save-body` also races a no-body save against a
+body save through the HTTP app: the store resolves `keepStoredBody` inside the file's write
+queue, so the old body is never written back.
 - `bun tests/schema-references.test.js` — Astro's `reference()` parses (a string id;
   `z.array(reference(c))` a list) carrying `referenceCollection`, and `<base>Ids` resolves
   against the DECLARED collections (`<base>s`, `<base>`, `<base>es`, y->ies; nothing declared

@@ -67,12 +67,15 @@ export async function readContent(collection, slug, locale = null) {
   };
 }
 
-export async function writeContent(collection, slug, { data, body, type }, locale = null) {
+export async function writeContent(collection, slug, { data, body, type, keepStoredBody = false }, locale = null) {
   sanitizePath(collection);
   sanitizePath(slug);
 
   const { isFile } = await getCollectionLoaderInfo(collection);
   const effectiveLocale = isFile ? null : locale;
+  // As in the files store: with nothing said about the body, keep the stored
+  // one, read in the same synchronous step as the write below.
+  if (keepStoredBody) body = getEntry(collection, slug, effectiveLocale)?.body ?? '';
 
   let storedData = data;
   let storedType = type || (isFile ? 'data' : 'content');

@@ -57,6 +57,13 @@ function render(schema, data) {
   const form = document.createElement('form');
   form.innerHTML = generateForm(schema, data);
   document.body.appendChild(form);
+  // happy-dom 20 (as of 2026-10) mis-selects a <select> parsed from HTML: with
+  // `selected` on the third option it reports the second as selected. Browsers
+  // select the option carrying the attribute, so put that state back.
+  for (const select of form.querySelectorAll('select')) {
+    const marked = [...select.options].findIndex((option) => option.hasAttribute('selected'));
+    if (marked >= 0) select.selectedIndex = marked;
+  }
   return form;
 }
 
@@ -425,6 +432,66 @@ check('integer fields (plain, default, nullable, nested, array) read back as num
 check('a date-format field reads back as the YYYY-MM-DD string the schema coerces', () => {
   const schema = { type: 'object', properties: { joined: { type: 'string', format: 'date' } }, required: ['joined'] };
   equal(extractFormData(render(schema, { joined: '2020-04-02' }), schema), { joined: '2020-04-02' });
+});
+
+// --- Nullable fields keep null ------------------------------------------------
+// A nullable field renders as its non-null type, so a null used to come back
+// as that type's empty value: editing only the title beside required nullable
+// fields saved `rank: ''` and `enabled: false`, which z.number().nullable()
+// refuses and which silently changes a boolean's meaning.
+
+const nullableOf = (schema) => ({ anyOf: [schema, { type: 'null' }] });
+const NULLABLE_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    rank: nullableOf(INT),
+    enabled: nullableOf({ type: 'boolean' }),
+    note: nullableOf({ type: 'string' }),
+    tier: nullableOf({ type: 'string', enum: ['gold', 'silver'] }),
+    at: nullableOf({ type: 'string', format: 'date-time', 'x-astroadmin-date': true }),
+  },
+  required: ['title', 'rank', 'enabled', 'note', 'tier', 'at'],
+};
+const control = (form, name) => form.querySelector(`[name="${name}"]`);
+
+check('nullable fields: an untouched null stays null when another field is edited', () => {
+  const entry = { title: 'Hello', rank: null, enabled: null, note: null, tier: null, at: null };
+  const form = render(NULLABLE_SCHEMA, entry);
+  control(form, 'title').value = 'Edited';
+  equal(extractFormData(form, NULLABLE_SCHEMA), { ...entry, title: 'Edited' });
+});
+
+check('nullable fields: a value set on a null field is saved with its type', () => {
+  const entry = { title: 'Hello', rank: null, enabled: null, note: null, tier: null, at: null };
+  const form = render(NULLABLE_SCHEMA, entry);
+  control(form, 'rank').value = '5';
+  control(form, 'enabled').value = 'false';
+  control(form, 'note').value = 'A note';
+  control(form, 'tier').value = 'silver';
+  control(form, 'at').value = '2026-07-01T12:30';
+  equal(extractFormData(form, NULLABLE_SCHEMA), {
+    title: 'Hello', rank: 5, enabled: false, note: 'A note', tier: 'silver', at: '2026-07-01T12:30:00.000Z',
+  });
+});
+
+check('nullable fields: values round trip, and clearing a control saves null', () => {
+  const entry = { title: 'Hello', rank: 3, enabled: true, note: 'x', tier: 'gold', at: '2026-07-01T12:30:00Z' };
+  equal(extractFormData(render(NULLABLE_SCHEMA, entry), NULLABLE_SCHEMA), entry, 'positive control: unedited values');
+  const form = render(NULLABLE_SCHEMA, entry);
+  for (const name of ['rank', 'enabled', 'note', 'tier', 'at']) control(form, name).value = '';
+  equal(extractFormData(form, NULLABLE_SCHEMA), { title: 'Hello', rank: null, enabled: null, note: null, tier: null, at: null });
+});
+
+check('nullable fields: an absent optional nullable key stays absent; a stored empty string stays one', () => {
+  const schema = { ...NULLABLE_SCHEMA, required: ['title', 'note'] };
+  equal(extractFormData(render(schema, { title: 'Hello', note: '' }), schema), { title: 'Hello', note: '' });
+});
+
+check('nullable boolean: false and true are kept apart from null', () => {
+  const schema = { type: 'object', properties: { enabled: nullableOf({ type: 'boolean' }) }, required: ['enabled'] };
+  equal(extractFormData(render(schema, { enabled: false }), schema), { enabled: false });
+  equal(extractFormData(render(schema, { enabled: true }), schema), { enabled: true });
 });
 
 console.log(`\n${passed} checks passed, ${failures.length} failed, ${assertions} assertions run`);

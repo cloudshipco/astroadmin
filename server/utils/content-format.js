@@ -17,9 +17,10 @@
  * - new JSON text uses the file's indentation, and writes arrays of plain
  *   values on one line when the file already does.
  *
- * Every preserved rendering is parsed back and compared with the data it must
- * hold; if it differs in any way the plain serialisation is used instead, so
- * formatting can never change what is saved.
+ * Every rendering, preserved or plain, is parsed back and compared with the
+ * data (and markdown body) it must hold; the first that holds it exactly is
+ * written, so formatting can never change what is saved. A markdown entry
+ * that no rendering can hold is refused with an error rather than written.
  */
 
 import matter from 'gray-matter';
@@ -56,6 +57,18 @@ export function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date);
 }
 
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+/**
+ * `target[key] = value` as an OWN property, whatever the key. Content data is
+ * parsed JSON or YAML, where `__proto__` is an ordinary key; assigning it
+ * would call the prototype setter instead, and the key would vanish from the
+ * save. The result is still a plain object for JSON.stringify and js-yaml.
+ */
+function setOwn(target, key, value) {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
 /**
  * `next`, with the keys `previous` already had in `previous`'s order and new
  * keys after them, recursively through objects and arrays (array items are
@@ -68,10 +81,10 @@ export function orderLike(previous, next) {
   if (!isPlainObject(previous) || !isPlainObject(next)) return next;
   const ordered = {};
   for (const key of Object.keys(previous)) {
-    if (Object.prototype.hasOwnProperty.call(next, key)) ordered[key] = orderLike(previous[key], next[key]);
+    if (hasOwn(next, key)) setOwn(ordered, key, orderLike(previous[key], next[key]));
   }
   for (const key of Object.keys(next)) {
-    if (!Object.prototype.hasOwnProperty.call(ordered, key)) ordered[key] = next[key];
+    if (!hasOwn(ordered, key)) setOwn(ordered, key, next[key]);
   }
   return ordered;
 }
@@ -92,7 +105,9 @@ export function restoreDates(previous, next) {
   }
   if (isPlainObject(previous) && isPlainObject(next)) {
     const restored = {};
-    for (const [key, value] of Object.entries(next)) restored[key] = restoreDates(previous[key], value);
+    for (const [key, value] of Object.entries(next)) {
+      setOwn(restored, key, restoreDates(hasOwn(previous, key) ? previous[key] : undefined, value));
+    }
     return restored;
   }
   if (!(previous instanceof Date) || typeof next !== 'string' || Number.isNaN(previous.getTime())) return next;
@@ -136,17 +151,17 @@ function datesForNewValues(originalData, data, dateFields) {
   if (!dateFields || dateFields.size === 0) return data;
   const converted = { ...data };
   for (const key of dateFields) {
-    if (Object.prototype.hasOwnProperty.call(originalData, key)) continue;
+    if (hasOwn(originalData, key) || !hasOwn(converted, key)) continue;
     const value = converted[key];
     if (typeof value !== 'string') continue;
     if (DATE_ONLY.test(value)) {
       const date = new Date(`${value}T00:00:00.000Z`);
       if (Number.isNaN(date.getTime())) continue;
       dateOnlyDates.add(date);
-      converted[key] = date;
+      setOwn(converted, key, date);
     } else {
       const date = parseTimestamp(value);
-      if (date) converted[key] = date;
+      if (date) setOwn(converted, key, date);
     }
   }
   return converted;
@@ -364,10 +379,19 @@ function splitTopLevelKeys(yamlText) {
   return { preamble, segments };
 }
 
+// gray-matter's own YAML engine (js-yaml's safeDump / safeLoad). The
+// serialiser calls it directly rather than through matter.stringify(body,
+// data), which PARSES `body` as a file first: a body that itself began with a
+// `---` block had its keys merged into the data (or threw on invalid YAML),
+// and the dumped YAML was trim()med, losing a keep-chomp scalar's final
+// newlines.
+const yamlEngine = matter.engines.yaml;
+
 /** One top-level key as gray-matter would write it, without the delimiters. */
 function dumpKey(key, value) {
-  const dumped = matter.stringify('', { [key]: value });
-  let yamlText = dumped.replace(/^---\n/, '').replace(/\n---\n[\s\S]*$/, '\n');
+  const single = {};
+  setOwn(single, key, value);
+  let yamlText = yamlEngine.stringify(single);
   if (value instanceof Date && dateOnlyDates.has(value)) {
     const iso = value.toISOString();
     yamlText = yamlText.replace(iso, iso.slice(0, 10));
@@ -404,41 +428,77 @@ export function serializeMarkdown(body, data, originalRaw = null, { dateFields =
   const text = body || '';
   if (typeof originalRaw !== 'string') {
     const intended = datesForNewValues({}, data, dateFields);
-    const plain = matter.stringify(text, intended);
-    if (Object.keys(intended).length === 0) return plain;
     // Key by key, so a date-only Date is written date-only; the same text as
     // gray-matter's otherwise.
-    const candidate = `---\n${Object.entries(intended).map(([key, value]) => dumpKey(key, value)).join('\n')}\n---\n${withNewline(text)}`;
-    return frontmatterMatches(candidate, intended, text) ? candidate : plain;
+    const keyByKey = Object.keys(intended).length === 0
+      ? null
+      : frontmatterDocument(Object.entries(intended).map(([key, value]) => dumpKey(key, value)).join('\n'), text);
+    return firstFaithful([keyByKey, ...plainDocuments(intended, text)], intended, text);
   }
 
   let original;
   try {
     original = matter(originalRaw, {});
   } catch {
-    return matter.stringify(text, data);
+    return firstFaithful(plainDocuments(data, text), data, text);
   }
   const originalData = original.data || {};
   const intended = orderLike(originalData, datesForNewValues(originalData, restoreDates(originalData, data), dateFields));
-  const plain = matter.stringify(text, intended);
+  return firstFaithful([...preservingDocuments(original, originalRaw, intended, text), ...plainDocuments(intended, text)], intended, text);
+}
 
-  if (originalRaw.includes('\r') || !originalRaw.startsWith('---\n') || Object.keys(intended).length === 0) return plain;
+/** `---`, the YAML, `---`, then the body verbatim. */
+function frontmatterDocument(yamlText, body) {
+  return `---\n${yamlText}\n---\n${withNewline(body)}`;
+}
+
+/**
+ * The whole data dumped afresh. First gray-matter's own layout (the dumped
+ * YAML trimmed; no block at all for empty data); then the layout that keeps
+ * the dump's trailing newlines, which a final keep-chomp (`|+`) scalar needs,
+ * and an explicit empty block, which a body that starts with `---` needs.
+ */
+function plainDocuments(data, body) {
+  if (Object.keys(data).length === 0) return [withNewline(body), `---\n---\n${withNewline(body)}`];
+  const dumped = yamlEngine.stringify(data);
+  return [frontmatterDocument(dumped.trim(), body), frontmatterDocument(dumped, body)];
+}
+
+/**
+ * The original frontmatter with only the changed keys rewritten: tidied of
+ * trailing blank lines, then exactly as the original ended (a final keep-chomp
+ * scalar owns those blank lines).
+ */
+function preservingDocuments(original, originalRaw, intended, body) {
+  if (originalRaw.includes('\r') || !originalRaw.startsWith('---\n') || Object.keys(intended).length === 0) return [];
+  const originalData = original.data || {};
   const split = splitTopLevelKeys(String(original.matter || '').replace(/^\n/, ''));
-  if (!split) return plain;
+  if (!split || split.segments.length !== Object.keys(originalData).length) return [];
   const byKey = new Map(split.segments.map((segment) => [segment.key, segment]));
-  if (split.segments.length !== Object.keys(originalData).length) return plain;
 
   const lines = [...split.preamble];
   for (const [key, value] of Object.entries(intended)) {
     const segment = byKey.get(key);
-    if (segment && Object.prototype.hasOwnProperty.call(originalData, key) && sameValue(originalData[key], value)) {
+    if (segment && hasOwn(originalData, key) && sameValue(originalData[key], value)) {
       lines.push(...segment.body);
     } else {
       lines.push(dumpKey(key, value));
     }
     if (segment) lines.push(...segment.gap);
   }
+  const untidied = frontmatterDocument(lines.join('\n'), body);
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-  const candidate = `---\n${lines.join('\n')}\n---\n${withNewline(text)}`;
-  return frontmatterMatches(candidate, intended, text) ? candidate : plain;
+  return [frontmatterDocument(lines.join('\n'), body), untidied];
+}
+
+/**
+ * The first document that parses back to exactly `data` and `body`. None of
+ * them is written unchecked: when none holds the data, the save fails loudly
+ * rather than writing something else.
+ */
+function firstFaithful(documents, data, body) {
+  for (const document of documents) {
+    if (document !== null && frontmatterMatches(document, data, body)) return document;
+  }
+  throw new Error('This entry cannot be written as markdown frontmatter without changing its data or body');
 }
