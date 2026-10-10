@@ -111,3 +111,29 @@ export function resolvePreviewTarget(norm, pages = [], collections = [], collect
   return null;
 }
 
+/**
+ * The integration's component preview path for one entry of a collection that
+ * a block refers to (integration/preview-route.astro).
+ *
+ * `field` names the block field that carries the entry. A field that holds ONE
+ * entry (`single`: a reference('c') or a `<base>Id` string) gets `single=1`, so
+ * the route gives the component one value instead of a list; a single
+ * reference() also gets `collection`, so that value is the {collection, id}
+ * the build gives it.
+ *
+ * @param {{type: string, field?: string, single?: boolean, reference?: boolean}} block
+ *   one of a collection's usedByBlocks
+ * @param {string} collection - the entry's collection
+ * @param {string} slug - the entry's id
+ * @returns {string} a root-relative path, `/component-preview/<type>/<slug>?...`
+ */
+export function componentPreviewPath(block, collection, slug) {
+  const query = new URLSearchParams();
+  if (block.field) query.set('field', block.field);
+  if (block.single) {
+    query.set('single', '1');
+    if (block.reference) query.set('collection', collection);
+  }
+  const search = query.toString();
+  return `/component-preview/${block.type}/${slug}${search ? `?${search}` : ''}`;
+}

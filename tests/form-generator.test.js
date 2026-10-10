@@ -532,9 +532,10 @@ check(".describe('textarea') still forces a textarea on a short-named field", ()
 });
 
 check('an image() field gets the picker whatever its name', () => {
-  // image() reaches the editor as the bundled stand-in z.string().describe('Image path'),
-  // so a field named `cover` (no image-like name) must be recognised by that description.
-  const html = generateFields({ cover: { type: 'string', description: 'Image path' } }, { cover: '/a.jpg' });
+  // image() reaches the editor as the bundled stand-in, a string marked
+  // x-astroadmin-image, so a field named `cover` (no image-like name) must be
+  // recognised by that mark, whatever description the site gave it.
+  const html = generateFields({ cover: { type: 'string', 'x-astroadmin-image': true, description: 'Portrait' } }, { cover: '/a.jpg' });
   assert.ok(/class="image-picker"/.test(html), 'an image() field must render the picker');
 });
 

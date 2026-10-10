@@ -8,7 +8,10 @@
  * - the block component receives the synthetic block both as `block` and
  *   spread as props (docs/blocks.md's components take the fields as props);
  * - `?field=` names the block field that carries the ids, for a block type
- *   whose field is not `<singular type>Ids`.
+ *   whose field is not `<singular type>Ids`;
+ * - `&single=1` makes that field one value, not a list (a single
+ *   reference('team') or `teamId`), and `&collection=` makes it the
+ *   {collection, id} the build gives a reference().
  *
  *   bun tests/component-preview.test.js     (~10 s; port 4728)
  */
@@ -18,6 +21,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { linkNodeModules, sharedAstroStore } from './link-node-modules.js';
+import { componentPreviewPath } from '../ui/preview-routes.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const siteDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-component-preview-')));
@@ -62,6 +66,23 @@ const { block } = Astro.props;
 const quotes = (await Promise.all((block.testimonialIds || []).map((id) => getEntry('testimonials', id)))).filter(Boolean);
 ---
 <ul>{quotes.map((item) => <li class="quote">{item.data.quote}</li>)}</ul>
+`);
+// A single reference() field: the build hands the component {collection, id},
+// which getEntry() takes as it is.
+writeFile('src/components/blocks/AuthorBlock.astro', `---
+import { getEntry } from 'astro:content';
+const { block } = Astro.props;
+const member = block.author && !Array.isArray(block.author) ? await getEntry(block.author) : null;
+---
+<p class="author">{member ? member.data.name : 'no author: ' + JSON.stringify(block.author)}</p>
+`);
+// A single plain id field (\`<base>Id\`): the component looks it up by id.
+writeFile('src/components/blocks/LeadBlock.astro', `---
+import { getEntry } from 'astro:content';
+const { leadId } = Astro.props;
+const member = typeof leadId === 'string' ? await getEntry('team', leadId) : null;
+---
+<p class="lead">{member ? member.data.name : 'no lead: ' + JSON.stringify(leadId)}</p>
 `);
 linkNodeModules(repoRoot, siteDir);
 // A copy, as an install has it: the integration inside the site's node_modules
@@ -115,6 +136,21 @@ try {
     const preview = await get('/component-preview/featuredquotes/sue?field=testimonialIds');
     assert.equal(preview.status, 200, preview.text.slice(0, 400));
     assert.match(preview.text, /<li class="quote"[^>]*>A quote from Sue<\/li>/);
+  });
+
+  await check('a single reference() field is given one {collection, id}, not a list', async () => {
+    // The path the dashboard builds for it (ui/preview-routes.js).
+    const pathname = componentPreviewPath({ type: 'author', field: 'author', single: true, reference: true }, 'team', 'ada');
+    assert.equal(pathname, '/component-preview/author/ada?field=author&single=1&collection=team');
+    const preview = await get(pathname);
+    assert.equal(preview.status, 200, preview.text.slice(0, 400));
+    assert.match(preview.text, /<p class="author"[^>]*>Ada from the team<\/p>/, preview.text.slice(0, 600));
+  });
+
+  await check('a single plain id field is given one id, not a list', async () => {
+    const preview = await get(componentPreviewPath({ type: 'lead', field: 'leadId', single: true }, 'team', 'ada'));
+    assert.equal(preview.status, 200, preview.text.slice(0, 400));
+    assert.match(preview.text, /<p class="lead"[^>]*>Ada from the team<\/p>/, preview.text.slice(0, 600));
   });
 
   await check('a global.css, when the site has one, is still loaded', async () => {

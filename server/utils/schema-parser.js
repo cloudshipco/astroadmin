@@ -15,6 +15,25 @@ import zodToJsonSchema from 'zod-to-json-schema';
 const REFERENCE_DESCRIPTION_PREFIX = 'astroadmin-reference:';
 
 /**
+ * zod 3 only: the _def keys the reference() and image() stand-ins set, which
+ * survive .describe() (it copies _def) where a description would not.
+ * toJsonSchema's zod 3 path turns them into referenceCollection and
+ * IMAGE_MARKER (zod3StandInMarks).
+ */
+const ZOD3_REFERENCE_KEY = 'astroadminReferenceCollection';
+const ZOD3_IMAGE_KEY = 'astroadminImage';
+
+/**
+ * Marks Astro's image() in the JSON Schema. A keyword of its own, not a
+ * description: `image().describe('Portrait')` replaced the old 'Image path'
+ * description, and the field lost its image() handling. zod 4 keeps it
+ * through .describe(), .optional() and .nullable() (meta is merged); zod 3
+ * gets it from the _def (zod3StandInMarks). Read by ui/form-generator.js
+ * isAstroImageField and server/utils/content-validation.js.
+ */
+export const IMAGE_MARKER = 'x-astroadmin-image';
+
+/**
  * Minimal shim for astro:content virtual module.
  * astro:content just re-exports zod and provides defineCollection.
  */
@@ -23,14 +42,26 @@ import { z } from 'zod';
 export { z };
 export const defineCollection = (config) => config;
 // Astro's reference() is a zod schema over an entry id. It must be one here
-// too: a plain object made toJSONSchema throw for the whole site. The target
-// collection rides along as JSON Schema metadata (zod 4 .meta()), or in the
-// description for zod 3, which has no .meta(); see annotateReferences.
+// too: a plain object made toJSONSchema throw for the whole site. It accepts
+// what Astro's own accepts (astro/dist/content/runtime.js createReference): a
+// string id, a number, or a lookup object {collection, id} / {collection,
+// slug} naming THIS collection. Content validation runs entries through this
+// schema, so a narrower one would warn about values the build takes.
+// The target collection rides along as JSON Schema metadata (zod 4 .meta()),
+// or, for zod 3, on the schema's _def (which .describe() copies) and in the
+// description; see annotateReferences, which also collapses the union to a
+// string field for the editor.
 export const reference = (collection) => {
-  const id = z.string();
-  return typeof id.meta === 'function'
-    ? id.meta({ referenceCollection: collection })
-    : id.describe('${REFERENCE_DESCRIPTION_PREFIX}' + collection);
+  const lookup = (key) => z.object({ [key]: z.string(), collection: z.string() });
+  const shapes = z.union([z.string(), z.number(), lookup('id'), lookup('slug')]).superRefine((value, ctx) => {
+    if (typeof value === 'object' && value !== null && value.collection !== collection) {
+      ctx.addIssue({ code: 'custom', message: 'Reference to ' + collection + ' invalid. Expected ' + collection + '. Received ' + value.collection + '.' });
+    }
+  });
+  if (typeof shapes.meta === 'function') return shapes.meta({ referenceCollection: collection });
+  const described = shapes.describe('${REFERENCE_DESCRIPTION_PREFIX}' + collection);
+  described._def.${ZOD3_REFERENCE_KEY} = collection;
+  return described;
 };
 `;
 
@@ -190,9 +221,17 @@ export async function parseAstroSchemas(projectRoot) {
     // Import zod from the project to create the image helper
     const { z } = await import('zod');
 
-    // Create a mock image() helper that returns a string schema
-    // (Astro's image() helper validates image paths and returns image metadata)
-    const imageHelper = () => z.string().describe('Image path');
+    // Astro's image() stands in as a string schema (the real one validates an
+    // import path and returns image metadata), marked with IMAGE_MARKER.
+    const imageHelper = () => {
+      const imagePath = z.string();
+      if (typeof imagePath.meta === 'function') {
+        return imagePath.meta({ [IMAGE_MARKER]: true, description: 'Image path' });
+      }
+      const described = imagePath.describe('Image path');
+      described._def[ZOD3_IMAGE_KEY] = true;
+      return described;
+    };
 
     // Convert each collection's Zod schema to JSON Schema
     const schemas = {};
@@ -340,7 +379,7 @@ function toJsonSchema(zodSchema) {
       },
     });
   }
-  const jsonSchema = zodToJsonSchema(zodSchema, { $refStrategy: 'none', errorMessages: true });
+  const jsonSchema = zodToJsonSchema(zodSchema, { $refStrategy: 'none', errorMessages: true, postProcess: zod3StandInMarks });
   markZod3Dates(zodSchema, jsonSchema);
   return jsonSchema;
 }
@@ -579,7 +618,10 @@ function findDiscriminatedUnions(schema, currentPath = []) {
  *
  * @param {Array} discriminatedUnions - Discriminated unions found in schema
  * @param {Set<string>} declaredCollections - collection names in the config
- * @returns {Object} - Map of collection -> array of { blockType, field }
+ * @returns {Object} - Map of collection -> array of { blockType, field,
+ *   single?, reference? }: `single` when the field holds one entry, and
+ *   `reference` when that one entry is a reference() (the build hands the
+ *   component {collection, id} rather than the bare id)
  */
 function detectBlockCollectionReferences(discriminatedUnions, declaredCollections) {
   /** @type {Record<string, Array<{blockType: string, field: string}>>} */
@@ -591,14 +633,24 @@ function detectBlockCollectionReferences(discriminatedUnions, declaredCollection
       const properties = option.schema?.properties;
       if (!properties) continue;
 
-      for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+      for (const [fieldName, rawFieldSchema] of Object.entries(properties)) {
+        // A nullable field is {anyOf: [<field>, {type: 'null'}]}.
+        const nonNull = (rawFieldSchema?.anyOf || []).filter((member) => member?.type !== 'null');
+        const fieldSchema = nonNull.length === 1 ? nonNull[0] : rawFieldSchema;
         let collectionName = fieldSchema?.referenceCollection || null;
+        // A single reference('c') is a string carrying the mark; a list is an array.
+        const isReference = Boolean(collectionName) && fieldSchema?.type === 'string';
         if (!collectionName && fieldSchema?.type === 'string' && fieldName.endsWith('Id')) {
           collectionName = resolveCollectionName(fieldName.slice(0, -2), declaredCollections);
         }
         if (!collectionName) continue;
         if (!collectionRefs[collectionName]) collectionRefs[collectionName] = [];
-        collectionRefs[collectionName].push({ blockType, field: fieldName });
+        // One entry, not a list: the component preview must not hand it an
+        // array (integration/preview-route.astro `single`, `collection`).
+        const cardinality = fieldSchema?.type === 'string'
+          ? { single: true, ...(isReference ? { reference: true } : {}) }
+          : {};
+        collectionRefs[collectionName].push({ blockType, field: fieldName, ...cardinality });
       }
     }
   }
@@ -622,6 +674,17 @@ export function resolveCollectionName(base, declaredCollections) {
   return candidates.find((name) => declaredCollections.has(name)) || null;
 }
 
+/**
+ * zod-to-json-schema postProcess (zod 3): copy the reference() and image()
+ * stand-ins' _def marks into the JSON Schema node they produced.
+ */
+function zod3StandInMarks(jsonSchema, def) {
+  if (!jsonSchema || !def) return jsonSchema;
+  if (typeof def[ZOD3_REFERENCE_KEY] === 'string') return { ...jsonSchema, referenceCollection: def[ZOD3_REFERENCE_KEY] };
+  if (def[ZOD3_IMAGE_KEY] === true) return { ...jsonSchema, [IMAGE_MARKER]: true };
+  return jsonSchema;
+}
+
 /** The collection a reference() stand-in names: zod 4 metadata, or the zod 3 description. */
 function referenceTarget(node) {
   if (typeof node.referenceCollection === 'string') return node.referenceCollection;
@@ -629,6 +692,17 @@ function referenceTarget(node) {
     return node.description.slice(REFERENCE_DESCRIPTION_PREFIX.length);
   }
   return null;
+}
+
+/**
+ * A reference() stand-in's JSON Schema (anyOf string | number | lookup
+ * objects, or a type list) as `{type: 'string'}`, keeping its own keywords
+ * (description, the reference mark). In place.
+ */
+function collapseReferenceUnion(node) {
+  delete node.anyOf;
+  delete node.oneOf;
+  node.type = 'string';
 }
 
 /**
@@ -651,9 +725,14 @@ function annotateReferences(node, declaredCollections, name = '') {
 
   const target = referenceTarget(node);
   if (target) {
+    // The stand-in is a union of every shape Astro accepts; the editor edits
+    // it as one string id (ui/form-generator.js keeps a stored number or
+    // lookup object in its shape until the editor picks another entry).
+    collapseReferenceUnion(node);
     if (node.description === `${REFERENCE_DESCRIPTION_PREFIX}${target}`) delete node.description;
     if (declaredCollections.has(target)) node.referenceCollection = target;
     else delete node.referenceCollection;
+    return;
   }
 
   // A nullable field is {anyOf: [<field>, {type: 'null'}]}.

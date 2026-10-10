@@ -170,6 +170,19 @@ runner aggregating them). Most run server-less and need env vars:
   in a body is decoded to `<` and `</textarea>` truncates it on the next save. Pinned by behaviour: the real
   `renderEditor` (extracted, loaders stubbed) must leave `textarea.value` byte-identical to a body
   holding `&lt;b&gt;`, `&amp;`, `</textarea>` and `<script>`.
+- `bun tests/image-symlink.test.js` — the image() picker never reads or writes through a
+  symlink out of the project: a public or src/assets image that links outside, a public
+  image folder that is a link out, and a src/content/assets destination that is a link out
+  (entry-value copy and `?for=image-field` upload) are 400s that name no server path, and
+  the sentinel outside is never copied in or written to. `assertImageInside` in
+  `server/api/images.js` (assertContainedPath against the folder AND the project root).
+- `bun tests/image-astro-fields.test.js` — image() beyond the plain case, with a real
+  `astro build` (~10 s): the stand-in is marked `x-astroadmin-image` (IMAGE_MARKER), which
+  survives `.describe()`, `.optional()`, `.nullable()`; an array of `{src: image(), alt}`
+  is edited as array cards (item modal, entry-relative picker), not the gallery editor,
+  and the value builds; a relative value previews through `GET /api/images/entry-file`,
+  resolved against the entry's own directory (src/assets vs src/content/assets files
+  with one name), contained in `src/`, refusing escapes, non-images and no session.
 - `bun tests/git-paths-scope.test.js` — `git.paths` entries that mean the project root (`''`,
   `./`, `.`, `src/..`) are dropped by `getAllowedGitPaths`, so they scope nothing, like `[]`:
   empty changes diff, package.json refused for diff and revert, absent from status; a real

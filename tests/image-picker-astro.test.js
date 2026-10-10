@@ -40,7 +40,7 @@ async function check(name, fn) {
 const schema = {
   type: 'object',
   properties: {
-    cover: { type: 'string', description: 'Image path' }, // image()
+    cover: { type: 'string', 'x-astroadmin-image': true }, // image()
     banner: { type: 'string' }, // a plain string image field, by name
   },
 };
@@ -106,7 +106,8 @@ await check('when the server refuses, the image() field keeps its value and the 
   assert.match(alerts[0], /Image not found/);
 });
 
-await check('entry-relative image() values preview from /assets', () => {
+await check('with no entry open, entry-relative image() values preview from /assets', () => {
+  registerEntryContext(() => null);
   assert.equal(resolveImageUrl('../assets/images/x.png'), '/assets/images/x.png');
   assert.equal(resolveImageUrl('../../assets/images/x.png'), '/assets/images/x.png');
   assert.equal(resolveImageUrl('./assets/x.png'), '/assets/x.png');
@@ -119,9 +120,24 @@ await check('entry-relative image() values preview from /assets', () => {
   assert.equal(resolveImageUrl('../photos/x.png'), '../photos/x.png');
 });
 
+await check('with an entry open, they preview through the server, resolved against that entry', () => {
+  // src/assets/images/x.png and src/content/assets/images/x.png would both be
+  // /assets/images/x.png; only the entry's directory tells them apart
+  // (GET /api/images/entry-file, tests/image-astro-fields.test.js).
+  registerEntryContext(() => ({ collection: 'posts', slug: '2024/first' }));
+  const url = new URL(resolveImageUrl('../../assets/images/x.png'), 'http://localhost');
+  assert.equal(url.pathname, '/api/images/entry-file');
+  assert.deepEqual(Object.fromEntries(url.searchParams), { collection: 'posts', slug: '2024/first', path: '../../assets/images/x.png' });
+  assert.equal(resolveImageUrl('/images/x.png'), '/images/x.png', 'control: a public path is unchanged');
+});
+
 await check('an existing image() value renders its thumbnail on first load', () => {
+  registerEntryContext(() => ({ collection: 'posts', slug: 'a' }));
   const form = render({ cover: '../../assets/images/x.png' });
-  assert.equal(pickerFor(form, 'cover').querySelector('[data-preview-img]').getAttribute('src'), '/assets/images/x.png');
+  assert.equal(pickerFor(form, 'cover').querySelector('[data-preview-img]').getAttribute('src'), resolveImageUrl('../../assets/images/x.png'));
+  registerEntryContext(() => null);
+  const unopened = render({ cover: '../../assets/images/x.png' });
+  assert.equal(pickerFor(unopened, 'cover').querySelector('[data-preview-img]').getAttribute('src'), '/assets/images/x.png');
 });
 
 console.log('='.repeat(40));

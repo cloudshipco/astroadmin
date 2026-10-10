@@ -8,10 +8,11 @@ import {
   extractFormData,
   setupFormHandlers,
   referenceCardHtml,
+  setReferenceInputValue,
   REFERENCE_EMPTY_HTML,
   formatBlockType,
 } from './form-generator.js';
-import { resolvePreviewTarget, previewPathToSitePath } from './preview-routes.js';
+import { resolvePreviewTarget, previewPathToSitePath, componentPreviewPath } from './preview-routes.js';
 import {
   collectionApiPath,
   entryApiPath,
@@ -1227,7 +1228,7 @@ function addReferenceItem(referenceField, fieldPath, itemId, itemData = null) {
  * holds the id, and its card and Choose button follow it.
  */
 function setSingleReference(referenceField, itemId, itemData = null) {
-  referenceField.querySelector('[data-reference-value]').value = itemId;
+  setReferenceInputValue(referenceField.querySelector('[data-reference-value]'), itemId);
   const itemsContainer = referenceField.querySelector('.reference-cards');
   itemsContainer.innerHTML = itemId ? '' : REFERENCE_EMPTY_HTML;
   if (itemId) {
@@ -1251,8 +1252,7 @@ function replaceReferenceItem(item, fieldPath, newId, itemData = null) {
   // Update the item
   item.dataset.id = newId;
 
-  const input = item.querySelector('input[type="hidden"]');
-  if (input) input.value = newId;
+  setReferenceInputValue(item.querySelector('input[type="hidden"]'), newId);
 
   const titleEl = item.querySelector('.reference-card-title');
   if (titleEl) titleEl.textContent = title;
@@ -1623,12 +1623,11 @@ function getPreviewPageUrl() {
   const usedByBlocks = collection?.usedByBlocks || [];
 
   if (usedByBlocks.length > 0) {
-    // Use selected block or default to first one. `?field=` names the block
-    // field that carries the ids, so a block whose field is not
-    // `<singular type>Ids` still previews (integration/preview-route.astro).
+    // Use selected block or default to first one. The path names the block
+    // field that carries the entry, and whether it holds one entry or a list
+    // (componentPreviewPath, integration/preview-route.astro).
     const block = usedByBlocks.find((b) => b.type === selectedPreviewBlock) || usedByBlocks[0];
-    const fieldQuery = block.field ? `?field=${encodeURIComponent(block.field)}` : '';
-    return `${previewUrl}/component-preview/${block.type}/${currentSlug}${fieldQuery}`;
+    return `${previewUrl}${componentPreviewPath(block, currentCollection, currentSlug)}`;
   }
 
   // No preview available for this collection

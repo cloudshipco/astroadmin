@@ -20,6 +20,10 @@
  * - <field> is `?field=` when given (the editor knows the block field that
  *   refers to the collection), else the type made singular plus `Ids`
  *   (`testimonials` -> `testimonialIds`, `team` -> `teamIds`).
+ * - `&single=1` (a field holding ONE entry: `author: reference('team')`, or a
+ *   `teamId` string) makes <field> the first id instead of a list. With
+ *   `&collection=<name>` as well (a reference()), it is `{collection, id}`,
+ *   which is what the build hands the component for a reference().
  * - The site's src/styles/global.css is loaded when it exists; nothing else is
  *   assumed about the site's styles.
  */
@@ -61,20 +65,24 @@ for (const [modulePath, moduleExports] of Object.entries(blockModules)) {
 }
 
 // Build synthetic block data for the component
-function buildSyntheticBlock(blockType: string, ids: string[], field: string | null) {
+function buildSyntheticBlock(blockType: string, ids: string[], field: string | null, single: boolean, collection: string | null) {
   // Convert plural block type to singular field name
   // testimonials -> testimonialIds, team -> teamIds
   const singular = blockType.endsWith('s') ? blockType.slice(0, -1) : blockType;
   const fieldName = field && /^[A-Za-z_$][\w$]*$/.test(field) ? field : `${singular}Ids`;
-
+  if (!single) return { type: blockType, [fieldName]: ids };
+  const id = ids[0];
+  if (id === undefined) return { type: blockType };
   return {
     type: blockType,
-    [fieldName]: ids,
+    [fieldName]: collection ? { collection, id } : id,
   };
 }
 
 const field = Astro.url.searchParams.get('field');
-const syntheticBlock = buildSyntheticBlock(block || '', slugs, field);
+const single = Astro.url.searchParams.get('single') === '1';
+const referenceCollection = Astro.url.searchParams.get('collection');
+const syntheticBlock = buildSyntheticBlock(block || '', slugs, field, single, referenceCollection || null);
 const Component = block ? blockComponents[normaliseType(block)] : null;
 
 // Generate expected component path for error message

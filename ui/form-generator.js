@@ -877,8 +877,8 @@ export function isImageField(name, schema) {
     return true;
   }
 
-  // Astro's image() reaches the editor as the schema parser's stand-in,
-  // z.string().describe('Image path') (server/utils/schema-parser.js).
+  // Astro's image() reaches the editor as the schema parser's stand-in, a
+  // string marked with IMAGE_MARKER (server/utils/schema-parser.js).
   if (isAstroImageField(schema)) {
     return true;
   }
@@ -887,13 +887,24 @@ export function isImageField(name, schema) {
 }
 
 /**
- * Whether a field is Astro's image(), which the schema parser stands in as
- * z.string().describe('Image path'). Its value must be a path Astro can import
- * relative to the entry, not a public /images/... URL, so its picker resolves
- * what it stores through the server (field-widgets.js applyPickedImage).
+ * The keyword the schema parser marks Astro's image() with (IMAGE_MARKER in
+ * server/utils/schema-parser.js). A keyword of its own, so a site's
+ * image().describe('Portrait') is still image().
+ */
+const IMAGE_MARKER = 'x-astroadmin-image';
+
+/**
+ * Whether a field is Astro's image(). Its value must be a path Astro can
+ * import relative to the entry, not a public /images/... URL, so its picker
+ * resolves what it stores through the server (field-widgets.js
+ * applyPickedImage). A nullable image() (`{anyOf: [image, null]}`) counts.
  */
 export function isAstroImageField(schema) {
-  return schema?.description === 'Image path';
+  if (schema?.[IMAGE_MARKER] === true) return true;
+  const members = schema?.anyOf || schema?.oneOf;
+  if (!Array.isArray(members)) return false;
+  const nonNull = members.filter((member) => member?.type !== 'null');
+  return nonNull.length === 1 && nonNull[0]?.[IMAGE_MARKER] === true;
 }
 
 /**
@@ -1075,14 +1086,20 @@ function colorToHex(color) {
 }
 
 /**
- * Detect if a field is a gallery (array of image objects with 'src')
+ * Detect if a field is a gallery (array of image objects with 'src').
+ *
+ * Not when `src` is Astro's image(): the gallery editor stores public library
+ * URLs, which the build refuses for image(). Such an array is edited as
+ * array cards, whose item modal renders `src` through the same image picker as
+ * any image() field (entry-relative values, applyPickedImage).
  */
 function isGalleryField(schema) {
   if (schema.type !== 'array') return false;
   const items = schema.items;
   if (!items || items.type !== 'object') return false;
   // Check if items have a 'src' property (typical for image arrays)
-  return items.properties && 'src' in items.properties;
+  if (!items.properties || !('src' in items.properties)) return false;
+  return !isAstroImageField(items.properties.src);
 }
 
 /**
@@ -1131,18 +1148,61 @@ function detectReferenceCollection(schema) {
 }
 
 /**
+ * The entry id a stored reference value names, or ''. Astro's reference()
+ * accepts a string id, a number, and a lookup object {collection, id} or
+ * {collection, slug}; the picker shows and previews all of them by their id.
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function referenceId(value) {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (value && typeof value === 'object') {
+    if (typeof value.id === 'string') return value.id;
+    if (typeof value.slug === 'string') return value.slug;
+  }
+  return '';
+}
+
+/**
+ * The attributes of a reference's hidden input for a stored value. A string id
+ * is the input's plain value. Any other shape Astro accepts (a number, a lookup
+ * object) rides as JSON on a data-array-data input, which extractFields parses
+ * back as it was, so an unrelated edit saves it unchanged. Choosing another
+ * entry writes a plain id (setReferenceInputValue).
+ */
+function referenceInputAttrs(value) {
+  if (typeof value === 'string') return `value="${escapeHtml(value)}"`;
+  return `value="${jsonAttr(value)}" data-array-data`;
+}
+
+/**
+ * Set a reference's hidden input to a chosen entry id ('' clears a single
+ * reference). The dashboard's picker calls this, so a number or lookup object
+ * the input held is replaced by the plain id rather than parsed as JSON.
+ * @param {HTMLInputElement} input
+ * @param {string} entryId
+ */
+export function setReferenceInputValue(input, entryId) {
+  if (!input) return;
+  input.removeAttribute('data-array-data');
+  input.value = entryId;
+}
+
+/**
  * Generate a reference picker field (card-style layout with drag handles).
  *
  * A list (z.array(reference('c')), `<name>Ids`) renders one hidden input per
  * card, `<path>[i]`, and is marked data-array-items so zero cards still save
  * as []. A single reference (reference('c')) renders ONE hidden input named
- * `<path>` that holds the id as a string, and at most one card.
+ * `<path>`, and at most one card. A stored value keeps its shape (see
+ * referenceInputAttrs).
  */
 function generateReferenceField(name, schema, value, fullPath, id, collectionName) {
   const single = schema.type === 'string';
   const items = single
-    ? (typeof value === 'string' && value !== '' ? [value] : [])
-    : (Array.isArray(value) ? value : []);
+    ? (referenceId(value) !== '' ? [value] : [])
+    : (Array.isArray(value) ? value.filter((item) => referenceId(item) !== '') : []);
   const singularName = collectionName.endsWith('s') ? collectionName.slice(0, -1) : collectionName;
   // A `testimonialIds` list is labelled by its collection ("Testimonials", not
   // "Testimonial Ids"); any other name is the field's own label.
@@ -1152,10 +1212,10 @@ function generateReferenceField(name, schema, value, fullPath, id, collectionNam
     <div class="form-group">
       <label class="form-label">${escapeHtml(label)} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
       <div class="reference-field" data-field="${fullPath}" ${single ? 'data-reference-single' : 'data-array-items'} data-collection="${escapeHtml(collectionName)}">
-        ${single ? `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(items[0] || '')}" data-reference-value>` : ''}
+        ${single ? `<input type="hidden" name="${fullPath}" id="${id}" ${referenceInputAttrs(items.length ? items[0] : '')} data-reference-value>` : ''}
         <div class="reference-cards" data-reference-cards>
           ${items.length === 0 ? REFERENCE_EMPTY_HTML : ''}
-          ${items.map((itemId, index) => referenceCardHtml(itemId, { index, fullPath, single })).join('')}
+          ${items.map((item, index) => referenceCardHtml(referenceId(item), { index, fullPath, single, storedValue: item })).join('')}
         </div>
         <button type="button" class="btn btn-secondary btn-sm reference-cards-add add-reference-item${single && items.length ? ' hidden' : ''}" data-field="${fullPath}" data-collection="${escapeHtml(collectionName)}">
           ${single ? 'Choose' : '+ Add'} ${escapeHtml(formatLabel(singularName))}
@@ -1181,8 +1241,10 @@ export const REFERENCE_EMPTY_HTML = '<div class="reference-empty">No items selec
  * @param {string} [options.title] - display title (defaults to the id)
  * @param {?string} [options.preview] - preview text; null shows "Loading..."
  *   until the dashboard fills it in
+ * @param {*} [options.storedValue] - a list item's stored value, when it is
+ *   not the plain id (a number or lookup object keeps its shape on save)
  */
-export function referenceCardHtml(itemId, { index = 0, fullPath, single = false, title = '', preview = null }) {
+export function referenceCardHtml(itemId, { index = 0, fullPath, single = false, title = '', preview = null, storedValue = itemId }) {
   const handle = single ? '' : `
       <div class="reference-card-handle" title="Drag to reorder">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
@@ -1191,7 +1253,7 @@ export function referenceCardHtml(itemId, { index = 0, fullPath, single = false,
           <circle cx="9" cy="19" r="2"/><circle cx="15" cy="19" r="2"/>
         </svg>
       </div>
-      <input type="hidden" name="${fullPath}[${index}]" value="${escapeHtml(itemId)}">`;
+      <input type="hidden" name="${fullPath}[${index}]" ${referenceInputAttrs(storedValue)}>`;
   return `
     <div class="reference-card" data-index="${index}" data-id="${escapeHtml(itemId)}" ${single ? '' : 'draggable="true"'}>${handle}
       <div class="reference-card-content edit-reference-item" title="Click to change">

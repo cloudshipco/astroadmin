@@ -18,6 +18,7 @@
 
 import { loadSchemas } from './collections.js';
 import { readContent } from './content.js';
+import { IMAGE_MARKER } from './schema-parser.js';
 
 /**
  * Validation outcome for one entry.
@@ -45,9 +46,6 @@ export function formatIssuePath(issuePath) {
   }
   return formatted;
 }
-
-/** The description the schema bundler gives Astro's image() (see schema-parser.js). */
-const IMAGE_DESCRIPTION = 'Image path';
 
 /**
  * The one member of a nullable union (`{anyOf: [X, {type: 'null'}]}`), or the
@@ -105,7 +103,7 @@ function findEmptyRequiredImages(node, value, issuePath, found) {
   for (const [key, propertyNode] of Object.entries(schema.properties)) {
     const property = nonNullMember(propertyNode);
     const fieldValue = value[key];
-    if (property?.description === IMAGE_DESCRIPTION) {
+    if (property?.[IMAGE_MARKER] === true) {
       if (required.has(key) && fieldValue === '') {
         found.push({ path: [...issuePath, key], message: 'An image is required' });
       }

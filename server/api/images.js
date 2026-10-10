@@ -10,6 +10,7 @@ import fs from 'fs/promises';
 import { config } from '../config.js';
 import { loadSchemas } from '../utils/collections.js';
 import {
+  assertContainedPath,
   assertDeclaredCollection,
   assertSafeSlug,
   getGlobBaseDirectory,
@@ -75,6 +76,28 @@ function imageDirectories() {
   ];
 }
 
+/**
+ * An image file the image() picker reads or writes must lie inside its image
+ * folder AND inside the project, both with symlinks resolved
+ * (assertContainedPath). A link in a folder, or a folder that is itself a link
+ * (a symlinked ancestor), pointing out of the project would otherwise be
+ * followed: the outside file copied into the tracked, published
+ * src/content/assets/images, or handed to the build as an import, or an
+ * upload written outside the repo. Throws a 400 that names no server path.
+ * @param {string} directory - the image folder
+ * @param {string} filePath - a file in it (it may not exist yet)
+ */
+async function assertImageInside(directory, filePath) {
+  try {
+    await assertContainedPath(directory, filePath);
+    await assertContainedPath(config.paths.projectRoot, filePath);
+  } catch {
+    const error = new Error('That image is outside the project\'s image folders');
+    error.status = 400;
+    throw error;
+  }
+}
+
 // Allowed image extensions
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -120,6 +143,14 @@ const storage = multer.diskStorage({
     // ?for=image-field: an image for an Astro image() field goes where Astro
     // can import it; anything else is a public upload, as before.
     const directory = isImageFieldUpload(req) ? assetImagesDirectory() : config.paths.images;
+    try {
+      // Refuse a folder that resolves out of the project BEFORE creating
+      // anything in it (mkdir would follow a linked ancestor).
+      await assertImageInside(path.dirname(directory), path.join(directory, 'upload'));
+    } catch (error) {
+      cb(error);
+      return;
+    }
     try {
       await fs.mkdir(directory, { recursive: true });
     } catch (err) {
@@ -325,12 +356,18 @@ async function importableImage(filename, preferredSource) {
     } catch {
       continue;
     }
+    // The file the build would import, or the one copied from, must really be
+    // in this folder and the project, not wherever a symlink points.
+    await assertImageInside(directory, candidate);
     if (source !== 'uploads') return { filePath: candidate, previewUrl: `${urlBase}/${filename}` };
 
     const targetDirectory = assetImagesDirectory();
+    // Checked before mkdir, which would create folders through a linked ancestor.
+    await assertImageInside(path.dirname(targetDirectory), path.join(targetDirectory, filename));
     await fs.mkdir(targetDirectory, { recursive: true });
     let targetName = filename;
     let targetPath = path.join(targetDirectory, targetName);
+    await assertImageInside(targetDirectory, targetPath);
     try {
       await fs.copyFile(candidate, targetPath, fs.constants.COPYFILE_EXCL);
     } catch (error) {
@@ -339,6 +376,7 @@ async function importableImage(filename, preferredSource) {
         const extension = path.extname(filename);
         targetName = `${path.basename(filename, extension)}-${Date.now()}${extension}`;
         targetPath = path.join(targetDirectory, targetName);
+        await assertImageInside(targetDirectory, targetPath);
         await fs.copyFile(candidate, targetPath, fs.constants.COPYFILE_EXCL);
       }
     }
@@ -346,6 +384,55 @@ async function importableImage(filename, preferredSource) {
   }
   return null;
 }
+
+/** The headers /images and /assets carry (server/index.js): an SVG opened as a document runs nothing. */
+function setSandboxHeaders(res) {
+  res.setHeader('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
+/**
+ * GET /api/images/entry-file?collection=&slug=&path=
+ *
+ * The image an image() value (a path relative to the entry's file) names,
+ * for the editor's preview. Resolved against THIS entry's directory, so two
+ * files with one name in src/assets/images and src/content/assets/images each
+ * preview as themselves. Only a relative path to an image file inside the
+ * project's src/ (symlinks resolved) is served; anything else is a 400 that
+ * names no server path.
+ */
+router.get('/entry-file', async (req, res) => {
+  try {
+    const { collection, slug, path: value } = req.query;
+    if (typeof collection !== 'string' || typeof slug !== 'string' || typeof value !== 'string') {
+      return res.status(400).json({ success: false, error: 'collection, slug and path are required' });
+    }
+    if (!/^\.\.?\//.test(value) || /[\u0000-\u001f\\]/.test(value)
+      || !ALLOWED_EXTENSIONS.includes(path.extname(value).toLowerCase())) {
+      return res.status(400).json({ success: false, error: 'Not an entry-relative image path' });
+    }
+    const directory = await entryDirectory(collection, slug);
+    const filePath = path.resolve(directory, value);
+    await assertImageInside(path.join(config.paths.projectRoot, 'src'), filePath);
+    let realFile;
+    try {
+      realFile = await fs.realpath(filePath);
+      if (!(await fs.stat(realFile)).isFile()) throw new Error('not a file');
+    } catch {
+      return res.status(404).json({ success: false, error: 'Image not found' });
+    }
+    setSandboxHeaders(res);
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.sendFile(realFile, { dotfiles: 'allow' });
+  } catch (error) {
+    if (isContentPathError(error)) {
+      return res.status(400).json({ success: false, error: 'Invalid entry', message: error.message });
+    }
+    if (error.status === 400) return res.status(400).json({ success: false, error: error.message });
+    console.error('Error serving an image() preview:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to read the image' });
+  }
+});
 
 /**
  * POST /api/images/:filename/entry-value

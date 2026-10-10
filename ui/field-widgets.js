@@ -160,11 +160,20 @@ export function resolveImageUrl(imagePath) {
   }
 
   // A path relative to the entry (what Astro's image() stores), such as
-  // ../assets/x.jpg or ../../assets/images/x.jpg. AstroAdmin serves
-  // src/content/assets and src/assets at /assets, so whatever follows the
-  // leading ./ and ../ segments (and a src/, content/ or src/content/ prefix,
-  // for an entry outside src/content) is looked up there.
+  // ../assets/x.jpg or ../../assets/images/x.jpg. With an entry open, the
+  // server resolves it against that entry's own directory, so the preview is
+  // the file the build will import: src/assets/images/x.png and
+  // src/content/assets/images/x.png are different files, but both looked like
+  // /assets/images/x.png, which serves the content one.
   if (imagePath.startsWith('./') || imagePath.startsWith('../')) {
+    const entry = currentEntry();
+    if (entry?.collection && entry?.slug) {
+      return `/api/images/entry-file?${new URLSearchParams({ collection: entry.collection, slug: entry.slug, path: imagePath })}`;
+    }
+    // No entry to resolve against: AstroAdmin serves src/content/assets and
+    // src/assets at /assets, so whatever follows the leading ./ and ../
+    // segments (and a src/, content/ or src/content/ prefix, for an entry
+    // outside src/content) is looked up there.
     const rest = imagePath.replace(/^(?:\.\.?\/)+/, '').replace(/^(?:src\/)?(?:content\/)?(?=assets\/)/, '');
     if (rest.startsWith('assets/')) {
       return '/' + rest;

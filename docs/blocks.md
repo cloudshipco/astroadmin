@@ -185,7 +185,10 @@ needs:
   reading `block.testimonialIds`.
 
 The block the route renders holds only `type` and the reference field, set
-to that one id. The component receives it as `block`, and also spread as
+to that one id: a list (`testimonialIds`, `z.array(reference(...))`) gets
+`['<id>']`, a single field gets the one value, `'<id>'` for a `testimonialId`
+string and `{ collection, id }` for a `reference('testimonials')`, as the
+build would give it. The component receives it as `block`, and also spread as
 props (`Astro.props.testimonialIds`), with `index` 0, so it must cope with
 the block's other fields being absent. If the site has
 `src/styles/global.css`, the route loads it; any other styles must come from
