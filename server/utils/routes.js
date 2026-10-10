@@ -160,10 +160,3 @@ export async function getPreviewRoute(collectionName, userConfig = {}) {
   const detectedRoutes = await detectPreviewRoutes();
   return detectedRoutes[collectionName] || null;
 }
-
-/**
- * Clear route cache (called when pages change)
- */
-export function clearRouteCache() {
-  cachedRoutes = null;
-}
