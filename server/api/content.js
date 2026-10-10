@@ -13,6 +13,7 @@ import {
 import { validateStoredEntry } from '../utils/content-validation.js';
 import { getConfig } from '../config.js';
 import { isContentPathError } from '../utils/glob-files.js';
+import { clientErrorMessage } from '../utils/redact-server-paths.js';
 
 const router = express.Router();
 
@@ -23,7 +24,7 @@ const router = express.Router();
  */
 function refusedPath(error, res) {
   if (!isContentPathError(error)) return false;
-  res.status(400).json({ success: false, error: 'Invalid content path', message: error.message });
+  res.status(400).json({ success: false, error: 'Invalid content path', message: clientErrorMessage(error) });
   return true;
 }
 
@@ -63,7 +64,7 @@ async function validateSavedEntry(collection, slug, locale) {
   try {
     return await validateStoredEntry(collection, slug, locale);
   } catch (error) {
-    return { status: 'unchecked', issues: [], reason: error.message };
+    return { status: 'unchecked', issues: [], reason: clientErrorMessage(error) };
   }
 }
 
@@ -114,13 +115,13 @@ router.get('/:collection/:slug', async (req, res) => {
       res.status(404).json({
         success: false,
         error: 'Content not found',
-        message: error.message,
+        message: clientErrorMessage(error),
       });
     } else {
       res.status(500).json({
         success: false,
         error: 'Failed to read content',
-        message: error.message,
+        message: clientErrorMessage(error),
       });
     }
   }
@@ -167,7 +168,7 @@ router.post('/:collection/:slug', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to write content',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -216,7 +217,7 @@ router.put('/:collection/:slug', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to update content',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -249,13 +250,13 @@ router.delete('/:collection/:slug', async (req, res) => {
       res.status(404).json({
         success: false,
         error: 'Content not found',
-        message: error.message,
+        message: clientErrorMessage(error),
       });
     } else {
       res.status(500).json({
         success: false,
         error: 'Failed to delete content',
-        message: error.message,
+        message: clientErrorMessage(error),
       });
     }
   }

@@ -134,5 +134,9 @@ export function componentPreviewPath(block, collection, slug) {
   // A reference() (single or a list): the build gives {collection, id}.
   if (block.reference) query.set('collection', collection);
   const search = query.toString();
-  return `/component-preview/${block.type}/${slug}${search ? `?${search}` : ''}`;
+  // The id travels whole, its slashes as path separators the route's
+  // [...slug] rejoins; every segment encoded, so a `?`, `#` or `%` in an id
+  // stays in the id.
+  const idPath = String(slug).split('/').map(encodeURIComponent).join('/');
+  return `/component-preview/${encodeURIComponent(block.type)}/${idPath}${search ? `?${search}` : ''}`;
 }

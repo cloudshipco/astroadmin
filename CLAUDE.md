@@ -90,9 +90,16 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/date-marker.test.js` — the schema parser's `x-astroadmin-date` marker for zod 3
   (`zod/v3`) and zod 4: a real date is marked through optional/nullable/default/catch, union
   and discriminated-union branches, intersections, objects and arrays; date-format strings
-  are not. zod 4 marks through its serializer override; zod 3 through `markZod3Dates`, which
+  are not. zod 4 marks through its serializer override; zod 3 through `markZod3StandIns`, which
   must walk every wrapper beside its JSON Schema (it once skipped unions, so a new date in a
   `z.union([z.date(), z.null()])` field was written quoted and failed the schema).
+- `bun tests/stand-in-marks.test.js` — the image() and reference() stand-ins keep their marks
+  (`x-astroadmin-image`, `referenceCollection`) through describe/nullable/optional/default/
+  nullish/one-option unions, in arrays, objects and block options, for zod 3 (a site whose
+  `zod` is zod 3) and zod 4. zod-to-json-schema's postProcess skipped the inner node of a
+  nullable primitive, so zod 3's `image().nullable()` lost its mark; `markZod3StandIns` walks
+  the zod schema beside its JSON Schema instead. The image() helper is built with the zod the
+  config resolves (the project's), not astroadmin's own.
 - `bun tests/content-validation.test.js` — the editor's schema WARNINGS: what a stored entry
   is judged as (dropped required array, nested block field, quoted vs unquoted YAML date,
   `file()` items, an EMPTY required `image()` — the bundled stand-in is `z.string()`, so ''
@@ -128,6 +135,15 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/publish-failure.test.js` — a publish that fails outright (500) tells the editor why:
   a real "Author identity unknown" from git becomes the fix (set user.name/user.email), other
   errors keep git's text with server paths stripped, and the toast shows that message.
+- `bun tests/publish-refusal-paths.test.js` — the 422 refusal names no server path, including
+  one the check did not know to strip: a real `git worktree add` failure in a site whose git
+  directory lives elsewhere (`--separate-git-dir`). `checkRefusalBody` redacts too.
+- `bun tests/error-paths.test.js` — API errors name no server path, over HTTP: an image()
+  preview whose file vanishes after its stat() (sendFile's callback, not the error
+  middleware), an unreadable `/images` file, upload/delete/metadata writes on a read-only
+  folder, and a content config that does not bundle (esbuild's `../../..`-relative path comes
+  back relative to the project). Every route's error text goes through `clientErrorMessage`
+  (`server/utils/redact-server-paths.js`, the one redactor the doctor and publish check share).
 - `bun tests/preview-live-link.test.js` — the preview's pageNavigation message -> live link and
   entry, with and without a base path (the iframe reports its pathname WITH the preview base,
   which must be stripped before the live link adds publicUrl's).
@@ -209,9 +225,14 @@ runner aggregating them). Most run server-less and need env vars:
   filesystem (an hdiutil disk image; macOS only, says NOT RUN elsewhere): no EXDEV. ~15 s.
 - `bun tests/route-detection.test.js` — auto-detected preview routes are only declared
   collections (no `slugs -> /{slug}` guesses), and `teamIds` finds a collection named `team`.
+  A schema load started before a `clearSchemaCache` never caches its (old) result, and its
+  failure never clears the newer load's promise (controlled promises through
+  `setSchemaParserForTests`, then the real route cache).
 - `bun tests/component-preview.test.js` — the integration's `/component-preview/` route in
   a real `astro dev` (Astro's dev() API, port 4728): no `src/styles/global.css` needed,
-  props spread and as `block`, `?field=`. ~10 s.
+  props spread and as `block`, `?field=`; a nested entry id (`regional/ada`) reaches the
+  component whole, and an id's `?`/`#` survive (the route decodes the raw path, since Astro's
+  param is only decodeURI'd). ~10 s; `COMPONENT_PREVIEW_PORT` overrides the port.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
 - `bun tests/date-round-trip.test.js` — a date-time through render -> `extractFormData` ->

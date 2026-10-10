@@ -5,7 +5,8 @@
  * Renders a block component in isolation for previewing non-page collection items.
  * Uses import.meta.glob to dynamically discover block components from the site.
  *
- * Route: /component-preview/[block]/[...slug]
+ * Route: /component-preview/[block]/[...slug], the slug being one entry id
+ * (componentPreviewPath in ui/preview-routes.js builds it)
  * Example: /component-preview/testimonials/sue-altarelli
  *          /component-preview/featuredquotes/sue?field=testimonialIds
  *
@@ -38,8 +39,26 @@ import.meta.glob('/src/styles/global.css', { eager: true });
 // Get route params
 const { block, slug } = Astro.params;
 
-// Parse slug (might be several ids, slash-separated)
-const slugs = slug?.split('/').filter(Boolean) || [];
+// The rest of the path is ONE entry id, slashes included: a nested entry
+// (`regional/ada`) is that id, never the two entries `regional` and `ada`.
+// Read from the raw pathname, each segment decoded once, the exact inverse of
+// componentPreviewPath: Astro's param is decodeURI'd, which leaves an id's
+// `?` and `#` as %3F and %23.
+function entryIdFromPath(pathname: string, fallback: string | undefined) {
+  const marker = '/component-preview/';
+  const start = pathname.lastIndexOf(marker);
+  if (start === -1) return fallback || '';
+  const rest = pathname.slice(start + marker.length).replace(/\/+$/, '');
+  const separator = rest.indexOf('/');
+  if (separator === -1) return '';
+  try {
+    return rest.slice(separator + 1).split('/').map((segment) => decodeURIComponent(segment)).join('/');
+  } catch {
+    return fallback || '';
+  }
+}
+const entryId = entryIdFromPath(Astro.url.pathname, slug);
+const slugs = entryId ? [entryId] : [];
 
 // Dynamically discover block components from the site
 // Use Vite's glob import - the leading slash means project root

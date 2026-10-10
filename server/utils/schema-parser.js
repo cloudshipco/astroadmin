@@ -7,6 +7,7 @@
 
 import esbuild from 'esbuild';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import fs from 'fs/promises';
 import os from 'os';
 import zodToJsonSchema from 'zod-to-json-schema';
@@ -18,7 +19,7 @@ const REFERENCE_DESCRIPTION_PREFIX = 'astroadmin-reference:';
  * zod 3 only: the _def keys the reference() and image() stand-ins set, which
  * survive .describe() (it copies _def) where a description would not.
  * toJsonSchema's zod 3 path turns them into referenceCollection and
- * IMAGE_MARKER (zod3StandInMarks).
+ * IMAGE_MARKER (markZod3StandIns).
  */
 const ZOD3_REFERENCE_KEY = 'astroadminReferenceCollection';
 const ZOD3_IMAGE_KEY = 'astroadminImage';
@@ -28,7 +29,7 @@ const ZOD3_IMAGE_KEY = 'astroadminImage';
  * description: `image().describe('Portrait')` replaced the old 'Image path'
  * description, and the field lost its image() handling. zod 4 keeps it
  * through .describe(), .optional() and .nullable() (meta is merged); zod 3
- * gets it from the _def (zod3StandInMarks). Read by ui/form-generator.js
+ * gets it from the _def (markZod3StandIns). Read by ui/form-generator.js
  * isAstroImageField and server/utils/content-validation.js.
  */
 export const IMAGE_MARKER = 'x-astroadmin-image';
@@ -218,8 +219,16 @@ export async function parseAstroSchemas(projectRoot) {
       );
     }
 
-    // Import zod from the project to create the image helper
-    const { z } = await import('zod');
+    // The image helper must be built with the zod the config's `zod` and
+    // `astro:content` resolve to (the bundle's onResolve above), or a zod 3
+    // site gets a zod 4 stand-in inside its zod 3 object and the field drops
+    // out of the JSON Schema. Falls back to astroadmin's own zod.
+    let z;
+    try {
+      ({ z } = await import(pathToFileURL(path.join(projectRoot, 'node_modules', 'zod', 'index.js')).href));
+    } catch {
+      ({ z } = await import('zod'));
+    }
 
     // Astro's image() stands in as a string schema (the real one validates an
     // import path and returns image metadata), marked with IMAGE_MARKER.
@@ -361,7 +370,7 @@ export async function parseAstroSchemas(projectRoot) {
  *                             otherwise (`joined`). zod 3's serializer already
  *                             emits a date format.
  *                             It is also marked `x-astroadmin-date: true` (zod 3:
- *                             markZod3Dates), the only thing that tells it from
+ *                             markZod3StandIns), the only thing that tells it from
  *                             a string with a date format (z.iso.date()).
  */
 function toJsonSchema(zodSchema) {
@@ -379,8 +388,8 @@ function toJsonSchema(zodSchema) {
       },
     });
   }
-  const jsonSchema = zodToJsonSchema(zodSchema, { $refStrategy: 'none', errorMessages: true, postProcess: zod3StandInMarks });
-  markZod3Dates(zodSchema, jsonSchema);
+  const jsonSchema = zodToJsonSchema(zodSchema, { $refStrategy: 'none', errorMessages: true });
+  markZod3StandIns(zodSchema, jsonSchema);
   return jsonSchema;
 }
 
@@ -395,23 +404,44 @@ const DATE_MARKER = 'x-astroadmin-date';
 
 /**
  * zod 3 has no serializer override, so walk the zod schema beside its JSON
- * Schema (as zod-to-json-schema lays it out) and mark the ZodDate nodes:
- * through the wrappers (optional, nullable, default, catch, effects, branded,
- * readonly, lazy, a pipeline's input), union and discriminated-union branches,
+ * Schema (as zod-to-json-schema lays it out) and mark the ZodDate nodes and
+ * the image() and reference() stand-ins (their _def keys): through the
+ * wrappers (optional, nullable, default, catch, effects, branded, readonly,
+ * lazy, a pipeline's input), union and discriminated-union branches,
  * intersections, objects, records, arrays and tuples. zod 4 needs none of
- * this: its serializer's override marks a date wherever it sits.
+ * this: its serializer's override marks a date wherever it sits, and .meta()
+ * carries the stand-ins' marks.
+ *
+ * A walk rather than zod-to-json-schema's postProcess hook: its nullable
+ * conversion of a primitive (`image().nullable()` -> `{type: ['string',
+ * 'null']}`) never runs the inner node's hook, so the image mark was lost.
+ * Where a wrapper collapses into its inner node like that, the inner schema
+ * is walked against the wrapper's node, which then carries the mark.
  */
-function markZod3Dates(zodSchema, jsonNode, depth = 0) {
+function markZod3StandIns(zodSchema, jsonNode, depth = 0) {
   const def = zodSchema?._def;
   if (!def || !jsonNode || typeof jsonNode !== 'object' || depth > 64) return;
-  const next = (childSchema, childNode) => markZod3Dates(childSchema, childNode, depth + 1);
+  const next = (childSchema, childNode) => markZod3StandIns(childSchema, childNode, depth + 1);
+  if (def[ZOD3_IMAGE_KEY] === true) jsonNode[IMAGE_MARKER] = true;
+  if (typeof def[ZOD3_REFERENCE_KEY] === 'string') {
+    // The stand-in's own union is collapsed by annotateReferences.
+    jsonNode.referenceCollection = def[ZOD3_REFERENCE_KEY];
+    return;
+  }
   // Branches of a union-like node, paired with the zod schemas by position.
   // zod-to-json-schema keeps a union's options in order as anyOf; when it
-  // collapses primitives into `type: [...]` there is no branch to mark, and
-  // none of those primitives is a date.
+  // collapses primitives into `type: [...]` there is no branch to mark. Then
+  // a union of one option and null (`z.union([image(), z.null()])`) is that
+  // option, nullable; any other collapsed union is left unmarked (an
+  // `image() | string` field is not only an image).
   const pairBranches = (options, branches) => {
-    if (!Array.isArray(branches) || branches.length !== options.length) return;
-    options.forEach((option, index) => next(option, branches[index]));
+    if (Array.isArray(branches) && branches.length === options.length) {
+      options.forEach((option, index) => next(option, branches[index]));
+      return;
+    }
+    if (branches) return;
+    const nonNull = options.filter((option) => option?._def?.typeName !== 'ZodNull');
+    if (nonNull.length === 1) next(nonNull[0], jsonNode);
   };
   switch (def.typeName) {
     case 'ZodDate':
@@ -677,17 +707,6 @@ export function resolveCollectionName(base, declaredCollections) {
   return candidates.find((name) => declaredCollections.has(name)) || null;
 }
 
-/**
- * zod-to-json-schema postProcess (zod 3): copy the reference() and image()
- * stand-ins' _def marks into the JSON Schema node they produced.
- */
-function zod3StandInMarks(jsonSchema, def) {
-  if (!jsonSchema || !def) return jsonSchema;
-  if (typeof def[ZOD3_REFERENCE_KEY] === 'string') return { ...jsonSchema, referenceCollection: def[ZOD3_REFERENCE_KEY] };
-  if (def[ZOD3_IMAGE_KEY] === true) return { ...jsonSchema, [IMAGE_MARKER]: true };
-  return jsonSchema;
-}
-
 /** The collection a reference() stand-in names: zod 4 metadata, or the zod 3 description. */
 function referenceTarget(node) {
   if (typeof node.referenceCollection === 'string') return node.referenceCollection;
@@ -745,6 +764,14 @@ function annotateReferences(node, declaredCollections, name = '') {
 
   if (node.type === 'array' && node.items && typeof node.items === 'object') {
     annotateReferences(node.items, declaredCollections);
+    // z.array(reference('c').nullable()): zod 4 keeps the mark on the
+    // non-null branch of {anyOf: [<reference>, {type: 'null'}]}.
+    const itemMembers = node.items.anyOf || node.items.oneOf;
+    const nonNullItems = Array.isArray(itemMembers) ? itemMembers.filter((member) => member?.type !== 'null') : [];
+    const nullableItem = nonNullItems.length === 1 && nonNullItems[0]?.type === 'string' ? nonNullItems[0] : null;
+    if (nullableItem?.referenceCollection && !node.referenceCollection) {
+      node.referenceCollection = nullableItem.referenceCollection;
+    }
     if (node.items.type === 'string' && !node.referenceCollection) {
       const collection = node.items.referenceCollection
         || (name.endsWith('Ids') ? resolveCollectionName(name.slice(0, -3), declaredCollections) : null);

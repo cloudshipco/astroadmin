@@ -34,6 +34,7 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 import { ASTRO_NOT_INSTALLED_MESSAGE, DEFAULT_BUILD_ARGS, defaultAstroCommand } from './astro-bin.js';
+import { cleanCheckOutput, redactServerPaths } from './redact-server-paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -52,32 +53,8 @@ const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 // The admin's own secrets and settings, which the site's build has no use for.
 const ADMIN_ENV_PATTERN = /^(ASTROADMIN_|ADMIN_|SESSION_SECRET$)/;
 
-/**
- * Make check output fit to show an editor: no terminal colour codes, no stack
- * trace or stack frames, and no server paths (each given directory becomes
- * relative, including inside file:// URLs).
- * @param {string} text
- * @param {string[]} [serverPaths] - directories to strip
- */
-export function cleanCheckOutput(text, serverPaths = []) {
-  // eslint-disable-next-line no-control-regex
-  let cleaned = text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
-  cleaned = cleaned.replace(/^\s*Stack trace:[\s\S]*$/m, '');
-  cleaned = cleaned.replace(/^\s+at .*$\n?/gm, '');
-  cleaned = cleaned.replace(/file:\/\/(\S+)/g, (match, encodedPath) => {
-    try {
-      return decodeURIComponent(encodedPath);
-    } catch {
-      return encodedPath;
-    }
-  });
-  // Longest first, so a worktree inside a stripped directory is removed whole.
-  const prefixes = [...new Set(serverPaths.filter(Boolean))].sort((a, b) => b.length - a.length);
-  for (const prefix of prefixes) {
-    cleaned = cleaned.split(`${prefix}/`).join('').split(prefix).join('.');
-  }
-  return cleaned.trim();
-}
+// cleanCheckOutput lives with the shared redactor; re-exported for its callers.
+export { cleanCheckOutput };
 
 /**
  * Entries named in Astro's errors, e.g.
@@ -294,8 +271,11 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
   let tempDir = null;
   const serverPaths = [projectRoot, await realpathOrNull(projectRoot)];
 
+  // A refusal reaches the editor (publish.js checkRefusalBody): the known
+  // directories made relative, and any other absolute path (an external
+  // repository directory, a store under /srv) reduced to its last segment.
   const fail = (output) => {
-    const cleaned = cleanCheckOutput(output, serverPaths);
+    const cleaned = redactServerPaths(output, serverPaths).trim();
     console.error(`❌ Content check failed for ${commit.slice(0, 7) || 'HEAD'}`);
     return { success: false, commit, output: cleaned.slice(-4000), entries: parseInvalidEntries(cleaned) };
   };

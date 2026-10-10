@@ -7,6 +7,7 @@ import express from 'express';
 import path from 'path';
 import { getConfig } from '../config.js';
 import { assertContainedPath, isContentPathError } from '../utils/glob-files.js';
+import { clientErrorMessage } from '../utils/redact-server-paths.js';
 import {
   publishHandler,
   withGitLock,
@@ -123,7 +124,7 @@ export class GitRequestError extends Error {
 /** Answer a refused file path or commit with a 400; true when sent. */
 function refusedGitRequest(error, res) {
   if (!(error instanceof GitRequestError)) return false;
-  res.status(400).json({ success: false, error: 'Invalid git request', message: error.message });
+  res.status(400).json({ success: false, error: 'Invalid git request', message: clientErrorMessage(error) });
   return true;
 }
 
@@ -309,7 +310,7 @@ router.get('/status', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get git status',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -367,7 +368,7 @@ router.post('/commit', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to create commit',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -403,7 +404,7 @@ router.get('/log', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get git log',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -435,7 +436,7 @@ router.post('/pull', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to pull changes',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -497,7 +498,7 @@ router.get('/diff', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get diff',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -538,7 +539,7 @@ router.get('/show', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to show file content',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -579,7 +580,7 @@ router.post('/revert-file', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to revert file',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -624,7 +625,7 @@ router.post('/restore-from-commit', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to restore file',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -671,7 +672,7 @@ router.get('/file-history', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get file history',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });

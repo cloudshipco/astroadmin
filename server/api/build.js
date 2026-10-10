@@ -8,6 +8,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { config, getConfig, IS_DEV } from '../config.js';
 import { DEFAULT_BUILD_ARGS, resolveBuildCommand } from '../utils/astro-bin.js';
+import { clientErrorMessage } from '../utils/redact-server-paths.js';
 
 const execAsync = promisify(exec);
 const router = express.Router();
@@ -52,8 +53,8 @@ async function runBuild(kind, label) {
     return {
       success: true,
       duration,
-      stdout: stdout.slice(-1000), // Last 1000 chars
-      stderr: stderr.slice(-1000),
+      stdout: clientErrorMessage(stdout, [config.paths.projectRoot]).slice(-1000), // Last 1000 chars
+      stderr: clientErrorMessage(stderr, [config.paths.projectRoot]).slice(-1000),
     };
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -62,9 +63,11 @@ async function runBuild(kind, label) {
     return {
       success: false,
       duration,
-      error: error.message,
-      stdout: error.stdout?.slice(-1000),
-      stderr: error.stderr?.slice(-1000),
+      // The message is `Command failed: <resolved command line>`, which holds
+      // server paths, as the build's own output can.
+      error: clientErrorMessage(error, [config.paths.projectRoot]),
+      stdout: clientErrorMessage(error.stdout || '', [config.paths.projectRoot]).slice(-1000),
+      stderr: clientErrorMessage(error.stderr || '', [config.paths.projectRoot]).slice(-1000),
     };
   }
 }
@@ -99,7 +102,7 @@ router.post('/staging', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to trigger staging build',
-      message: error.message,
+      message: clientErrorMessage(error, [config.paths.projectRoot]),
     });
   }
 });
@@ -124,7 +127,7 @@ router.post('/production', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to trigger production build',
-      message: error.message,
+      message: clientErrorMessage(error, [config.paths.projectRoot]),
     });
   }
 });
@@ -149,7 +152,7 @@ router.get('/status', async (req, res) => {
     });
   } catch (error) {
     console.error('Error reading build status:', error);
-    res.status(500).json({ success: false, error: 'Failed to read build status', message: error.message });
+    res.status(500).json({ success: false, error: 'Failed to read build status', message: clientErrorMessage(error, [config.paths.projectRoot]) });
   }
 });
 

@@ -18,11 +18,12 @@ import { detectPreviewRoutes, getPreviewRoute } from '../utils/routes.js';
 import { discoverStaticPages } from '../utils/page-discovery.js';
 import { enrichSchemaWithBlockTypes } from '../utils/block-types.js';
 import { isContentPathError } from '../utils/glob-files.js';
+import { clientErrorMessage } from '../utils/redact-server-paths.js';
 
 /** An undeclared collection name is a 400 that names no server path. */
 function refusedCollection(error, res) {
   if (!isContentPathError(error)) return false;
-  res.status(400).json({ success: false, error: 'Invalid collection', message: error.message });
+  res.status(400).json({ success: false, error: 'Invalid collection', message: clientErrorMessage(error) });
   return true;
 }
 
@@ -70,7 +71,7 @@ router.get('/', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch collections',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -111,7 +112,7 @@ router.get('/:collectionName', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch collection',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -151,7 +152,7 @@ router.get('/:collectionName/entries', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch entries',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -192,7 +193,7 @@ router.get('/:collectionName/entries-with-locales', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch entries',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });

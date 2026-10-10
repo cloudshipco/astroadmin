@@ -18,7 +18,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { cleanCheckOutput } from '../utils/astro-check.js';
+import { cleanCheckOutput, redactServerPaths } from '../utils/redact-server-paths.js';
 import { RESULT_MARKER, outDirFor } from './editor-scan.js';
 import { bunExecutable } from '../utils/astro-bin.js';
 
@@ -59,28 +59,9 @@ function bounded(text, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-/**
- * Error text that names no server path: the given server directories (and
- * their resolved paths, so a symlinked checkout is caught) made relative, then
- * any other absolute path reduced to its last segment (an external git
- * directory, a resolved temp dir). URLs are kept: `https://host/x` has no
- * path start after a delimiter. Shared by the doctor and the publish route.
- * @param {string} text
- * @param {Array<string|null|undefined>} serverPaths
- * @returns {string}
- */
-export function redactServerPaths(text, serverPaths = []) {
-  const directories = serverPaths.filter(Boolean);
-  for (const directory of [...directories]) {
-    try {
-      directories.push(fs.realpathSync(directory));
-    } catch {
-      // gone: nothing more to strip
-    }
-  }
-  return cleanCheckOutput(String(text), directories)
-    .replace(/(^|[\s"'(=:])\/(?:[^\s"'()/]+\/)+([^\s"'()/]*)/g, '$1$2');
-}
+// The shared redactor (server/utils/redact-server-paths.js), re-exported
+// for the doctor's existing callers.
+export { redactServerPaths };
 
 /**
  * An error for the API: server paths redacted, whitespace collapsed, bounded.

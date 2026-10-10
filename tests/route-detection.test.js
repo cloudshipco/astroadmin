@@ -112,6 +112,55 @@ try {
     assert.equal(reloaded.posts, '/blog/{slug}', 'existing routes survive the reload');
   });
 
+  await check('an older schema load that finishes late cannot poison the new generation', async () => {
+    const { clearSchemaCache, loadSchemas, getCollectionNames, setSchemaParserForTests } = await import('../server/utils/collections.js');
+    const pending = [];
+    setSchemaParserForTests(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
+    const schemasFor = (names) => Object.fromEntries(names.map((name) => [name, { name }]));
+    try {
+      clearSchemaCache();
+      const loadA = loadSchemas(); // generation N: the old config
+      clearSchemaCache(); // the config changed
+      const loadB = loadSchemas(); // generation N+1: the new one
+      assert.equal(pending.length, 2, 'two parses started (instrument control)');
+      pending[1].resolve(schemasFor(['posts', 'docs', 'fresh']));
+      await loadB;
+      pending[0].resolve(schemasFor(['posts', 'stale']));
+      await loadA;
+      const names = await getCollectionNames();
+      assert.ok(names.includes('fresh'), `the new load's collections stand (${names})`);
+      assert.equal(names.includes('stale'), false, `the older load overwrote the cache (${names})`);
+      const routes = await detectPreviewRoutes();
+      assert.equal(routes.docs, '/docs/{slug}', `the route cache for the new generation (${JSON.stringify(routes)})`);
+      assert.equal(pending.length, 2, 'no further parse was needed');
+    } finally {
+      setSchemaParserForTests(null);
+      clearSchemaCache();
+    }
+  });
+
+  await check("an older schema load that FAILS late does not drop the new load's promise", async () => {
+    const { clearSchemaCache, loadSchemas, setSchemaParserForTests } = await import('../server/utils/collections.js');
+    const pending = [];
+    setSchemaParserForTests(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
+    try {
+      clearSchemaCache();
+      const loadA = loadSchemas();
+      clearSchemaCache();
+      const loadB = loadSchemas();
+      pending[0].reject(new Error('the old config no longer parses'));
+      await assert.rejects(loadA, /no longer parses/, 'control: the older caller sees its own failure');
+      const loadC = loadSchemas();
+      assert.equal(pending.length, 2, `a caller during load B joins it rather than starting a third parse (${pending.length} parses)`);
+      pending[1].resolve({ posts: { name: 'posts' } });
+      assert.deepEqual(Object.keys(await loadC), ['posts']);
+      assert.deepEqual(Object.keys(await loadB), ['posts']);
+    } finally {
+      setSchemaParserForTests(null);
+      clearSchemaCache();
+    }
+  });
+
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed.\n`);
 } finally {

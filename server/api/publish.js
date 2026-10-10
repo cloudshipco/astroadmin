@@ -15,7 +15,7 @@
 import express from 'express';
 import path from 'path';
 import simpleGit from 'simple-git';
-import { recordDoctorAfterCheck, redactServerPaths } from '../doctor/editor.js';
+import { recordDoctorAfterCheck } from '../doctor/editor.js';
 import { getConfig } from '../config.js';
 import { deploy, validateDeployConfig } from '../utils/deploy.js';
 import { runProductionBuild } from '../utils/build.js';
@@ -23,6 +23,7 @@ import { checkHeadWithAstro } from '../utils/astro-check.js';
 import { listSlugs } from '../utils/content.js';
 // Shared with the editor's "View live site" link (ui/ is served to the browser).
 import { resolveLiveUrl } from '../../ui/live-url.js';
+import { clientErrorMessage, redactServerPaths } from '../utils/redact-server-paths.js';
 
 const router = express.Router();
 // Conservative fallback for a malformed config; an explicitly-configured
@@ -174,7 +175,9 @@ export async function checkRefusalBody(check, { committed = false, commitResult 
     message: committed
       ? 'Your changes are saved and committed, but were not published: the site would not build with them.'
       : 'Nothing was published: the site would not build with the current content.',
-    check: { commit: check.commit, output: check.output, entries: await markEditableEntries(check.entries) },
+    // checkHeadWithAstro redacts its output; this is the last stop before the
+    // client, so anything that reached it unredacted is redacted here too.
+    check: { commit: check.commit, output: redactServerPaths(String(check.output ?? '')).trim(), entries: await markEditableEntries(check.entries) },
   };
 }
 
@@ -408,7 +411,7 @@ export async function liveStatusHandler(req, res) {
     try {
       target = resolveLiveUrl(publicUrl, req.query.path);
     } catch (err) {
-      return res.status(400).json({ success: false, configured: true, error: err.message });
+      return res.status(400).json({ success: false, configured: true, error: clientErrorMessage(err) });
     }
 
     const controller = new AbortController();
@@ -434,7 +437,7 @@ export async function liveStatusHandler(req, res) {
     }
   } catch (error) {
     console.error('Error checking live status:', error);
-    res.status(500).json({ success: false, error: 'Failed to check live status', message: error.message });
+    res.status(500).json({ success: false, error: 'Failed to check live status', message: clientErrorMessage(error) });
   }
 }
 

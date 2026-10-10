@@ -27,6 +27,14 @@ let schemaWatcher = null;
 // happened, including one that lands while they are being computed.
 let schemaGeneration = 0;
 
+// The parser loadSchemas calls; replaced only by tests (setSchemaParserForTests).
+let parseSchemas = parseAstroSchemas;
+
+/** For tests: parse with `parser` (null restores the real one). */
+export function setSchemaParserForTests(parser) {
+  parseSchemas = parser || parseAstroSchemas;
+}
+
 /** The current schema generation (see clearSchemaCache). */
 export function getSchemaGeneration() {
   return schemaGeneration;
@@ -47,22 +55,31 @@ export async function loadSchemas() {
     return schemasLoading;
   }
 
-  // Start loading
-  schemasLoading = (async () => {
+  // Start loading. The load belongs to this generation: if clearSchemaCache
+  // runs while it parses, its result (from the old config) is returned to its
+  // own callers but never cached, and its failure never clears a newer load's
+  // promise. Otherwise a late old load overwrote the new generation's schemas,
+  // and the route cache stored the old collections under the new generation.
+  const generation = schemaGeneration;
+  const loading = (async () => {
     try {
       console.log('🔄 Parsing content schemas from content.config.ts...');
-      cachedSchemas = await parseAstroSchemas(config.paths.projectRoot);
-      console.log(`✅ Loaded ${Object.keys(cachedSchemas).length} collection schemas`);
-      return cachedSchemas;
+      const schemas = await parseSchemas(config.paths.projectRoot);
+      console.log(`✅ Loaded ${Object.keys(schemas).length} collection schemas`);
+      if (generation === schemaGeneration) cachedSchemas = schemas;
+      return schemas;
     } catch (error) {
       console.error('❌ Failed to parse schemas:', error.message);
-      // Reset loading state so it can be retried
-      schemasLoading = null;
       throw error;
+    } finally {
+      // Settled: a retry (after a failure) starts a fresh load. Only this
+      // load's own promise is cleared.
+      if (schemasLoading === loading) schemasLoading = null;
     }
   })();
+  schemasLoading = loading;
 
-  return schemasLoading;
+  return loading;
 }
 
 /**

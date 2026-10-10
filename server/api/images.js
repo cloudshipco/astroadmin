@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../config.js';
 import { loadSchemas } from '../utils/collections.js';
+import { clientErrorMessage } from '../utils/redact-server-paths.js';
 import {
   assertContainedPath,
   assertDeclaredCollection,
@@ -264,7 +265,7 @@ router.get('/', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to list images',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -303,7 +304,7 @@ router.post('/', upload.single('image'), (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to upload image',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -423,12 +424,22 @@ router.get('/entry-file', async (req, res) => {
     }
     setSandboxHeaders(res);
     res.setHeader('Cache-Control', 'private, no-cache');
-    res.sendFile(realFile, { dotfiles: 'allow' });
+    // sendFile reports a failure (the file gone or unreadable after the stat
+    // above) through this callback, not the try/catch: without one it went to
+    // next() and the error middleware, absolute filename and all.
+    res.sendFile(realFile, { dotfiles: 'allow' }, (sendError) => {
+      if (!sendError) return;
+      console.error('Error sending an image() preview:', sendError.message);
+      if (res.headersSent) return;
+      const missing = sendError.code === 'ENOENT' || sendError.status === 404 || sendError.statusCode === 404;
+      res.removeHeader('Cache-Control');
+      res.status(missing ? 404 : 500).json({ success: false, error: missing ? 'Image not found' : 'Failed to read the image' });
+    });
   } catch (error) {
     if (isContentPathError(error)) {
-      return res.status(400).json({ success: false, error: 'Invalid entry', message: error.message });
+      return res.status(400).json({ success: false, error: 'Invalid entry', message: clientErrorMessage(error) });
     }
-    if (error.status === 400) return res.status(400).json({ success: false, error: error.message });
+    if (error.status === 400) return res.status(400).json({ success: false, error: clientErrorMessage(error) });
     console.error('Error serving an image() preview:', error.message);
     res.status(500).json({ success: false, error: 'Failed to read the image' });
   }
@@ -461,9 +472,9 @@ router.post('/:filename/entry-value', express.json(), async (req, res) => {
     res.json({ success: true, value, previewUrl: image.previewUrl });
   } catch (error) {
     if (isContentPathError(error)) {
-      return res.status(400).json({ success: false, error: 'Invalid entry', message: error.message });
+      return res.status(400).json({ success: false, error: 'Invalid entry', message: clientErrorMessage(error) });
     }
-    if (error.status === 400) return res.status(400).json({ success: false, error: error.message });
+    if (error.status === 400) return res.status(400).json({ success: false, error: clientErrorMessage(error) });
     console.error('Error resolving image() value:', error.message);
     res.status(500).json({ success: false, error: 'Failed to resolve the image path' });
   }
@@ -490,7 +501,7 @@ router.get('/:filename/metadata', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get image metadata',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -537,7 +548,7 @@ router.put('/:filename/metadata', express.json(), async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to update image metadata',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -601,7 +612,7 @@ router.delete('/:filename', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to delete image',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });
@@ -626,14 +637,18 @@ router.use((err, req, res, next) => {
     }
     return res.status(400).json({
       success: false,
-      error: err.message,
+      error: clientErrorMessage(err),
     });
   }
 
   if (err) {
-    return res.status(400).json({
+    // A refusal (the file filter, an image folder outside the project) is the
+    // editor's 400; a filesystem failure (EACCES writing the upload) is ours.
+    // Either way the message names no server path.
+    console.error('Image request failed:', err.message);
+    return res.status(err.syscall ? 500 : 400).json({
       success: false,
-      error: err.message,
+      error: err.syscall ? 'Failed to store the image' : clientErrorMessage(err),
     });
   }
 

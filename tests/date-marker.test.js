@@ -6,7 +6,7 @@
  * union branches, intersections, objects and arrays. Only a marked field has a
  * new value written as an unquoted YAML date; unmarked, a newly entered date
  * is written as a quoted string and fails a z.date() schema. zod 4 marks
- * dates through its serializer override; zod 3 has none, so markZod3Dates
+ * dates through its serializer override; zod 3 has none, so markZod3StandIns
  * walks the zod schema beside its JSON Schema, and before this test it never
  * visited union branches.
  *

@@ -24,6 +24,7 @@ import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collec
 import { maybeAutoImport } from './utils/import-files.js';
 import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
 import { requireSameOrigin } from './utils/same-origin.js';
+import { clientErrorMessage } from './utils/redact-server-paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -191,10 +192,10 @@ export async function createServer() {
           message: `Reloaded ${Object.keys(schemas).length} collection schemas`
         });
       }).catch(error => {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: clientErrorMessage(error, [fullConfig.paths.projectRoot]) });
       });
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: clientErrorMessage(error, [fullConfig.paths.projectRoot]) });
     }
   });
 
@@ -293,7 +294,8 @@ export async function createServer() {
     console.error('Server error:', err);
     res.status(500).json({
       error: 'Internal server error',
-      message: IS_DEV ? err.message : 'Something went wrong',
+      // Even in development: an fs error's message is its absolute path.
+      message: IS_DEV ? clientErrorMessage(err, [fullConfig.paths.projectRoot]) : 'Something went wrong',
     });
   });
 

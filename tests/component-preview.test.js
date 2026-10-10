@@ -12,7 +12,11 @@
  * - `&single=1` makes that field one value, not a list (a single
  *   reference('team') or `teamId`), and `&collection=` makes it the
  *   {collection, id} the build gives a reference().
+ * - the path's id is ONE entry id: a nested id (`regional/ada`) is never split
+ *   into `regional` and `ada`, and a `?` or `#` in an id survives the trip
+ *   (Astro's param is decodeURI'd, so the route decodes the raw path).
  *
+ * Port: COMPONENT_PREVIEW_PORT, default 4728.
  *   bun tests/component-preview.test.js     (~10 s; port 4728)
  */
 
@@ -25,7 +29,7 @@ import { componentPreviewPath } from '../ui/preview-routes.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const siteDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-component-preview-')));
-const PORT = 4728;
+const PORT = Number(process.env.COMPONENT_PREVIEW_PORT) || 4728;
 
 function writeFile(relativePath, content) {
   const fullPath = path.join(siteDir, relativePath);
@@ -48,7 +52,14 @@ export const collections = {
 };
 `);
 writeFile('src/content/pages/home.md', '---\ntitle: Home\n---\n');
-writeFile('src/content/team.json', JSON.stringify([{ id: 'ada', name: 'Ada from the team' }]));
+// A nested id (a glob collection's `regional/ada.md` has one too) must reach
+// the component whole, never split into `regional` and `ada`.
+writeFile('src/content/team.json', JSON.stringify([
+  { id: 'ada', name: 'Ada from the team' },
+  { id: 'regional', name: 'Not this one' },
+  { id: 'regional/ada', name: 'Ada from the regional team' },
+  { id: 'north east/o?brien#1', name: 'An id with a space, ? and #' },
+]));
 writeFile('src/content/testimonials.json', JSON.stringify([{ id: 'sue', quote: 'A quote from Sue' }]));
 writeFile('src/pages/index.astro', '<h1>Home</h1>\n');
 // Spread props, as docs/blocks.md writes components.
@@ -168,6 +179,28 @@ try {
     const preview = await get(componentPreviewPath({ type: 'lead', field: 'leadId', single: true }, 'team', 'ada'));
     assert.equal(preview.status, 200, preview.text.slice(0, 400));
     assert.match(preview.text, /<p class="lead"[^>]*>Ada from the team<\/p>/, preview.text.slice(0, 600));
+  });
+
+  await check('a nested entry id reaches the component whole: single reference, reference list, id list', async () => {
+    const single = await get(componentPreviewPath({ type: 'author', field: 'author', single: true, reference: true }, 'team', 'regional/ada'));
+    assert.equal(single.status, 200, single.text.slice(0, 400));
+    assert.match(single.text, /<p class="author"[^>]*>Ada from the regional team<\/p>/, single.text.slice(0, 600));
+
+    const list = await get(componentPreviewPath({ type: 'crew', field: 'members', reference: true }, 'team', 'regional/ada'));
+    assert.equal(list.status, 200, list.text.slice(0, 400));
+    const crew = [...list.text.matchAll(/<li class="crew-member"[^>]*>([^<]*)<\/li>/g)].map((match) => match[1]);
+    assert.deepEqual(crew, ['Ada from the regional team'], 'one member, the nested entry');
+
+    const ids = await get(componentPreviewPath({ type: 'team' }, 'team', 'regional/ada'));
+    assert.equal(ids.status, 200, ids.text.slice(0, 400));
+    const members = [...ids.text.matchAll(/<li class="member"[^>]*>([^<]*)<\/li>/g)].map((match) => match[1]);
+    assert.deepEqual(members, ['Ada from the regional team'], 'one id, the nested entry');
+  });
+
+  await check('an id with a space, ? and # reaches the component as it is', async () => {
+    const preview = await get(componentPreviewPath({ type: 'author', field: 'author', single: true, reference: true }, 'team', 'north east/o?brien#1'));
+    assert.equal(preview.status, 200, preview.text.slice(0, 400));
+    assert.match(preview.text, /<p class="author"[^>]*>An id with a space, \? and #<\/p>/, preview.text.match(/<main[\s\S]*<\/main>/)?.[0]);
   });
 
   await check('a global.css, when the site has one, is still loaded', async () => {
