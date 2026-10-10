@@ -90,7 +90,10 @@ function stripDirectories(text, directories) {
     }
   });
   for (const prefix of directories) {
-    cleaned = cleaned.split(`${prefix}/`).join('').split(prefix).join('.');
+    // The bare directory only at a path boundary: `/srv/site` must not match
+    // inside a sibling such as `/srv/site-b/x`.
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    cleaned = cleaned.split(`${prefix}/`).join('').replace(new RegExp(`${escaped}(?![\\w.-])`, 'g'), '.');
   }
   return cleaned.trim();
 }

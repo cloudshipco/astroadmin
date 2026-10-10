@@ -132,6 +132,13 @@ try {
     assert.equal(cleanCheckOutput(`built ${projectRoot}/dist/index.html`), 'built dist/index.html');
   });
 
+  check('a server dir is stripped only at a path boundary, not inside a longer sibling name', () => {
+    const out = redactServerPaths('see /srv/site-b/x.md and /srv/site/y.md and /srv/site', ['/srv/site']);
+    assert.ok(!out.includes('.-b'), `a sibling name was mangled: ${out}`);
+    assert.ok(out.includes('y.md'), `positive control: the file under the server dir stays named: ${out}`);
+    assert.ok(!out.includes('/srv/site/'), `positive control: the server dir is stripped: ${out}`);
+  });
+
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed.\n`);
 } finally {
