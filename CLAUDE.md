@@ -41,6 +41,24 @@ is why an image field inside an array item showed as a raw `/images/x.jpg` text 
 months. If a field kind needs to work in the modal, fix `generateField`, don't special-case
 the modal.
 
+**Untouched fields keep their stored values.** Every save rebuilds the entry from the form, and
+a control cannot always reproduce what it shows: a null is an empty box, a `{collection, id}`
+reference is its id, a datetime with an offset is UTC to the millisecond. So a form rendered
+from stored data is bound to it (`bindOriginalValues(container, original)`, straight after
+render and widget setup, before any edit): every named control's path and LIVE value (its
+baseline, so browser normalisation is absorbed) and every container's path and controls
+(`[data-object-field]` objects, `[data-array-items]` lists, block and inline-array items). At
+extraction an unchanged container yields its stored value whole, an unchanged control yields
+the stored value at the path it was rendered from, and only changed ones are read from the
+DOM. Elements are tracked by identity, so a reordered item keeps its values; an element added
+after binding (a new block, card or reference) is read from the DOM. The dashboard binds a
+loaded entry (never a new one); the item modal binds the item it was opened with. A new
+surface that renders stored data must bind it, or every lossy value is rewritten on the next
+save. Edited controls still need their own rules: a cleared nullable saves null, a chosen
+reference saves its id, a real `z.date()` with a date-only value is a date input.
+Verify a change here in a real browser too (recipe below): Chrome normalises values that
+happy-dom does not (`datetime-local` `.100` reads back as `.1`).
+
 Three invariants that are easy to break and fail silently:
 
 1. **The input element must carry the schema type.** `extractFields` reads the *DOM*, not the
@@ -241,7 +259,21 @@ runner aggregating them). Most run server-less and need env vars:
   zone took effect). The rules it pins: a `datetime-local` input shows UTC and an edited
   value is saved as a UTC ISO string (zoneless, a JSON entry was read back as local time
   and moved an hour per save in London's summer); an unedited date control saves its
-  stored text byte for byte (`data-original-value`), milliseconds and zone included.
+  stored text byte for byte (the form is bound, as the dashboard binds it), milliseconds
+  and zone included.
+- `bun tests/untouched-fields.test.js` — the untouched-fields rule (see the renderer
+  section), through the real `createServer()` app and real zod 4 (markdown and `file()`
+  JSON) and zod 3 (`zod/v3`) converters: a title-only edit saves a file byte-identical to
+  a direct save of the loaded data, for every control kind (null strings, textareas,
+  numbers as `type: [x, 'null']` and `anyOf`, booleans, enums, an absent checkbox, a
+  datetime string with microseconds and an offset, image, image(), colour, single and
+  list references holding `{collection, id}`, `<x>Ids`, a null gallery, a null object,
+  a null array of objects, primitive arrays with null, blocks), and each value is lost
+  with the form unbound. Also: blocks and cards reordered by the real drag handlers, the
+  item modal and nested item modals, cleared nullables saving null, an edited reference
+  saving its id, a list item with no id before others, an unknown block type kept, and a
+  zod 3 `z.date()` holding a date-only value rendered as a date input and saved date-only
+  after changing the day. ~2 s.
 - `bun tests/serializer-fidelity.test.js` — every serialiser output, preserving candidate
   and every fallback, parses back to the data and body it was given: a body that starts
   with a `---` block stays body (`matter.stringify` reparsed it, so a CRLF file moved its
@@ -251,14 +283,17 @@ runner aggregating them). Most run server-less and need env vars:
 
 `extract-fields` also pins nullable fields: a null stays null until edited, clearing a
 nullable control saves null (a nullable boolean is a Not set / Yes / No select), and an
-absent optional nullable key stays absent. `save-body` also races a no-body save against a
+absent optional nullable key stays absent. Its forms are bound like the dashboard's, so a
+stored `[]` the editor leaves alone stays `[]` even where the schema says optional; only
+an array the DOM produced (never stored, or emptied by the editor) is dropped. `save-body` also races a no-body save against a
 body save through the HTTP app: the store resolves `keepStoredBody` inside the file's write
 queue, so the old body is never written back.
 - `bun tests/schema-references.test.js` — Astro's `reference()` parses (a string id;
   `z.array(reference(c))` a list) carrying `referenceCollection`, and `<base>Ids` resolves
   against the DECLARED collections (`<base>s`, `<base>`, `<base>es`, y->ies; nothing declared
   means a plain list). Throwaway project through the real parser, rendered and read back in
-  happy-dom: the picker per reference, a single reference saving as a string.
+  happy-dom: the picker per reference, a single reference saving as a string, and an
+  untouched `{collection, id}` or number keeping its shape.
 - `bun tests/image-field-astro.test.js` — Astro `image()` fields against the real app and a
   real `astro build` (~10 s): a public `/images/...` value fails the build (control); an
   upload `?for=image-field` lands in `src/content/assets/images`; `POST
