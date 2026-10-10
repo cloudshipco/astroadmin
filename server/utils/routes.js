@@ -111,8 +111,6 @@ async function scanDirectory(dir, routePrefix, routes) {
     const fullPath = path.join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      // Check if directory name is a dynamic param
-      const dirParam = extractParamName(entry.name + '.astro'); // Hack to reuse extraction
       if (entry.name.startsWith('[') && entry.name.endsWith(']')) {
         // Dynamic directory like [category] - skip for now (complex nested routes)
         continue;

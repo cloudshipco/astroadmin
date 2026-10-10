@@ -17,7 +17,7 @@ import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import simpleGit from 'simple-git';
-import { publishFailureMessage } from '../server/api/publish.js';
+import { publishFailureMessage, redactBuildResult } from '../server/api/publish.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-publish-failure-')));
@@ -151,6 +151,14 @@ await check('the editor shows the server\'s message, not just the error label', 
   assert.equal(notifications[0].text, `Failed to publish: ${serverMessage}`, notifications[0].text);
   assert.match(notifications[0].text, /user\.email/, 'the toast carries the fix');
   assert.equal(button.disabled, false, 'the button is re-enabled');
+});
+
+await check('a failed build or deploy reaches the editor with server paths stripped', () => {
+  const build = redactBuildResult({ success: false, duration: 5, output: `error in ${repo}/src/pages/index.astro`, error: `Command failed in ${scratch}/x` }, [repo, scratch]);
+  assert.ok(build.output.includes('index.astro'), `positive control: the file name stays (${build.output})`);
+  assert.ok(!build.output.includes(scratch) && !build.error.includes(scratch), JSON.stringify(build));
+  assert.equal(build.success, false);
+  assert.equal(redactBuildResult(null, [repo]), null);
 });
 
 fs.rmSync(scratch, { recursive: true, force: true });

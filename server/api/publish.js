@@ -281,7 +281,8 @@ export async function publishHandler(req, res) {
     let deployResult = null;
 
     if (deployConfig?.adapter) {
-      buildResult = await runProductionBuild();
+      const serverPaths = [fullConfig.paths.projectRoot, process.env.HOME];
+      buildResult = redactBuildResult(await runProductionBuild(), serverPaths);
 
       if (!buildResult.success) {
         return res.json({
@@ -300,15 +301,16 @@ export async function publishHandler(req, res) {
         deployResult = await deploy(deployConfig, fullConfig.paths.projectRoot);
         console.log('✅ Deployment completed');
       } catch (deployError) {
+        const deployMessage = redactServerPaths(String(deployError?.message || deployError), serverPaths).trim();
         return res.json({
           success: false,
           committed,
           pushed,
           commit: commitInfo(commitResult),
           build: buildResult,
-          deploy: { success: false, error: deployError.message },
+          deploy: { success: false, error: deployMessage },
           message: 'Built, but deployment failed',
-          error: deployError.message,
+          error: deployMessage,
         });
       }
     }
@@ -332,6 +334,21 @@ export async function publishHandler(req, res) {
       message: publishFailureMessage(error, serverPaths),
     });
   }
+}
+
+/**
+ * A production build's result as the editor may see it: its output and error
+ * text with server paths stripped (redactServerPaths).
+ * @param {{output?: string, error?: string}|null} buildResult
+ * @param {string[]} serverPaths
+ */
+export function redactBuildResult(buildResult, serverPaths = []) {
+  if (!buildResult) return buildResult;
+  const redacted = { ...buildResult };
+  for (const key of ['output', 'error']) {
+    if (typeof redacted[key] === 'string') redacted[key] = redactServerPaths(redacted[key], serverPaths);
+  }
+  return redacted;
 }
 
 /**
