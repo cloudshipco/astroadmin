@@ -9,7 +9,6 @@ import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../config.js';
 import { loadSchemas } from '../utils/collections.js';
-import { clientErrorMessage } from '../utils/redact-server-paths.js';
 import {
   assertContainedPath,
   assertDeclaredCollection,
@@ -181,7 +180,9 @@ const fileFilter = (req, file, cb) => {
   if (ALLOWED_EXTENSIONS.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error(`File type not allowed. Allowed types: ${ALLOWED_EXTENSIONS.join(', ')}`), false);
+    const refusal = new Error(`File type not allowed. Allowed types: ${ALLOWED_EXTENSIONS.join(', ')}`);
+    refusal.status = 400;
+    cb(refusal, false);
   }
 };
 
@@ -265,7 +266,7 @@ router.get('/', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to list images',
-      message: clientErrorMessage(error),
+      message: 'The images could not be listed; see the server log.',
     });
   }
 });
@@ -304,7 +305,7 @@ router.post('/', upload.single('image'), (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to upload image',
-      message: clientErrorMessage(error),
+      message: 'The image could not be saved; see the server log.',
     });
   }
 });
@@ -437,9 +438,9 @@ router.get('/entry-file', async (req, res) => {
     });
   } catch (error) {
     if (isContentPathError(error)) {
-      return res.status(400).json({ success: false, error: 'Invalid entry', message: clientErrorMessage(error) });
+      return res.status(400).json({ success: false, error: 'Invalid entry', message: error.message });
     }
-    if (error.status === 400) return res.status(400).json({ success: false, error: clientErrorMessage(error) });
+    if (error.status === 400) return res.status(400).json({ success: false, error: error.message });
     console.error('Error serving an image() preview:', error.message);
     res.status(500).json({ success: false, error: 'Failed to read the image' });
   }
@@ -472,9 +473,9 @@ router.post('/:filename/entry-value', express.json(), async (req, res) => {
     res.json({ success: true, value, previewUrl: image.previewUrl });
   } catch (error) {
     if (isContentPathError(error)) {
-      return res.status(400).json({ success: false, error: 'Invalid entry', message: clientErrorMessage(error) });
+      return res.status(400).json({ success: false, error: 'Invalid entry', message: error.message });
     }
-    if (error.status === 400) return res.status(400).json({ success: false, error: clientErrorMessage(error) });
+    if (error.status === 400) return res.status(400).json({ success: false, error: error.message });
     console.error('Error resolving image() value:', error.message);
     res.status(500).json({ success: false, error: 'Failed to resolve the image path' });
   }
@@ -501,7 +502,7 @@ router.get('/:filename/metadata', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get image metadata',
-      message: clientErrorMessage(error),
+      message: 'The image details could not be read; see the server log.',
     });
   }
 });
@@ -548,7 +549,7 @@ router.put('/:filename/metadata', express.json(), async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to update image metadata',
-      message: clientErrorMessage(error),
+      message: 'The image details could not be saved; see the server log.',
     });
   }
 });
@@ -612,7 +613,7 @@ router.delete('/:filename', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to delete image',
-      message: clientErrorMessage(error),
+      message: 'The image could not be deleted; see the server log.',
     });
   }
 });
@@ -635,20 +636,25 @@ router.use((err, req, res, next) => {
         error: `File too large. Maximum size is ${MAX_FILE_SIZE / (1024 * 1024)}MB`,
       });
     }
+    // multer's own fixed text ("Unexpected field"), naming no path.
     return res.status(400).json({
       success: false,
-      error: clientErrorMessage(err),
+      error: err.message,
     });
   }
 
   if (err) {
-    // A refusal (the file filter, an image folder outside the project) is the
-    // editor's 400; a filesystem failure (EACCES writing the upload) is ours.
-    // Either way the message names no server path.
-    console.error('Image request failed:', err.message);
+    // A refusal of ours (the file filter, an image folder outside the
+    // project: status 400, fixed text) is the editor's to fix and says why.
+    // Anything else gets a fixed message: a filesystem failure (EACCES
+    // writing the upload) is ours, and a malformed upload is the request's.
+    console.error('Image request failed:', err);
+    if (err.status === 400 && !err.syscall) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
     return res.status(err.syscall ? 500 : 400).json({
       success: false,
-      error: err.syscall ? 'Failed to store the image' : clientErrorMessage(err),
+      error: err.syscall ? 'Failed to store the image' : 'The upload could not be read',
     });
   }
 

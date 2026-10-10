@@ -18,6 +18,7 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import simpleGit from 'simple-git';
 import { publishFailureMessage, redactBuildResult } from '../server/api/publish.js';
+import { runProductionBuildIn } from '../server/utils/build.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-publish-failure-')));
@@ -67,40 +68,23 @@ await check('positive control: git really refuses to commit without an identity'
 });
 
 await check('the message tells the editor how to fix a missing git identity, naming no server path', () => {
-  const message = publishFailureMessage(identityError, [repo, scratch]);
+  const message = publishFailureMessage(identityError);
   assert.match(message, /user\.name/, message);
   assert.match(message, /user\.email/, message);
   assert.ok(!message.includes(scratch), `server path leaked: ${message}`);
 });
 
-await check('any other error keeps its text, with server paths stripped', () => {
-  const message = publishFailureMessage(new Error(`fatal: could not read ${repo}/config: denied`), [repo]);
-  assert.ok(message.includes('could not read'), message);
-  assert.ok(!message.includes(repo), `server path leaked: ${message}`);
-});
-
-await check('a path through a symlinked checkout, or outside every configured root, is not named', () => {
-  // The configured root is a symlink; git reports the resolved path.
+await check('any other error is a fixed message (git\'s text, paths, URLs: none of it is sent)', () => {
+  // A path through a symlinked checkout, an external git directory, a
+  // remote URL: each used to be rewritten, and each rewrite had a gap.
   const realSite = path.join(scratch, 'real-site');
-  const linkedSite = path.join(scratch, 'linked-site');
-  fs.mkdirSync(realSite);
-  fs.symlinkSync(realSite, linkedSite, 'dir');
-  const external = '/srv/elsewhere/git-dirs/site.git';
-  const message = publishFailureMessage(new Error(
-    `fatal: Unable to create '${realSite}/.git/index.lock': File exists.\n`
-    + `error: could not lock config file ${external}/config: Permission denied`
-  ), [linkedSite]);
-  assert.ok(message.includes('Unable to create'), `control: the git text is kept: ${message}`);
-  assert.ok(message.includes('index.lock'), `control: the file name is kept: ${message}`);
-  assert.ok(!message.includes(realSite), `resolved checkout path leaked: ${message}`);
-  assert.ok(!message.includes(scratch), `server path leaked: ${message}`);
-  assert.ok(!message.includes('/srv/elsewhere'), `external git directory leaked: ${message}`);
-  assert.ok(!/(^|[\s'"(=:])\/[^\s'"()/]+\//m.test(message), `an absolute path survived: ${message}`);
-});
-
-await check('a remote URL in a push error is kept (the redaction is for server paths only)', () => {
-  const message = publishFailureMessage(new Error('fatal: unable to access \'https://git.example.com/site-a/site.git/\': Could not resolve host'), []);
-  assert.ok(message.includes('https://git.example.com/site-a/site.git/'), message);
+  for (const error of [
+    new Error(`fatal: could not read ${repo}/config: denied`),
+    new Error(`fatal: Unable to create '${realSite}/.git/index.lock': File exists.\nerror: could not lock config file /srv/elsewhere/git-dirs/site.git/config: Permission denied`),
+    new Error("fatal: unable to access 'https://git.example.com/site-a/site.git/': Could not resolve host"),
+  ]) {
+    assert.equal(publishFailureMessage(error), 'Publishing failed; see the server log.', error.message);
+  }
 });
 
 await check('the editor shows the server\'s message, not just the error label', async () => {
@@ -111,7 +95,7 @@ await check('the editor shows the server\'s message, not just the error label', 
   const source = fs.readFileSync(path.join(repoRoot, 'ui/dashboard.js'), 'utf8');
   const handler = source.match(/document\.getElementById\('publishBtn'\)\.addEventListener\('click', async \(\) => \{[\s\S]*?\n\}\);/)?.[0];
   assert.ok(handler, 'the Publish click handler was not found in ui/dashboard.js');
-  const serverMessage = publishFailureMessage(identityError, [repo, scratch]);
+  const serverMessage = publishFailureMessage(identityError);
   const body = { success: false, error: 'Failed to publish', message: serverMessage };
   let click = null;
   const button = {
@@ -153,11 +137,37 @@ await check('the editor shows the server\'s message, not just the error label', 
   assert.equal(button.disabled, false, 'the button is re-enabled');
 });
 
-await check('a failed build or deploy reaches the editor with server paths stripped', () => {
-  const build = redactBuildResult({ success: false, duration: 5, output: `error in ${repo}/src/pages/index.astro`, error: `Command failed in ${scratch}/x` }, [repo, scratch]);
-  assert.ok(build.output.includes('index.astro'), `positive control: the file name stays (${build.output})`);
-  assert.ok(!build.output.includes(scratch) && !build.error.includes(scratch), JSON.stringify(build));
-  assert.equal(build.success, false);
+/** Run fn with console.error captured; returns [result, logged text]. */
+async function withLog(fn) {
+  const logged = [];
+  const realError = console.error;
+  console.error = (...args) => logged.push(args.map(String).join(' '));
+  try {
+    return [await fn(), logged.join('\n')];
+  } finally {
+    console.error = realError;
+  }
+}
+
+await check('a real failed production build: the project root removed, the error a fixed text', async () => {
+  // A configured build command that fails the way a build does, naming a
+  // file under the project root.
+  const command = `node -e "console.error('error in ${repo}/src/pages/index.astro:3:1'); process.exit(1)"`;
+  const [raw, logged] = await withLog(() => runProductionBuildIn({ build: { production: command } }, repo));
+  assert.equal(raw.success, false, 'positive control: the build failed');
+  assert.ok(logged.includes('Production build failed'), `positive control: logged (${logged})`);
+  const build = redactBuildResult(raw, [repo]);
+  assert.equal(build.output, 'error in src/pages/index.astro:3:1');
+  assert.equal(build.error, 'The build command failed.', 'not `Command failed: <command line>`');
+  assert.ok(!JSON.stringify(build).includes(scratch), JSON.stringify(build));
+});
+
+await check('build output naming a path outside the project is replaced, and logged', async () => {
+  const output = `error: cannot read '/srv/shared cache/astro/x.json' for ${repo}/src/a.md`;
+  const [build, logged] = await withLog(() => redactBuildResult({ success: false, duration: 5, output, error: 'The build command failed.' }, [repo]));
+  assert.equal(build.output, 'The build failed; its output is in the server log.');
+  assert.ok(logged.includes(output), `positive control: the original is in the server log (${logged})`);
+  assert.equal(build.error, 'The build command failed.');
   assert.equal(redactBuildResult(null, [repo]), null);
 });
 

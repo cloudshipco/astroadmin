@@ -23,7 +23,7 @@ import { checkHeadWithAstro } from '../utils/astro-check.js';
 import { listSlugs } from '../utils/content.js';
 // Shared with the editor's "View live site" link (ui/ is served to the browser).
 import { resolveLiveUrl } from '../../ui/live-url.js';
-import { clientErrorMessage, redactServerPaths } from '../utils/redact-server-paths.js';
+import { cleanCheckOutput } from '../utils/redact-server-paths.js';
 
 const router = express.Router();
 // Conservative fallback for a malformed config; an explicitly-configured
@@ -175,9 +175,10 @@ export async function checkRefusalBody(check, { committed = false, commitResult 
     message: committed
       ? 'Your changes are saved and committed, but were not published: the site would not build with them.'
       : 'Nothing was published: the site would not build with the current content.',
-    // checkHeadWithAstro redacts its output; this is the last stop before the
-    // client, so anything that reached it unredacted is redacted here too.
-    check: { commit: check.commit, output: redactServerPaths(String(check.output ?? '')).trim(), entries: await markEditableEntries(check.entries) },
+    // checkHeadWithAstro cleans its output against the directories it knows;
+    // this is the last stop before the client, so output that still names a
+    // server path is replaced here too.
+    check: { commit: check.commit, output: cleanCheckOutput(check.output, [], { label: 'A publish refusal' }), entries: await markEditableEntries(check.entries) },
   };
 }
 
@@ -284,8 +285,7 @@ export async function publishHandler(req, res) {
     let deployResult = null;
 
     if (deployConfig?.adapter) {
-      const serverPaths = [fullConfig.paths.projectRoot];
-      buildResult = redactBuildResult(await runProductionBuild(), serverPaths);
+      buildResult = redactBuildResult(await runProductionBuild(), [fullConfig.paths.projectRoot]);
 
       if (!buildResult.success) {
         return res.json({
@@ -304,16 +304,17 @@ export async function publishHandler(req, res) {
         deployResult = await deploy(deployConfig, fullConfig.paths.projectRoot);
         console.log('✅ Deployment completed');
       } catch (deployError) {
-        const deployMessage = redactServerPaths(String(deployError?.message || deployError), serverPaths).trim();
+        // The adapter's message can carry server paths and command lines.
+        console.error('Deployment failed:', deployError);
         return res.json({
           success: false,
           committed,
           pushed,
           commit: commitInfo(commitResult),
           build: buildResult,
-          deploy: { success: false, error: deployMessage },
+          deploy: { success: false, error: DEPLOY_FAILED_MESSAGE },
           message: 'Built, but deployment failed',
-          error: deployMessage,
+          error: DEPLOY_FAILED_MESSAGE,
         });
       }
     }
@@ -329,27 +330,33 @@ export async function publishHandler(req, res) {
     });
   } catch (error) {
     console.error('Error publishing:', error);
-    const projectRoot = (await getConfig().catch(() => null))?.paths?.projectRoot;
-    const serverPaths = [projectRoot];
     res.status(500).json({
       success: false,
       error: 'Failed to publish',
-      message: publishFailureMessage(error, serverPaths),
+      message: publishFailureMessage(error),
     });
   }
 }
 
+const DEPLOY_FAILED_MESSAGE = 'The deployment failed; see the server log.';
+
 /**
  * A production build's result as the editor may see it: its output and error
- * text with server paths stripped (redactServerPaths).
+ * text through cleanCheckOutput (the project root removed; text that names
+ * any other server path replaced by a fixed message and logged in full).
  * @param {{output?: string, error?: string}|null} buildResult
- * @param {string[]} serverPaths
+ * @param {string[]} roots - the directories to remove (the project root)
  */
-export function redactBuildResult(buildResult, serverPaths = []) {
+export function redactBuildResult(buildResult, roots = []) {
   if (!buildResult) return buildResult;
   const redacted = { ...buildResult };
   for (const key of ['output', 'error']) {
-    if (typeof redacted[key] === 'string') redacted[key] = redactServerPaths(redacted[key], serverPaths);
+    if (typeof redacted[key] === 'string') {
+      redacted[key] = cleanCheckOutput(redacted[key], roots, {
+        label: 'The production build',
+        hiddenMessage: 'The build failed; its output is in the server log.',
+      });
+    }
   }
   return redacted;
 }
@@ -357,21 +364,18 @@ export function redactBuildResult(buildResult, serverPaths = []) {
 /**
  * What the editor is told when publishing fails outright. A missing git
  * identity (the first publish on a fresh machine or container) gets the fix;
- * anything else keeps git's text with server paths redacted: the given roots
- * (and their resolved paths) made relative, any other absolute path reduced
- * to its last segment (the doctor's redaction, redactServerPaths).
+ * anything else a fixed message (publishHandler logs the error).
  * @param {Error} error
- * @param {string[]} serverPaths - absolute paths to strip from the text
  * @returns {string}
  */
-export function publishFailureMessage(error, serverPaths = []) {
+export function publishFailureMessage(error) {
   const text = String(error?.message || error || '');
   if (/Author identity unknown|Please tell me who you are|unable to auto-detect email/i.test(text)) {
     return 'Git on this server has no author identity, so the commit was refused. '
       + 'Set one in the site repository (git config user.name "Your Name" and git config user.email you@example.com), '
       + 'or set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL for AstroAdmin, then publish again.';
   }
-  return redactServerPaths(text, serverPaths).trim() || 'Publishing failed.';
+  return 'Publishing failed; see the server log.';
 }
 
 /**
@@ -411,7 +415,8 @@ export async function liveStatusHandler(req, res) {
     try {
       target = resolveLiveUrl(publicUrl, req.query.path);
     } catch (err) {
-      return res.status(400).json({ success: false, configured: true, error: clientErrorMessage(err) });
+      console.error('Live status refused a path:', err.message);
+      return res.status(400).json({ success: false, configured: true, error: 'That path is not a page on the public site' });
     }
 
     const controller = new AbortController();
@@ -431,13 +436,14 @@ export async function liveStatusHandler(req, res) {
       });
     } catch (fetchError) {
       // Unreachable/timeout is expected mid-deploy — report, don't 500.
-      return res.json({ success: true, configured: true, reachable: false, error: fetchError.message });
+      console.warn('Live site not reachable:', fetchError.message);
+      return res.json({ success: true, configured: true, reachable: false, error: 'The live site could not be reached' });
     } finally {
       clearTimeout(timeout);
     }
   } catch (error) {
     console.error('Error checking live status:', error);
-    res.status(500).json({ success: false, error: 'Failed to check live status', message: clientErrorMessage(error) });
+    res.status(500).json({ success: false, error: 'Failed to check live status', message: 'The live status could not be checked; see the server log.' });
   }
 }
 

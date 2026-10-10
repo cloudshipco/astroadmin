@@ -242,7 +242,12 @@ export const CHECKS = [
       const result = await runCommand(command, context.projectRoot, BUILD_TIMEOUT_MS, buildEnvironment());
       if (result.timedOut || result.exitCode !== 0) {
         context.buildSkippedReason = 'The build failed, so the built HTML could not be checked.';
-        const output = cleanCheckOutput(result.output, [context.projectRoot, outDir]).slice(-2000);
+        // A report can be shared; output naming a server path outside the
+        // site and its build goes to stderr instead (cleanCheckOutput logs it).
+        const output = cleanCheckOutput(result.output, [context.projectRoot, outDir], {
+          label: 'The doctor\'s build',
+          hiddenMessage: 'The build output named a server path, so it was written to stderr instead.',
+        }).slice(-2000);
         return { severity: 'fail', message: result.timedOut ? `The build did not finish within ${BUILD_TIMEOUT_MS / 1000} seconds.` : 'The build failed.', details: [output] };
       }
       if ((await listBuiltPagePaths(outDir)).length === 0) {

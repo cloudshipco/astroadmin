@@ -7,7 +7,6 @@ import express from 'express';
 import path from 'path';
 import { getConfig } from '../config.js';
 import { assertContainedPath, isContentPathError } from '../utils/glob-files.js';
-import { clientErrorMessage } from '../utils/redact-server-paths.js';
 import {
   publishHandler,
   withGitLock,
@@ -124,7 +123,7 @@ export class GitRequestError extends Error {
 /** Answer a refused file path or commit with a 400; true when sent. */
 function refusedGitRequest(error, res) {
   if (!(error instanceof GitRequestError)) return false;
-  res.status(400).json({ success: false, error: 'Invalid git request', message: clientErrorMessage(error) });
+  res.status(400).json({ success: false, error: 'Invalid git request', message: error.message });
   return true;
 }
 
@@ -310,7 +309,7 @@ router.get('/status', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get git status',
-      message: clientErrorMessage(error),
+      message: 'The list of changes could not be read; see the server log.',
     });
   }
 });
@@ -368,7 +367,7 @@ router.post('/commit', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to create commit',
-      message: clientErrorMessage(error),
+      message: 'The changes could not be committed; see the server log.',
     });
   }
 });
@@ -404,7 +403,7 @@ router.get('/log', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get git log',
-      message: clientErrorMessage(error),
+      message: 'The history could not be read; see the server log.',
     });
   }
 });
@@ -436,7 +435,7 @@ router.post('/pull', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to pull changes',
-      message: clientErrorMessage(error),
+      message: 'The latest changes could not be pulled; see the server log.',
     });
   }
 });
@@ -498,7 +497,7 @@ router.get('/diff', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get diff',
-      message: clientErrorMessage(error),
+      message: 'The changes to this file could not be read; see the server log.',
     });
   }
 });
@@ -539,7 +538,7 @@ router.get('/show', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to show file content',
-      message: clientErrorMessage(error),
+      message: 'This file could not be read; see the server log.',
     });
   }
 });
@@ -580,7 +579,7 @@ router.post('/revert-file', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to revert file',
-      message: clientErrorMessage(error),
+      message: 'This file could not be reverted; see the server log.',
     });
   }
 });
@@ -625,7 +624,7 @@ router.post('/restore-from-commit', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to restore file',
-      message: clientErrorMessage(error),
+      message: 'This file could not be restored; see the server log.',
     });
   }
 });
@@ -672,7 +671,7 @@ router.get('/file-history', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get file history',
-      message: clientErrorMessage(error),
+      message: "This file's history could not be read; see the server log.",
     });
   }
 });

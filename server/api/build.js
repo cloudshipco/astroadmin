@@ -8,7 +8,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { config, getConfig, IS_DEV } from '../config.js';
 import { DEFAULT_BUILD_ARGS, resolveBuildCommand } from '../utils/astro-bin.js';
-import { clientErrorMessage } from '../utils/redact-server-paths.js';
+import { cleanCheckOutput } from '../utils/redact-server-paths.js';
 
 const execAsync = promisify(exec);
 const router = express.Router();
@@ -27,6 +27,14 @@ async function buildCommandFor(kind) {
 async function describeBuildCommand(kind) {
   const fullConfig = await getConfig();
   return fullConfig.build?.[kind] || `astro ${DEFAULT_BUILD_ARGS[kind].join(' ')} (the site's installed astro)`;
+}
+
+/** A build's output for the editor: cleanCheckOutput against the project root. */
+function buildOutputForEditor(text) {
+  return cleanCheckOutput(text || '', [config.paths.projectRoot], {
+    label: 'A build',
+    hiddenMessage: 'The build output is in the server log.',
+  });
 }
 
 /**
@@ -53,8 +61,8 @@ async function runBuild(kind, label) {
     return {
       success: true,
       duration,
-      stdout: clientErrorMessage(stdout, [config.paths.projectRoot]).slice(-1000), // Last 1000 chars
-      stderr: clientErrorMessage(stderr, [config.paths.projectRoot]).slice(-1000),
+      stdout: buildOutputForEditor(stdout).slice(-1000), // Last 1000 chars
+      stderr: buildOutputForEditor(stderr).slice(-1000),
     };
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -63,11 +71,11 @@ async function runBuild(kind, label) {
     return {
       success: false,
       duration,
-      // The message is `Command failed: <resolved command line>`, which holds
-      // server paths, as the build's own output can.
-      error: clientErrorMessage(error, [config.paths.projectRoot]),
-      stdout: clientErrorMessage(error.stdout || '', [config.paths.projectRoot]).slice(-1000),
-      stderr: clientErrorMessage(error.stderr || '', [config.paths.projectRoot]).slice(-1000),
+      // Not error.message: it is `Command failed: <resolved command line>`,
+      // which holds server paths. The output says why.
+      error: 'The build command failed.',
+      stdout: buildOutputForEditor(error.stdout).slice(-1000),
+      stderr: buildOutputForEditor(error.stderr).slice(-1000),
     };
   }
 }
@@ -102,7 +110,7 @@ router.post('/staging', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to trigger staging build',
-      message: clientErrorMessage(error, [config.paths.projectRoot]),
+      message: 'The staging build could not be started; see the server log.',
     });
   }
 });
@@ -127,7 +135,7 @@ router.post('/production', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to trigger production build',
-      message: clientErrorMessage(error, [config.paths.projectRoot]),
+      message: 'The production build could not be started; see the server log.',
     });
   }
 });
@@ -152,7 +160,7 @@ router.get('/status', async (req, res) => {
     });
   } catch (error) {
     console.error('Error reading build status:', error);
-    res.status(500).json({ success: false, error: 'Failed to read build status', message: clientErrorMessage(error, [config.paths.projectRoot]) });
+    res.status(500).json({ success: false, error: 'Failed to read build status', message: 'The build settings could not be read; see the server log.' });
   }
 });
 

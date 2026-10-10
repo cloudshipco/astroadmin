@@ -24,15 +24,13 @@ import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collec
 import { maybeAutoImport } from './utils/import-files.js';
 import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
 import { requireSameOrigin } from './utils/same-origin.js';
-import { addServerPaths, clientErrorMessage } from './utils/redact-server-paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const SCHEMA_RELOAD_FAILED = "The content config could not be loaded; see the server log.";
+
 export async function createServer() {
   const fullConfig = await getConfig();
-  // Every error message the routes send is redacted against the configured
-  // root too (astroadmin.config.js can move it), without each route passing it.
-  addServerPaths(fullConfig.paths.projectRoot);
   const app = express();
 
   // Trust proxy (for secure cookies behind nginx/reverse proxy)
@@ -195,10 +193,13 @@ export async function createServer() {
           message: `Reloaded ${Object.keys(schemas).length} collection schemas`
         });
       }).catch(error => {
-        res.status(500).json({ error: clientErrorMessage(error, [fullConfig.paths.projectRoot]) });
+        // The bundler's message names the config file by its server path.
+        console.error('Reloading schemas failed:', error);
+        res.status(500).json({ error: SCHEMA_RELOAD_FAILED });
       });
     } catch (error) {
-      res.status(500).json({ error: clientErrorMessage(error, [fullConfig.paths.projectRoot]) });
+      console.error('Reloading schemas failed:', error);
+      res.status(500).json({ error: SCHEMA_RELOAD_FAILED });
     }
   });
 
@@ -298,7 +299,7 @@ export async function createServer() {
     res.status(500).json({
       error: 'Internal server error',
       // Even in development: an fs error's message is its absolute path.
-      message: IS_DEV ? clientErrorMessage(err, [fullConfig.paths.projectRoot]) : 'Something went wrong',
+      message: 'Something went wrong; see the server log.',
     });
   });
 

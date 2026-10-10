@@ -13,7 +13,6 @@ import {
 import { validateStoredEntry } from '../utils/content-validation.js';
 import { getConfig } from '../config.js';
 import { isContentPathError } from '../utils/glob-files.js';
-import { clientErrorMessage } from '../utils/redact-server-paths.js';
 
 const router = express.Router();
 
@@ -24,7 +23,7 @@ const router = express.Router();
  */
 function refusedPath(error, res) {
   if (!isContentPathError(error)) return false;
-  res.status(400).json({ success: false, error: 'Invalid content path', message: clientErrorMessage(error) });
+  res.status(400).json({ success: false, error: 'Invalid content path', message: error.message });
   return true;
 }
 
@@ -64,8 +63,16 @@ async function validateSavedEntry(collection, slug, locale) {
   try {
     return await validateStoredEntry(collection, slug, locale);
   } catch (error) {
-    return { status: 'unchecked', issues: [], reason: clientErrorMessage(error) };
+    console.error(`Could not check ${collection}/${slug} against its schema:`, error);
+    return { status: 'unchecked', issues: [], reason: UNCHECKED_REASON };
   }
+}
+
+const UNCHECKED_REASON = 'This entry could not be checked against its schema; see the server log.';
+
+/** The 404 for an entry that does not exist, built from the request, not the error. */
+function notFoundMessage(req) {
+  return `Content not found: ${req.params.collection}/${req.params.slug}`;
 }
 
 /**
@@ -115,13 +122,13 @@ router.get('/:collection/:slug', async (req, res) => {
       res.status(404).json({
         success: false,
         error: 'Content not found',
-        message: clientErrorMessage(error),
+        message: notFoundMessage(req),
       });
     } else {
       res.status(500).json({
         success: false,
         error: 'Failed to read content',
-        message: clientErrorMessage(error),
+        message: 'This entry could not be read; see the server log.',
       });
     }
   }
@@ -168,7 +175,7 @@ router.post('/:collection/:slug', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to write content',
-      message: clientErrorMessage(error),
+      message: 'This entry could not be saved; see the server log.',
     });
   }
 });
@@ -217,7 +224,7 @@ router.put('/:collection/:slug', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to update content',
-      message: clientErrorMessage(error),
+      message: 'This entry could not be saved; see the server log.',
     });
   }
 });
@@ -250,13 +257,13 @@ router.delete('/:collection/:slug', async (req, res) => {
       res.status(404).json({
         success: false,
         error: 'Content not found',
-        message: clientErrorMessage(error),
+        message: notFoundMessage(req),
       });
     } else {
       res.status(500).json({
         success: false,
         error: 'Failed to delete content',
-        message: clientErrorMessage(error),
+        message: 'This entry could not be deleted; see the server log.',
       });
     }
   }

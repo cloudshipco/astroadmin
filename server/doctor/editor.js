@@ -14,11 +14,9 @@
 
 import express from 'express';
 import { spawn } from 'child_process';
-import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { cleanCheckOutput, redactServerPaths } from '../utils/redact-server-paths.js';
+import { cleanCheckOutput } from '../utils/redact-server-paths.js';
 import { RESULT_MARKER, outDirFor } from './editor-scan.js';
 import { bunExecutable } from '../utils/astro-bin.js';
 
@@ -59,25 +57,17 @@ function bounded(text, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-// The shared redactor (server/utils/redact-server-paths.js), re-exported
-// for the doctor's existing callers.
-export { redactServerPaths };
-
 /**
- * An error for the API: server paths redacted, whitespace collapsed, bounded.
- */
-function reasonForApi(text, serverPaths) {
-  return bounded(redactServerPaths(text, serverPaths)
-    .replace(/\s+/g, ' ')
-    .trim(), MAX_REASON_LENGTH);
-}
-
-/**
- * A check's message or detail for the API: the server directories made
- * relative (page paths such as /services/a are the site's, and stay), bounded.
+ * A check's message or detail for the API: through cleanCheckOutput (the
+ * check's worktree and the project root removed; page paths such as
+ * /services/a are the site's, and stay; text naming any other server path
+ * is replaced and logged), bounded.
  */
 function textForApi(text, serverPaths) {
-  return bounded(cleanCheckOutput(String(text), serverPaths), MAX_TEXT_LENGTH);
+  return bounded(cleanCheckOutput(String(text), serverPaths, {
+    label: 'A doctor check',
+    hiddenMessage: 'This detail named a server path; see the server log.',
+  }), MAX_TEXT_LENGTH);
 }
 
 /**
@@ -140,22 +130,15 @@ export async function recordDoctorAfterCheck(fullConfig, build, { timeoutMs = DE
   const record = (result) => {
     if (generation === scanGeneration) latestResult = { commit: build.commit, checkedAt, durationMs: Date.now() - startedAt, ...result };
   };
-  const serverPaths = [build.siteDir, fullConfig.paths?.projectRoot, os.tmpdir(), PACKAGE_ROOT];
+  // The check's worktree and the project root (cleanCheckOutput adds their
+  // resolved paths).
+  const serverPaths = [build.siteDir, fullConfig.paths?.projectRoot];
+  // The reason is one of the fixed texts below; the error goes to the log.
   const unavailable = (logMessage, reason) => {
     console.warn(`Doctor scan unavailable: ${logMessage}`);
-    record({ status: 'unavailable', reason: reasonForApi(reason, serverPaths) });
+    record({ status: 'unavailable', reason: bounded(reason, MAX_REASON_LENGTH) });
   };
   try {
-    // Sync: see the note on fs in ../utils/astro-check.js (Bun can lose an
-    // fs/promises completion while child processes come and go).
-    for (const directory of [...serverPaths]) {
-      if (!directory) continue;
-      try {
-        serverPaths.push(fs.realpathSync(directory));
-      } catch {
-        // gone: nothing to strip
-      }
-    }
     const env = {
       ...process.env,
       ASTROADMIN_PROJECT_ROOT: build.siteDir,
@@ -172,7 +155,7 @@ export async function recordDoctorAfterCheck(fullConfig, build, { timeoutMs = DE
       return;
     }
     if (run.outcome.error) {
-      unavailable(run.outcome.error, `The scan could not run: ${run.outcome.error}`);
+      unavailable(run.outcome.error, 'The scan could not run; see the server log.');
       return;
     }
     const { coverage, results } = run.outcome.ok;
@@ -186,7 +169,7 @@ export async function recordDoctorAfterCheck(fullConfig, build, { timeoutMs = DE
       })),
     });
   } catch (error) {
-    unavailable(error.stack || error.message, 'The scan could not run.');
+    unavailable(error.stack || error.message, 'The scan could not run; see the server log.');
   }
 }
 

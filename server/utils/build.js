@@ -57,7 +57,9 @@ export async function runProductionBuildIn(fullConfig, projectRoot) {
     return {
       success: false,
       duration,
-      error: error.message,
+      // Not error.message: it is `Command failed: <resolved command line>`,
+      // which holds server paths. The output is what says why.
+      error: 'The build command failed.',
       output: (error.stdout || '') + (error.stderr || ''),
     };
   }

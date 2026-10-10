@@ -1,14 +1,15 @@
 /**
  * The publish check's 422 refusal names no server path, even for a path the
- * check did not know to strip.
+ * check does not know.
  *
- * checkHeadWithAstro made its known directories (the project, the repo top,
- * its temp dir) relative and nothing else, and checkRefusalBody forwarded the
- * output as it was. A site whose git directory lives elsewhere
+ * checkHeadWithAstro removes only the directories it knows (the project, the
+ * repo top, its temp worktree). A site whose git directory lives elsewhere
  * (`git init --separate-git-dir`, a bare store under /srv) failing to add the
- * check's worktree answered `fatal: could not create directory of
- * '/srv/git-store/site.git/worktrees/worktree'`. The failure here is real: the
- * external git directory's worktrees/ folder is read-only.
+ * check's worktree answers `fatal: could not create directory of
+ * '/srv/git-store/site.git/worktrees/worktree'`: a path outside every known
+ * directory, so the whole output is replaced by a fixed message and git's
+ * text goes to the server log. The failure here is real: the external git
+ * directory's worktrees/ folder is read-only.
  *
  * Runs the real publishHandler with git enabled (no remote: the pull and push
  * are skipped, the commit and the check are not).
@@ -50,16 +51,32 @@ const worktreesDir = path.join(externalGitDir, 'worktrees');
 fs.mkdirSync(worktreesDir);
 fs.chmodSync(worktreesDir, 0o555);
 
-const { publishHandler, checkRefusalBody } = await import('../server/api/publish.js');
+const { publishHandler, checkRefusalBody, publishFailureMessage } = await import('../server/api/publish.js');
+const { HIDDEN_OUTPUT_MESSAGE } = await import('../server/utils/redact-server-paths.js');
+
+// The server log: what the app writes, kept for the positive controls.
+const serverLog = [];
+for (const level of ['log', 'warn', 'error']) {
+  console[level] = (...args) => {
+    serverLog.push(args.map((arg) => (arg instanceof Error ? `${arg.message}\n${arg.stack}` : String(arg))).join(' '));
+  };
+}
+const report = (line) => process.stdout.write(`${line}\n`);
+function assertLogged(mark, ...fragments) {
+  const logged = serverLog.slice(mark).join('\n');
+  for (const fragment of fragments) {
+    assert.ok(logged.includes(fragment), `positive control: the server log has the original (${fragment}); it has:\n${logged.slice(0, 2000)}`);
+  }
+}
 
 let passed = 0;
 async function check(name, fn) {
   try {
     await fn();
     passed++;
-    console.log(`✅ ${name}`);
+    report(`✅ ${name}`);
   } catch (error) {
-    console.error(`❌ ${name}\n   ${error.stack || error.message}`);
+    report(`❌ ${name}\n   ${error.stack || error.message}`);
     process.exitCode = 1;
   }
 }
@@ -73,7 +90,7 @@ function jsonResponse() {
   };
 }
 
-const SERVER_PATH_SIGNS = [scratch, os.tmpdir(), fs.realpathSync(os.tmpdir()), '/private/', '/var/folders/', '/srv/'];
+const SERVER_PATH_SIGNS = [scratch, 'aa-publish-refusal-paths-', 'git-store', 'site.git', 'repo.git', 'git store', 'other place', 'site b', os.tmpdir(), fs.realpathSync(os.tmpdir()), '/private/', '/var/folders/', '/srv/'];
 function assertNoServerPath(label, text) {
   for (const sign of SERVER_PATH_SIGNS) {
     assert.equal(text.includes(sign), false, `${label} names a server path (${sign}): ${text}`);
@@ -81,59 +98,62 @@ function assertNoServerPath(label, text) {
 }
 
 try {
-  console.log('\n🧪 publish refusals name no server path\n' + '='.repeat(40));
+  report('\n🧪 publish refusals name no server path\n' + '='.repeat(40));
 
-  await check('a worktree the external git directory refuses: a 422 that names no server path', async () => {
+  await check('a worktree the external git directory refuses: the 422 carries the fixed message', async () => {
+    const mark = serverLog.length;
     const res = jsonResponse();
     await publishHandler({ body: { message: 'Edit home' } }, res);
-    // Positive controls: the check really ran and refused, for this reason.
+    // Positive controls: the check really ran and refused, for this reason,
+    // and the server log has git's own words naming the external directory.
     assert.equal(res.statusCode, 422, JSON.stringify(res.body));
     assert.equal(res.body.committed, true, 'the commit happened first');
     assert.equal(res.body.pushed, false);
-    assert.match(res.body.check.output, /worktrees|could not create|Permission denied/i, `the git failure is reported: ${res.body.check.output}`);
+    assertLogged(mark, externalGitDir);
+    assert.match(serverLog.slice(mark).join('\n'), /could not create|Permission denied/i, 'the git failure is in the log');
+    assert.equal(res.body.check.output, HIDDEN_OUTPUT_MESSAGE);
     assertNoServerPath('the 422 body', JSON.stringify(res.body));
   });
 
-  await check('checkRefusalBody redacts output that reaches it unredacted', async () => {
-    const body = await checkRefusalBody({
-      commit: 'abc1234',
-      output: `fatal: could not create '/srv/git-store/repo.git/worktrees/check' and '${scratch}/x/y'`,
-      entries: [],
-    });
-    assert.match(body.check.output, /fatal: could not create/, 'control: the message is kept');
-    assert.match(body.check.output, /'check'/, 'the path is reduced to its last segment');
+  await check('checkRefusalBody: output that still names a server path is replaced (the last stop)', async () => {
+    const output = `fatal: could not create '/srv/git-store/repo.git/worktrees/check' and '${scratch}/x/y'`;
+    const mark = serverLog.length;
+    const body = await checkRefusalBody({ commit: 'abc1234', output, entries: [] });
+    assert.equal(body.check.output, HIDDEN_OUTPUT_MESSAGE);
+    assertLogged(mark, output);
     assertNoServerPath('checkRefusalBody', JSON.stringify(body));
   });
 
-  // An external path with a space in it was cut at the space: the redactor
-  // reduced `/srv/git` to `git` and left ` store/repo.git/worktrees/check`,
-  // naming the directories below it.
-  await check('checkRefusalBody: a quoted external path with spaces is reduced whole', async () => {
-    const body = await checkRefusalBody({
-      commit: 'abc1234',
-      output: `fatal: could not create '/srv/git store/repo.git/worktrees/check': Permission denied\n`
-        + `error: unable to read "/srv/other place/site b/x.lock"`,
-      entries: [],
-    });
-    const output = body.check.output;
-    assert.match(output, /fatal: could not create 'check': Permission denied/, `control: the message and file name are kept: ${output}`);
-    assert.match(output, /unable to read "x\.lock"/, `control: a double-quoted path keeps its file name: ${output}`);
-    for (const fragment of ['git store', 'repo.git', 'worktrees/', 'other place', 'site b', '/srv']) {
-      assert.equal(output.includes(fragment), false, `names a server directory (${fragment}): ${output}`);
-    }
+  // An external path with a space in it was cut at the space: the old
+  // redactor reduced `/srv/git` to `git` and left ` store/repo.git/...`.
+  await check('checkRefusalBody: quoted external paths with spaces are replaced whole', async () => {
+    const output = `fatal: could not create '/srv/git store/repo.git/worktrees/check': Permission denied\n`
+      + 'error: unable to read "/srv/other place/site b/x.lock"';
+    const mark = serverLog.length;
+    const body = await checkRefusalBody({ commit: 'abc1234', output, entries: [] });
+    assert.equal(body.check.output, HIDDEN_OUTPUT_MESSAGE);
+    assertLogged(mark, output);
+    assertNoServerPath('checkRefusalBody', JSON.stringify(body));
   });
 
-  await check('publishFailureMessage: a quoted path with spaces is reduced whole', async () => {
-    const { publishFailureMessage } = await import('../server/api/publish.js');
+  await check("checkRefusalBody: Astro's message is kept, quoted page paths and URLs too", async () => {
+    const output = '[InvalidContentEntryDataError] pages → home data does not match collection schema.\n'
+      + "  link: Invalid enum value. Expected '/about' | '/blog/[slug]', received '/contact'\n"
+      + '  see https://docs.astro.build/en/reference/errors/?q=/blog/x';
+    const mark = serverLog.length;
+    const body = await checkRefusalBody({ commit: 'abc1234', output, entries: [{ collection: 'pages', slug: 'home' }] });
+    assert.equal(body.check.output, output);
+    assert.deepEqual(body.check.entries.map(({ collection, slug }) => ({ collection, slug })), [{ collection: 'pages', slug: 'home' }]);
+    assert.equal(serverLog.slice(mark).join('\n').includes('named a server path'), false, 'nothing was hidden');
+  });
+
+  await check('publishFailureMessage: anything but a missing identity is a fixed message', async () => {
     const message = publishFailureMessage(new Error("fatal: Unable to create '/srv/git store/repo.git/index.lock': File exists."));
-    assert.match(message, /Unable to create 'index\.lock': File exists\./, `control: the git text is kept: ${message}`);
-    for (const fragment of ['git store', 'repo.git', '/srv']) {
-      assert.equal(message.includes(fragment), false, `names a server directory (${fragment}): ${message}`);
-    }
+    assert.equal(message, 'Publishing failed; see the server log.');
   });
 
-  console.log('='.repeat(40));
-  console.log(`\n📊 ${passed} checks passed.\n`);
+  report('='.repeat(40));
+  report(`\n📊 ${passed} checks passed.\n`);
 } finally {
   // `git worktree prune` removes the (empty) folder itself.
   if (fs.existsSync(worktreesDir)) fs.chmodSync(worktreesDir, 0o755);

@@ -1,60 +1,71 @@
 /**
- * Text that leaves the server names no server path.
+ * Build output an editor may read, and nothing else.
  *
- * One place for it: the publish check's output (astro-check.js), the
- * doctor's reasons (doctor/editor.js), and every error message an API route
- * sends (clientErrorMessage). Synchronous fs only, like the doctor and the
- * publish check that import it (see CLAUDE.md: Bun can lose an fs/promises
- * completion while child processes start and exit).
+ * Error text reaches an editor in two ways, and only one of them is free text:
  *
- * The server's own directories are ALWAYS stripped, whatever a caller passes:
- * the project root (ASTROADMIN_PROJECT_ROOT, else the working directory, as
- * config.js resolves it), the working directory, anything registered with
- * addServerPaths (createServer registers the configured root), and the
- * resolved path of each. A caller adds to that list; it cannot forget it.
- * The home directory and anything above it are never used as a prefix: a
- * path under them would come out naming the folders below it (`Code/x/y`),
- * where the absolute-path rule reduces it to its last segment.
+ * - API errors: every route sends a fixed, route-specific message and logs
+ *   the error itself (console.error). Nothing here: an error's message is
+ *   never sent, so there is nothing to scrub.
+ * - Build output: the publish check's refusal (astro-check.js), a production
+ *   build's output (publish.js, api/build.js) and the doctor's build output.
+ *   Astro's own message is the point of it (it names the entry and field to
+ *   fix), so it is shown, cleaned by cleanCheckOutput below.
+ *
+ * cleanCheckOutput removes only what it KNOWS: terminal colour codes, stack
+ * frames, and the directories the caller names (the check's worktree, the
+ * project root, their resolved paths), as a plain prefix where a path starts.
+ * It rewrites nothing else. If what is left still names a server path (an
+ * absolute path into this server's filesystem, a `file://` URL, a climb to
+ * the filesystem root, or a known directory somewhere a prefix strip does not
+ * reach), the whole output is replaced by a fixed message and the original is
+ * logged. Scrubbing arbitrary text was tried and could not be made complete;
+ * an allowlist with a fallback can.
+ *
+ * Synchronous fs only, like the doctor and the publish check that import it
+ * (see CLAUDE.md: Bun can lose an fs/promises completion while child
+ * processes start and exit).
  */
 
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
-const registeredServerPaths = new Set();
+/** What the editor sees when build output names a server path. */
+export const HIDDEN_OUTPUT_MESSAGE = 'The publish check failed; see the server log.';
 
 /**
- * Register more directories every redaction in this process strips (e.g. the
- * project root a site's astroadmin.config.js configured).
- * @param {...(string|null|undefined)} directories
+ * Top-level directories a server path starts with: this machine's own (`/`
+ * listed once) and the usual ones elsewhere, so a path from another layout
+ * (a container's /srv on a Mac) is recognised too. A page path such as
+ * `/blog/[slug]` starts with none of them, so it is the site's, and stays.
  */
-export function addServerPaths(...directories) {
-  for (const directory of directories) {
-    if (directory) registeredServerPaths.add(path.resolve(String(directory)));
+const COMMON_TOP_LEVEL = [
+  'Applications', 'Library', 'System', 'Users', 'Volumes', 'bin', 'boot', 'cores', 'dev', 'etc',
+  'home', 'lib', 'lib32', 'lib64', 'mnt', 'nix', 'opt', 'private', 'proc', 'root', 'run',
+  'sbin', 'snap', 'srv', 'sys', 'tmp', 'usr', 'var', 'workspace',
+];
+let topLevelCache = null;
+function topLevelDirectories() {
+  if (!topLevelCache) {
+    let own = [];
+    try {
+      own = fs.readdirSync('/');
+    } catch {
+      // unreadable root: the common names still apply
+    }
+    topLevelCache = new Set([...COMMON_TOP_LEVEL, ...own]);
   }
-}
-
-/** `/`, the home directory and its ancestors: too broad to make paths relative to. */
-function isTooBroad(directory) {
-  if (!directory || directory === path.sep) return true;
-  const home = os.homedir();
-  return Boolean(home) && (home === directory || home.startsWith(`${directory}/`));
+  return topLevelCache;
 }
 
 /**
- * The directories to strip: the defaults, the caller's, and the resolved
- * path of each, absolute and de-duplicated, longest first (so a worktree
- * inside a stripped directory is removed whole).
- * @param {Array<string|null|undefined>} serverPaths
+ * The caller's directories, absolute, with the resolved path of each,
+ * de-duplicated and longest first (a worktree inside the project root is
+ * removed whole). `/` is never a root.
+ * @param {Array<string|null|undefined>} roots
  * @returns {string[]}
  */
-function serverDirectories(serverPaths = []) {
-  const candidates = [
-    process.env.ASTROADMIN_PROJECT_ROOT || process.cwd(),
-    process.cwd(),
-    ...registeredServerPaths,
-    ...serverPaths,
-  ].filter(Boolean).map((directory) => path.resolve(String(directory)));
+function knownRoots(roots) {
+  const candidates = roots.filter(Boolean).map((directory) => path.resolve(String(directory)));
   for (const directory of [...candidates]) {
     try {
       candidates.push(fs.realpathSync(directory));
@@ -62,135 +73,103 @@ function serverDirectories(serverPaths = []) {
       // gone: nothing more to strip
     }
   }
-  return [...new Set(candidates)].filter((directory) => !isTooBroad(directory))
+  return [...new Set(candidates)].filter((directory) => directory !== path.sep)
     .sort((a, b) => b.length - a.length);
 }
 
-/**
- * Make check output fit to show an editor: no terminal colour codes, no stack
- * trace or stack frames, and no server paths (each server directory becomes
- * relative, including inside file:// URLs).
- * @param {string} text
- * @param {Array<string|null|undefined>} [serverPaths] - directories to strip, beyond the defaults
- */
-export function cleanCheckOutput(text, serverPaths = []) {
-  return stripDirectories(text, serverDirectories(serverPaths));
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Where a path starts: the start of a line, or after whitespace, a quote, a
+// backtick or an opening bracket. Not after `=` or `:`: a known directory
+// inside a URL's query is left in place, and then hides the output (below).
+const PATH_START = '(?<=^|[\\s\'"`(\\[<{,;])';
+// Where a server path is DETECTED: the same, plus `=` and `:` (a query value,
+// `error:/srv/x`).
+const DETECT_START = '(?<=^|[\\s\'"`(\\[<{,;=:])';
+
+/** Remove each known root where a path starts: `root/x` -> `x`, a bare `root` -> `.`. */
+function stripRoots(text, roots) {
+  let cleaned = text;
+  for (const root of roots) {
+    const encoded = root.split('/').map(encodeURIComponent).join('/');
+    for (const form of new Set([`file://${encoded}`, `file://${root}`, root])) {
+      const escaped = escapeRegExp(form);
+      cleaned = cleaned
+        .replace(new RegExp(`${PATH_START}${escaped}/`, 'gm'), '')
+        // The bare directory only where its path ends: not `/srv/site-b`,
+        // `/srv/site backup` or `/srv/site+x`.
+        .replace(new RegExp(`${PATH_START}${escaped}(?=$|[\\n'"\`:,;)\\]]|\\.(?:\\s|$))`, 'gm'), '.');
+    }
+  }
+  return cleaned;
 }
 
-function stripDirectories(text, directories) {
+/**
+ * The first thing in `text` that names a server path, or null.
+ * @param {string} text - after stripRoots
+ * @param {string[]} roots - knownRoots() result
+ * @returns {string|null}
+ */
+export function findServerPath(text, roots = []) {
+  const fileUrl = text.match(/file:\/\/?[^\s'"`]*/i);
+  if (fileUrl) return fileUrl[0];
+  const root = roots.find((directory) => text.includes(directory));
+  if (root) return root;
+  const topLevel = topLevelDirectories();
+  for (const match of text.matchAll(new RegExp(`${DETECT_START}\\/([^\\s/'"\`]+)\\/`, 'gm'))) {
+    if (topLevel.has(match[1])) return match[0];
+  }
+  const home = text.match(new RegExp(`${DETECT_START}~\\/`, 'm'));
+  if (home) return home[0];
+  // A relative path that climbs out (esbuild names files relative to its
+  // working directory) names server directories when it reaches the
+  // filesystem root, or when what it names beside the directory it climbed
+  // to exists (`../site-b/...`, a sibling checkout). One that names nothing
+  // here, such as an image's `../assets/x.png`, is the site's own.
+  const bases = [...roots, process.cwd()];
+  const shallowest = Math.min(...bases.map((directory) => directory.split('/').filter(Boolean).length));
+  for (const match of text.matchAll(new RegExp(`${DETECT_START}((?:\\.\\.\\/)+)(.*)`, 'gm'))) {
+    const [token, climb, rest] = match;
+    if (climb.length / 3 >= shallowest) return token;
+    // The name may hold spaces or quotes (`../my site/...`), so compare the
+    // directory's entries with the text rather than cutting the text at one.
+    if (bases.some((base) => namesEntryOf(path.resolve(base, climb), rest))) return token;
+  }
+  return null;
+}
+
+/** Whether `rest` starts with the name of something in `directory`, followed by a path end. */
+function namesEntryOf(directory, rest) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(directory);
+  } catch {
+    return false;
+  }
+  return entries.some((entry) => rest.startsWith(entry)
+    && (rest.length === entry.length || /[/\s'"`:,;)\]]/.test(rest[entry.length])));
+}
+
+/**
+ * Build output fit to show an editor: no colour codes, no stack trace, the
+ * known directories removed; or, if a server path is left in it, the
+ * fallback message (and the original goes to the server log).
+ * @param {string} text
+ * @param {Array<string|null|undefined>} [roots] - the directories to remove (the check's worktree, the project root)
+ * @param {{hiddenMessage?: string, label?: string}} [options]
+ * @returns {string}
+ */
+export function cleanCheckOutput(text, roots = [], { hiddenMessage = HIDDEN_OUTPUT_MESSAGE, label = 'Build output' } = {}) {
+  const directories = knownRoots(roots);
   // eslint-disable-next-line no-control-regex
-  let cleaned = String(text).replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
+  let cleaned = String(text ?? '').replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
   cleaned = cleaned.replace(/^\s*Stack trace:[\s\S]*$/m, '');
   cleaned = cleaned.replace(/^\s+at .*$\n?/gm, '');
-  cleaned = cleaned.replace(/file:\/\/(\S+)/g, (match, encodedPath) => {
-    try {
-      return decodeURIComponent(encodedPath);
-    } catch {
-      return encodedPath;
-    }
-  });
-  // A quoted absolute path is one token, spaces and the other quote character
-  // included ("/srv/client's site/x", '/srv/site backup/x'): redact it whole.
-  cleaned = cleaned.replace(/'(\/[^'\n]*)'|"(\/[^"\n]*)"/g, (match, single, double) => {
-    const quote = single !== undefined ? "'" : '"';
-    return quote + redactAbsoluteToken(single ?? double, directories) + quote;
-  });
-  for (const prefix of directories) {
-    // Only at a path start (not inside a URL or another path), and the bare
-    // directory only where the path ends: `/srv/site` must not match inside
-    // `/srv/site-b/x` or `http://host/srv/site/x`.
-    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    cleaned = cleaned
-      .replace(new RegExp(`(?<![\\w./:~-])${escaped}/`, 'g'), '')
-      .replace(new RegExp(`(?<![\\w./:~-])${escaped}(?=$|[\\s'"\`:,;)\\]])`, 'g'), '.');
+  cleaned = stripRoots(cleaned, directories).trim();
+  const serverPath = findServerPath(cleaned, directories);
+  if (serverPath) {
+    console.error(`${label} named a server path, so the editor was shown "${hiddenMessage}" instead. The output:\n${text}`);
+    return hiddenMessage;
   }
-  return cleaned.trim();
-}
-
-/**
- * One whole absolute path: relative to the server directory it is inside, the
- * directory itself as `.`, anything else reduced to its last segment.
- */
-function redactAbsoluteToken(absolutePath, directories) {
-  for (const directory of directories) {
-    if (absolutePath === directory) return '.';
-    if (absolutePath.startsWith(`${directory}/`)) return absolutePath.slice(directory.length + 1);
-  }
-  return absolutePath.includes('/', 1) ? path.basename(absolutePath) : absolutePath;
-}
-
-/**
- * A `../`-relative path (esbuild names files relative to the process's
- * working directory), resolved against the working directory:
- * - inside a server directory: made relative to it (`src/content.config.ts`);
- * - climbing to the filesystem root, or into a directory that EXISTS beside
- *   the one it climbed to (`../site-a/...`, a sibling checkout): reduced to
- *   its last segment, since anything more names server directories;
- * - otherwise kept: it names nothing on this server, so it is the site's own
- *   relative value (`../assets/images/x.png` from a content file).
- */
-function redactRelativeClimb(relativePath, directories) {
-  const cwd = process.cwd();
-  const resolved = path.resolve(cwd, relativePath);
-  const inside = directories.find((directory) => resolved === directory || resolved.startsWith(`${directory}/`));
-  if (inside) return path.relative(inside, resolved) || '.';
-  const climbPrefix = relativePath.match(/^(?:\.\.\/)+/)[0];
-  const climbs = climbPrefix.length / 3;
-  const depth = cwd.split('/').filter(Boolean).length;
-  if (climbs >= depth) return path.basename(resolved);
-  const firstSegment = relativePath.slice(climbPrefix.length).split('/')[0];
-  if (firstSegment && fs.existsSync(path.join(path.resolve(cwd, climbPrefix), firstSegment))) {
-    return path.basename(resolved);
-  }
-  return relativePath;
-}
-
-/**
- * Error text that names no server path: the server directories (the defaults
- * above plus the caller's, and their resolved paths) made relative, then any
- * other absolute path reduced to its last segment (an external git directory,
- * a resolved temp dir), and a relative path that climbs out of the working
- * directory handled as redactRelativeClimb says. A quoted path ('...' or
- * "...") is one path even with spaces in it; an unquoted one ends at the first
- * space (a server directory's own path is matched whole even so; an unknown,
- * unquoted, spaced path is the one thing that can leave a fragment). URLs are kept: `https://host/x` has no path start after a delimiter.
- * @param {string} text
- * @param {Array<string|null|undefined>} [serverPaths] - directories to strip, beyond the defaults
- * @returns {string}
- */
-export function redactServerPaths(text, serverPaths = []) {
-  const directories = serverDirectories(serverPaths);
-  // Each server directory's own climb (`../my site/`, as esbuild names it)
-  // goes first and whole, since an unquoted one would end at the space.
-  // Only at a path start: `../../my site/` is somewhere else.
-  let withoutOwnClimbs = String(text);
-  for (const directory of directories) {
-    const climb = path.relative(process.cwd(), directory);
-    if (!climb.startsWith('../')) continue;
-    const escaped = climb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    withoutOwnClimbs = withoutOwnClimbs.replace(new RegExp(`(?<![./])${escaped}/`, 'g'), '');
-  }
-  // Climbs next: a climb's tail (`../../private/var/site/x`) holds the
-  // directory as a substring, which the prefix strip would cut out of it.
-  const climbsResolved = withoutOwnClimbs
-    .replace(/(['"])((?:\.\.\/)+[^'"\n]+)\1/g, (match, quote, relativePath) => quote + redactRelativeClimb(relativePath, directories) + quote)
-    .replace(/(^|[\s"'(=:])((?:\.\.\/)+[^\s"'()]+)/g, (match, lead, relativePath) => lead + redactRelativeClimb(relativePath, directories));
-  return stripDirectories(climbsResolved, directories)
-    // Any other unquoted absolute path (quoted ones were redacted whole above).
-    .replace(/(^|[\s"'(=:])\/(?:[^\s"'()/]+\/)+([^\s"'()/]*)/g, '$1$2');
-}
-
-/**
- * An error's message as an API response may carry it: server paths redacted
- * (the server directories made relative, any other absolute path reduced to
- * its last segment, so `unlink '/srv/site/public/images/x.png'` reads
- * `unlink 'public/images/x.png'` when /srv/site is the project root, `'x.png'`
- * when it is not).
- * @param {unknown} error - an Error, or anything with a message, or a string
- * @param {Array<string|null|undefined>} [serverPaths] - directories to strip, beyond the defaults
- * @returns {string}
- */
-export function clientErrorMessage(error, serverPaths = []) {
-  const text = typeof error === 'string' ? error : String(error?.message ?? error ?? '');
-  return redactServerPaths(text, serverPaths).trim();
+  return cleaned;
 }

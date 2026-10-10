@@ -1,16 +1,14 @@
 /**
- * The shared redactor's rules (server/utils/redact-server-paths.js), case by
- * case, with the useful text that must survive each one.
+ * cleanCheckOutput (server/utils/redact-server-paths.js): build output an
+ * editor may read. It removes the KNOWN directories (the ones the caller
+ * names, and their resolved paths) where a path starts, and nothing else; if
+ * a server path is left anywhere, the whole output becomes a fixed message
+ * and the original goes to the server log.
  *
- * - The server's directories are stripped with NO argument: the project root
- *   (ASTROADMIN_PROJECT_ROOT), the working directory, addServerPaths, and
- *   their resolved paths. Routes passed nothing and leaked.
- * - A quoted path ('...' or "...") is one path, spaces and all.
- * - A `../` climb: inside a server directory -> relative to it; into a
- *   directory that exists beside the one it climbed to, or to the root ->
- *   last segment; anything else is the site's own value and is kept.
- * - The home directory (and above) is never a prefix: it would leave the
- *   folders below it named.
+ * Every leak a review found in the old scrubber is a case here, asserting
+ * that no server directory name appears in what the editor gets and that the
+ * original reached the log (the positive control: the path really was in
+ * the input). Every over-redaction is a case asserting the text survives.
  *
  *   bun tests/redact-server-paths.test.js     (<1 s)
  */
@@ -22,18 +20,13 @@ import path from 'path';
 
 const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-redact-')));
 const projectRoot = path.join(scratch, 'my site');
-const adminDir = path.join(scratch, 'admin-cwd');
 const siblingSite = path.join(scratch, 'site-b');
-const registeredDir = path.join(scratch, 'registered-elsewhere');
-for (const directory of [projectRoot, adminDir, siblingSite, registeredDir]) fs.mkdirSync(directory);
+const quotedDir = path.join(scratch, `client's "site"`, 'private');
+for (const directory of [projectRoot, siblingSite, quotedDir]) fs.mkdirSync(directory, { recursive: true });
 const linkedRoot = path.join(scratch, 'linked-site');
 fs.symlinkSync(projectRoot, linkedRoot, 'dir');
 
-process.env.ASTROADMIN_PROJECT_ROOT = linkedRoot;
-const originalCwd = process.cwd();
-process.chdir(adminDir);
-
-const { redactServerPaths, clientErrorMessage, cleanCheckOutput, addServerPaths } = await import('../server/utils/redact-server-paths.js');
+const { cleanCheckOutput, HIDDEN_OUTPUT_MESSAGE } = await import('../server/utils/redact-server-paths.js');
 
 let passed = 0;
 function check(name, fn) {
@@ -42,130 +35,176 @@ function check(name, fn) {
     passed++;
     console.log(`✅ ${name}`);
   } catch (error) {
-    console.error(`❌ ${name}\n   ${error.message}`);
+    console.log(`❌ ${name}\n   ${error.message}`);
     process.exitCode = 1;
   }
 }
 
-const SIGNS = [scratch, 'aa-redact-', 'my site', 'admin-cwd', 'site-b', 'linked-site', 'registered-elsewhere', '/srv', 'git store'];
+/** Run cleanCheckOutput and capture what it logged. */
+function clean(text, roots) {
+  const logged = [];
+  const realError = console.error;
+  console.error = (...args) => logged.push(args.join(' '));
+  try {
+    return { output: cleanCheckOutput(text, roots), log: logged.join('\n') };
+  } finally {
+    console.error = realError;
+  }
+}
+
+const SIGNS = [scratch, 'aa-redact-', 'my site', 'site-b', 'linked-site', 'client', '/srv', 'git store', 'git-store', 'repo.git', 'backup', 'other place', '/private/', '/var/'];
 function assertNoServerPath(text) {
   for (const sign of SIGNS) assert.equal(text.includes(sign), false, `names a server path (${sign}): ${text}`);
 }
 
+/** A leak: the editor gets the fixed message, and the server log has the original. */
+function assertHidden(input, roots, label) {
+  const { output, log } = clean(input, roots);
+  assert.equal(output, HIDDEN_OUTPUT_MESSAGE, `${label}: expected the fixed message, got: ${output}`);
+  assertNoServerPath(output);
+  assert.ok(log.includes(input), `${label}: positive control: the original is in the server log (${log})`);
+}
+
+/** Kept: the editor gets exactly `expected`, and nothing was logged. */
+function assertKept(input, roots, expected = input) {
+  const { output, log } = clean(input, roots);
+  assert.equal(output, expected);
+  assert.equal(log, '', `nothing logged for kept output: ${log}`);
+}
+
 try {
-  console.log('\n🧪 redactServerPaths\n' + '='.repeat(40));
+  console.log('\n🧪 cleanCheckOutput\n' + '='.repeat(40));
 
-  check('no argument: the project root (and its resolved path) is stripped by default', () => {
-    const text = clientErrorMessage(new Error(`ENOENT: no such file, open '${linkedRoot}/src/a.md' and ${projectRoot}/src/b.md`));
-    assert.equal(text, "ENOENT: no such file, open 'src/a.md' and src/b.md");
+  // ---- Known roots are removed where a path starts ----
+
+  check('the project root is removed, the site-relative tail kept (a root with a space)', () => {
+    assertKept(`unlink '${projectRoot}/public/images/my photo.png' and ${projectRoot}/src/a.md:3:1`, [projectRoot],
+      "unlink 'public/images/my photo.png' and src/a.md:3:1");
   });
 
-  check('no argument: the working directory is stripped by default', () => {
-    const text = redactServerPaths(`cannot read ${adminDir}/logs/x.log`);
-    assert.equal(text, 'cannot read logs/x.log');
+  check('a symlinked root: the resolved path is removed too', () => {
+    assertKept(`[InvalidContentEntryDataError] pages → home: ${projectRoot}/src/content/pages/home.md`, [linkedRoot],
+      '[InvalidContentEntryDataError] pages → home: src/content/pages/home.md');
   });
 
-  check('addServerPaths: a registered directory is stripped by every later call', () => {
-    assert.equal(redactServerPaths(`at ${registeredDir}/src/c.md`), 'at c.md', 'control: before registering, the generic rule applies');
-    addServerPaths(registeredDir);
-    assert.equal(redactServerPaths(`at ${registeredDir}/src/c.md`), 'at src/c.md');
+  check('the bare root becomes "." where its path ends', () => {
+    assertKept(`${projectRoot}: not writable`, [projectRoot], '.: not writable');
   });
 
-  check('a quoted absolute path with spaces is one path (single and double quotes)', () => {
-    const text = redactServerPaths(`fatal: could not create '/srv/git store/repo.git/worktrees/check': denied; read "/srv/a b/c d/x y.lock" failed`);
-    assert.equal(text, `fatal: could not create 'check': denied; read "x y.lock" failed`);
+  check('a file:// URL under a root is removed (encoded or not)', () => {
+    const encoded = `file://${projectRoot.split('/').map(encodeURIComponent).join('/')}/src/a.md`;
+    assertKept(`see ${encoded} and file://${projectRoot}/src/b.md`, [projectRoot], 'see src/a.md and src/b.md');
   });
 
-  check('a quoted path under the project root (whose name has a space) keeps its site-relative tail', () => {
-    const text = redactServerPaths(`unlink '${projectRoot}/public/images/my photo.png'`);
-    assert.equal(text, "unlink 'public/images/my photo.png'");
+  check('ANSI colour codes and stack frames are stripped', () => {
+    assertKept(`\u001b[31merror\u001b[39m bad\n    at x (${projectRoot}/y.js:1:1)\nStack trace:\n  at z`, [projectRoot], 'error bad');
   });
 
-  check('quoted text that is not a path is untouched (Astro and zod messages)', () => {
-    const message = `"title" is required; Expected type "string", received "number"; can't find 'hero'`;
-    assert.equal(redactServerPaths(message), message);
+  // ---- Over-redaction cases from the review rounds: the text survives ----
+
+  check('a zod enum listing quoted page paths survives whole (review 5)', () => {
+    const message = `[InvalidContentEntryDataError] pages → home data does not match collection schema.\n  link: Invalid enum value. Expected '/about' | '/blog/[slug]', received '/contact'`;
+    assertKept(message, [projectRoot]);
+    assertKept(`Invalid option: expected one of "/about"|"/blog/[slug]"`, [projectRoot]);
   });
 
-  check('a quoted single-segment value such as a page path is kept, as unquoted', () => {
-    assert.equal(redactServerPaths(`no page at "/about" or /contact`), `no page at "/about" or /contact`);
+  check('URLs survive, including a path in the query (review 5)', () => {
+    assertKept('see https://example.com/preview?path=/blog/a.md and http://example.com:4321/blog/x', [projectRoot]);
+    assertKept("fatal: unable to access 'https://git.example.com/site-a/site.git/': Could not resolve host", [projectRoot]);
   });
 
-  check('a climb into the project root is made relative to it', () => {
-    const text = redactServerPaths('../my site/src/content.config.ts:10:22: ERROR: Unexpected ";"');
-    assert.equal(text, 'src/content.config.ts:10:22: ERROR: Unexpected ";"');
+  check("a content-relative value survives (`../assets/x.png`)", () => {
+    assertKept('Could not find image ../assets/images/hero.png referenced in src/content/pages/home.md', [projectRoot]);
   });
 
-  check('a climb into a sibling checkout is reduced to its last segment', () => {
-    const text = redactServerPaths('../site-b/src/content.config.ts:3:1: ERROR: Expected "}"');
-    assert.equal(text, 'content.config.ts:3:1: ERROR: Expected "}"');
+  check('quoted text that is not a path is untouched', () => {
+    assertKept(`"title" is required; Expected type "string", received "number"; can't find 'hero'`, [projectRoot]);
   });
 
-  check('a quoted climb with spaces is one path', () => {
-    assert.equal(redactServerPaths(`open '../my site/src/a b.md'`), "open 'src/a b.md'");
-    assertNoServerPath(redactServerPaths(`open '../site-b/x y/z.md'`));
-    assert.equal(redactServerPaths(`open '../site-b/x y/z.md'`), "open 'z.md'");
+  // ---- Leak cases from the review rounds: no server directory is named ----
+
+  check('an external git directory (review 2)', () => {
+    assertHidden("fatal: could not create '/srv/git-store/repo.git/worktrees/check': Permission denied", [projectRoot], 'external git dir');
   });
 
-  check('a climb to the filesystem root is reduced to its last segment', () => {
-    const depth = adminDir.split('/').filter(Boolean).length;
-    const climb = `${'../'.repeat(depth)}srv/elsewhere/x.ts`;
-    assert.equal(redactServerPaths(`${climb}:1:1: ERROR`), 'x.ts:1:1: ERROR');
+  check('a quoted external path with spaces, single and double quotes (review 3)', () => {
+    assertHidden("fatal: could not create '/srv/git store/repo.git/worktrees/check'", [projectRoot], 'spaces');
+    assertHidden('error: unable to read "/srv/other place/site b/x.lock"', [projectRoot], 'double quotes');
   });
 
-  check('a content-relative value that names nothing on the server is kept', () => {
-    const message = 'Could not find image ../assets/images/hero.png in ../../shared/logo.svg';
-    assert.equal(redactServerPaths(message), message);
+  check('a sibling directory named like the root plus a space or a plus sign (review 4)', () => {
+    assertHidden("open '/srv/site backup/private/a.md' failed", ['/srv/site'], 'space after root');
+    assertHidden('open /srv/site+backup/private/a.md failed', ['/srv/site'], 'plus after root');
+    assertHidden(`open '${projectRoot} backup/private/a.md' failed`, [projectRoot], 'space after a real root');
   });
 
-  check('URLs are kept', () => {
-    const message = "fatal: unable to access 'https://git.example.com/site-a/site.git/': Could not resolve host";
-    assert.equal(redactServerPaths(message), message);
+  check("a double-quoted path with an apostrophe (review 4)", () => {
+    assertHidden('open "/srv/client\'s site/private/a.md" failed', ['/srv/site'], 'apostrophe');
   });
 
-  check('the home directory is never a prefix: a path under it is reduced to its last segment', () => {
-    const home = os.homedir();
-    const text = redactServerPaths(`read ${home}/Code/private-client/x.md`, [home]);
-    assert.equal(text, 'read x.md');
+  check('a URL holding a root path (review 4): hidden rather than corrupted', () => {
+    assertHidden('see http://example.com:4321/srv/site/x.md', ['/srv/site'], 'root in a URL path');
   });
 
-  check('cleanCheckOutput strips the default directories too', () => {
-    assert.equal(cleanCheckOutput(`built ${projectRoot}/dist/index.html`), 'built dist/index.html');
+  check('file:// with %20 that decodes to a sibling of the root (review 5)', () => {
+    assertHidden('file:///srv/site%20backup/private/a.md: not found', ['/srv/site'], 'file URL %20');
+    // Under no known root and no common top-level name: only the URL scheme
+    // says it is a server file.
+    assertHidden('see file:///webroots/client%20site/a.md', ['/srv/site'], 'file URL elsewhere');
   });
 
-  check('a quoted path is redacted whole: a sibling with a space after the server dir name reveals nothing', () => {
-    const out = redactServerPaths("open '/srv/site backup/private/a.md' failed", ['/srv/site']);
-    assert.ok(!out.includes('backup') && !out.includes('private'), out);
-    assert.ok(out.includes("'a.md'"), `positive control: the file name stays: ${out}`);
+  check('a backtick-delimited external path (review 5)', () => {
+    assertHidden('cannot open `/srv/other/x.md`', ['/srv/site'], 'backticks');
   });
 
-  check('a double-quoted path with an apostrophe in it is redacted whole', () => {
-    const out = redactServerPaths('open "/srv/client\'s site/private/a.md" failed', ['/srv/site']);
-    assert.ok(!out.includes('site/private') && !out.includes("client's"), out);
-    assert.ok(out.includes('"a.md"'), `positive control: the file name stays: ${out}`);
+  check(`a real ENOENT for a path with both quote characters in it (review 5)`, () => {
+    let message = '';
+    try {
+      fs.readFileSync(path.join(quotedDir, 'a.md'));
+    } catch (error) {
+      message = error.message;
+    }
+    assert.ok(message.includes(`client's "site"`), `control: the real error names the directory: ${message}`);
+    assertHidden(message, [projectRoot], 'both quotes');
   });
 
-  check('a URL that contains a server dir path is left alone', () => {
-    const text = 'see http://example.com:4321/srv/site/x.md and https://example.com/srv/site';
-    assert.equal(redactServerPaths(text, ['/srv/site']), text);
+  check('a URL with a root in its query (review 5)', () => {
+    assertHidden('see https://example.com/preview?path=/srv/site/a.md', ['/srv/site'], 'query');
+    assertHidden(`see https://example.com/preview?path=${projectRoot}/a.md`, [projectRoot], 'query, real root');
   });
 
-  check('controls: a server dir is still stripped quoted, unquoted and bare', () => {
-    assert.equal(redactServerPaths("x '/srv/site/y.md' z", ['/srv/site']), "x 'y.md' z");
-    assert.equal(redactServerPaths('x /srv/site/y.md z', ['/srv/site']), 'x y.md z');
-    assert.equal(redactServerPaths('/srv/site is not writable', ['/srv/site']), '. is not writable');
+  check('a ../ climb into a sibling checkout, or into the root itself, from beside it (review 3)', () => {
+    // esbuild names the file relative to the admin's working directory, which
+    // sits beside the sites on a server that checks them out side by side.
+    const originalCwd = process.cwd();
+    const adminDir = path.join(scratch, 'admin-cwd');
+    fs.mkdirSync(adminDir);
+    process.chdir(adminDir);
+    try {
+      assertHidden('../site-b/src/content.config.ts:3:1: ERROR: Expected "}"', [projectRoot], 'sibling climb');
+      assertHidden("open '../my site/src/a b.md'", [projectRoot], 'climb into the root');
+      assertKept('Could not find image ../assets/images/hero.png', [projectRoot]);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 
-  check('a server dir is stripped only at a path boundary, not inside a longer sibling name', () => {
-    const out = redactServerPaths('see /srv/site-b/x.md and /srv/site/y.md and /srv/site', ['/srv/site']);
-    assert.ok(!out.includes('.-b'), `a sibling name was mangled: ${out}`);
-    assert.ok(out.includes('y.md'), `positive control: the file under the server dir stays named: ${out}`);
-    assert.ok(!out.includes('/srv/site/'), `positive control: the server dir is stripped: ${out}`);
+  check('a ../ climb to the filesystem root', () => {
+    const depth = process.cwd().split('/').filter(Boolean).length;
+    assertHidden(`${'../'.repeat(depth)}srv/elsewhere/x.ts:1:1: ERROR`, [projectRoot], 'climb to /');
+  });
+
+  check('a path under the home directory written with ~', () => {
+    assertHidden('cannot read ~/Code/private-client/x.md', [projectRoot], 'tilde');
+  });
+
+  check('an unknown absolute path under this machine\'s own top-level directories', () => {
+    assertHidden(`ENOENT: no such file or directory, open '${scratch}/elsewhere/a.md'`, [], 'no roots');
   });
 
   console.log('='.repeat(40));
   console.log(`\n📊 ${passed} checks passed.\n`);
 } finally {
-  process.chdir(originalCwd);
   fs.rmSync(scratch, { recursive: true, force: true });
 }
 process.exit(process.exitCode || 0);

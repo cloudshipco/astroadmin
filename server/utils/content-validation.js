@@ -161,7 +161,9 @@ export async function validateStoredEntry(collection, slug, locale = null) {
   try {
     schemas = await loadSchemas();
   } catch (error) {
-    return { status: 'unchecked', issues: [], reason: `Could not load content schemas: ${error.message}` };
+    // The bundler's message names the config file by its server path.
+    console.error('Could not load content schemas:', error);
+    return { status: 'unchecked', issues: [], reason: 'The content schemas could not be loaded, so this entry was not checked; see the server log.' };
   }
 
   const entry = await readContent(collection, slug, locale);

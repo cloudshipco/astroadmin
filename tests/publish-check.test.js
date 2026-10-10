@@ -226,6 +226,11 @@ await check('a missing image() file is refused (the build checks what sync does 
   const res = await publish();
   assert.equal(res.statusCode, 422, JSON.stringify(res.body));
   assert.equal(remoteHead(), remoteBefore);
+  // Astro's message reaches the editor: its `Location:` names a file in the
+  // linked node_modules by its resolved path, a known directory, so the
+  // output is cleaned rather than replaced by the fixed message.
+  assert.match(res.body.check.output, /ImageNotFound/, res.body.check.output);
+  assert.match(res.body.check.output, /\.\/missing\.png/, res.body.check.output);
   fs.rmSync(path.join(projectRoot, 'src/content/covers/second.md'));
   const fixed = await publish();
   assert.equal(fixed.statusCode, 200, JSON.stringify(fixed.body));

@@ -202,23 +202,27 @@ try {
     assert.ok(hookMs < 10 + 500, `the hook took ${hookMs} ms against a 10 ms cap`);
   });
 
-  await check('an error in the scan is "unavailable" with a short reason that names no server path, never a failed check', async () => {
+  await check('an error in the scan is "unavailable" with a fixed reason, the error in the server log, never a failed check', async () => {
     resetLatestDoctorResult();
     // The real scan, against a build directory whose site has no content config.
     const bareSite = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-doctor-bare-'));
+    const logged = [];
+    const realWarn = console.warn;
+    console.warn = (...args) => logged.push(args.map(String).join(' '));
     try {
       writeFile(bareSite, 'astro.config.mjs', 'export default {};\n');
       writeFile(bareSite, 'dist/index.html', '<h1>Home</h1>');
       await recordDoctorAfterCheck(fullConfig, { siteDir: bareSite, commit: 'abc', command: 'astro build' });
       const { status, reason } = getLatestDoctorResult();
       assert.equal(status, 'unavailable');
-      assert.ok(reason.length <= 300, `reason is ${reason.length} characters`);
-      for (const serverPath of [bareSite, fs.realpathSync(bareSite), os.tmpdir(), fs.realpathSync(os.tmpdir()), tempRoot, repoRoot]) {
-        assert.ok(!reason.includes(serverPath), `the reason names ${serverPath}: ${reason}`);
-      }
-      assert.doesNotMatch(reason, /\/(?:private|var|tmp|Users|home|srv)\//, reason);
-      assert.match(reason, /content config/i, reason);
+      // Positive control: the scan really failed, for this reason, and the
+      // log has its error, path and all.
+      const log = logged.join('\n');
+      assert.match(log, /content config/i, log);
+      assert.ok(log.includes(bareSite) || log.includes(fs.realpathSync(bareSite)), `the log names the site: ${log}`);
+      assert.equal(reason, 'The scan could not run; see the server log.');
     } finally {
+      console.warn = realWarn;
       fs.rmSync(bareSite, { recursive: true, force: true });
     }
   });

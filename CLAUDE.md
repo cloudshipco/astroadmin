@@ -90,6 +90,18 @@ Three invariants that are easy to break and fail silently:
 When changing overlay/stacking behaviour, verify with `document.elementFromPoint()` — asserting
 the element exists proves nothing, since the bug is precisely that a present element is covered.
 
+### Error text an editor sees: an allowlist, not a scrubber
+
+An API error response NEVER carries `error.message` (or stderr, or a command line): each route
+sends a fixed, route-specific message ("This entry could not be saved; see the server log.")
+and logs the error with `console.error`. The exceptions are refusals that are the editor's to
+fix and whose text we wrote without server data (`ContentPathError`, `GitRequestError`, an
+image `status = 400` refusal, multer's own messages, the missing-git-identity advice). The only
+free text shown is BUILD output (the publish check's 422, a production build, the doctor), and
+it goes through `cleanCheckOutput` (`server/utils/redact-server-paths.js`): known roots removed,
+else the whole output replaced. Do not add rules that rewrite paths in free text: five review
+rounds found a new leak or over-redaction in each version of that.
+
 ## Testing
 
 Tests are standalone scripts under `tests/`, run individually (there is no test
@@ -168,29 +180,36 @@ runner aggregating them). Most run server-less and need env vars:
   `withCacheBuster` (`ui/cache-bust.js`), never `'?t='` by hand: a URL that already has a query
   (the component preview's `?field=`) must keep it, or the block renders empty.
 - `bun tests/publish-failure.test.js` — a publish that fails outright (500) tells the editor why:
-  a real "Author identity unknown" from git becomes the fix (set user.name/user.email), other
-  errors keep git's text with server paths stripped, and the toast shows that message.
+  a real "Author identity unknown" from git becomes the fix (set user.name/user.email), any
+  other error is the fixed "Publishing failed; see the server log.", and the toast shows that
+  message. A real failing `build.production` comes back with the project root removed from
+  its output and `error` a fixed text (never `Command failed: <command line>`).
 - `bun tests/publish-refusal-paths.test.js` — the 422 refusal names no server path, including
-  one the check did not know to strip: a real `git worktree add` failure in a site whose git
-  directory lives elsewhere (`--separate-git-dir`). `checkRefusalBody` redacts too, and a
-  quoted path with spaces (`'/srv/git store/repo.git/...'`) is reduced whole, there and in
-  `publishFailureMessage`.
-- `bun tests/error-paths.test.js` — API errors name no server path, over HTTP: an image()
-  preview whose file vanishes after its stat() (sendFile's callback, not the error
-  middleware), an unreadable `/images` file, upload/delete/metadata writes on a read-only
-  folder, and a content config that does not bundle (esbuild's `../../..`-relative path comes
-  back relative to the project). The admin runs BESIDE the site (cwd `admin-cwd/`, site
-  `site-a/`), so esbuild names `../site-a/src/content.config.ts`; the content routes, which
-  passed no directory, must answer `src/content.config.ts`. Every route's error text goes
-  through `clientErrorMessage` (`server/utils/redact-server-paths.js`, the one redactor the
-  doctor and publish check share).
-- `bun tests/redact-server-paths.test.js` — that redactor's rules. The server's directories
-  (project root, its realpath, the cwd, anything `createServer` registered with
-  `addServerPaths`) are stripped with NO argument, so a caller cannot forget them; the home
-  directory and above are never a prefix (they would leave `Code/x/y` named). A quoted path
-  is one path, spaces and all. A `../` climb: into a server directory -> relative to it; to
-  the root, or into a directory that exists beside the one it climbed to (a sibling
-  checkout) -> last segment; otherwise kept as the site's own value (`../assets/x.png`).
+  one the check does not know: a real `git worktree add` failure in a site whose git directory
+  lives elsewhere (`--separate-git-dir`) gets the fixed message, with git's text (and the
+  external directory) in the server log. `checkRefusalBody` applies the same fallback as a
+  last stop, and keeps Astro's real message (`'/about' | '/blog/[slug]'`, URLs) whole.
+- `bun tests/error-paths.test.js` — API errors send a fixed, route-specific message, over
+  HTTP: an image() preview whose file vanishes after its stat() (sendFile's callback, not the
+  error middleware), an unreadable `/images` file (the app error middleware), upload, delete,
+  metadata and content writes on a read-only folder, and a content config that does not
+  bundle (reload-schemas, content GET/PUT). Each check asserts the exact body, that no server
+  directory name is in it, and (positive control) that the server log has the original error,
+  path and all. The admin runs BESIDE the site (cwd `admin-cwd/`, site `site-a/`), so esbuild
+  names `../site-a/src/content.config.ts`, which only the log may carry. Refusals that are the
+  editor's to fix (a file type, an undeclared collection, a missing entry) keep their own
+  path-free text.
+- `bun tests/redact-server-paths.test.js` — `cleanCheckOutput`, the one function for BUILD
+  output an editor reads (the publish check's 422, a production build, the doctor's build and
+  checks). It removes only the directories the caller names (and their realpaths) where a path
+  starts, and rewrites nothing else; if a server path is left (an absolute path whose first
+  segment is a top-level directory of a server, a `file://` URL, a `~/` path, a known
+  directory anywhere, a `../` climb to the root or into something that exists beside the
+  directory it climbed to), the whole output becomes a fixed message and the original is
+  logged. Every leak from the old scrubber's review rounds is a case (spaces, apostrophes,
+  both quotes, backticks, `file://` with `%20`, sibling climbs, external git dirs, symlinked
+  roots, roots in URL queries), and every over-redaction one (`'/blog/[slug]'`, URLs,
+  `../assets/x.png`) asserts the text survives.
 - `bun tests/preview-live-link.test.js` — the preview's pageNavigation message -> live link and
   entry, with and without a base path (the iframe reports its pathname WITH the preview base,
   which must be stripped before the live link adds publicUrl's).
@@ -354,8 +373,8 @@ queue, so the old body is never written back.
 `doctor-cli` (exit codes, `--json`, `--build`, the site's installed astro and never a fetched
 one; ~10 s), `doctor-publish` (the editor scans the publish check's own build in a child
 process rooted at the check's worktree, so it reads the commit's entries; a scan stuck in a
-synchronous loop is killed at its cap; an error is "unavailable" with a reason naming no
-server path, never a failed publish; ~15 s) and
+synchronous loop is killed at its cap; an error is "unavailable" with a fixed reason and the
+error in the server log, never a failed publish; ~15 s) and
 `doctor-notice` (the editor notice, happy-dom). Run each with `bun tests/doctor-<name>.test.js`.
 
 **The doctor and the publish check use synchronous fs, never `fs/promises`.** Under Bun 1.3.4
@@ -391,7 +410,9 @@ Two layers, deliberately unequal:
    the commit checked is the commit pushed. The push names that SHA and the branch's
    upstream explicitly (`pushCheckedCommit`), so a configured push refspec or
    `push.default=matching` cannot send unchecked refs. A failure keeps the commit local
-   and returns 422 with Astro's output, server paths and stack trace stripped. A push
+   and returns 422 with Astro's output, the check's worktree and the project root removed
+   and stack trace stripped (or, if it names any other server path, a fixed message and the
+   output in the server log: `cleanCheckOutput`). A push
    that fails (with an upstream configured) returns 502 and the editor is told it is NOT
    live; only `pushed` or a deploy counts as published in the UI.
    It is a full build, not `astro sync`: sync passes a missing `image()` file, and for

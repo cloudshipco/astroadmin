@@ -34,7 +34,7 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 import { ASTRO_NOT_INSTALLED_MESSAGE, DEFAULT_BUILD_ARGS, defaultAstroCommand } from './astro-bin.js';
-import { cleanCheckOutput, redactServerPaths } from './redact-server-paths.js';
+import { cleanCheckOutput } from './redact-server-paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -53,7 +53,7 @@ const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 // The admin's own secrets and settings, which the site's build has no use for.
 const ADMIN_ENV_PATTERN = /^(ASTROADMIN_|ADMIN_|SESSION_SECRET$)/;
 
-// cleanCheckOutput lives with the shared redactor; re-exported for its callers.
+// cleanCheckOutput lives in redact-server-paths.js; re-exported for its callers.
 export { cleanCheckOutput };
 
 /**
@@ -271,13 +271,14 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
   let tempDir = null;
   const serverPaths = [projectRoot, await realpathOrNull(projectRoot)];
 
-  // A refusal reaches the editor (publish.js checkRefusalBody): the known
-  // directories made relative, and any other absolute path (an external
-  // repository directory, a store under /srv) reduced to its last segment.
+  // A refusal reaches the editor (publish.js checkRefusalBody): Astro's
+  // output with the known directories removed or, if it names any other
+  // server path (an external git directory, say), a fixed message, with the
+  // output in the server log. Entries are Astro IDs, read from the original.
   const fail = (output) => {
-    const cleaned = redactServerPaths(output, serverPaths).trim();
     console.error(`❌ Content check failed for ${commit.slice(0, 7) || 'HEAD'}`);
-    return { success: false, commit, output: cleaned.slice(-4000), entries: parseInvalidEntries(cleaned) };
+    const cleaned = cleanCheckOutput(output, serverPaths, { label: 'The publish check' });
+    return { success: false, commit, output: cleaned.slice(-4000), entries: parseInvalidEntries(String(output)) };
   };
 
   try {
@@ -303,6 +304,9 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     const siteDir = path.join(worktreeDir, siteSubdir);
     for (const { relativeDir, liveNodeModules } of nodeModulesLevels(realRepoTop, siteSubdir)) {
       if (!(await exists(liveNodeModules))) continue;
+      // Linked in, so known: Vite names files in it by their resolved path
+      // (an Astro error's `Location:` inside astro's own code).
+      serverPaths.push(await realpathOrNull(liveNodeModules));
       const workspaceLink = await findWorkspaceLink(liveNodeModules, realRepoTop);
       if (workspaceLink) {
         return fail(`This site depends on a workspace package (${workspaceLink}) inside its own repository, which the publish check does not support, so nothing was pushed.`);
@@ -335,7 +339,7 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
         console.error('After-check hook failed (ignored):', error.message);
       }
     }
-    return { success: true, commit, output: cleanCheckOutput(result.output, serverPaths).slice(-4000), entries: [] };
+    return { success: true, commit, output: cleanCheckOutput(result.output, serverPaths, { label: 'The publish check', hiddenMessage: 'The publish check passed; its output is in the server log.' }).slice(-4000), entries: [] };
   } catch (error) {
     return fail(`${error.stdout || ''}${error.stderr || ''}` || error.message);
   } finally {
