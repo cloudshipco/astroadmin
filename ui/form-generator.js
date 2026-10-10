@@ -1857,6 +1857,10 @@ function toNumber(value) {
  * @param {string} [path] - The path of `obj` itself ('' at the top).
  */
 export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = null, path = '') {
+  // A nullable node ({anyOf: [<node>, {type: 'null'}]} or type: [x, 'null'])
+  // has no `properties`/`items` of its own: read through it, or nothing inside
+  // a nullable object or array could be proven optional. No schema stays none.
+  if (schemaNode) schemaNode = unwrapNullable(schemaNode);
   if (Array.isArray(obj)) {
     const itemSchema = schemaNode && schemaNode.items;
     // Prefer the schema to decide block-ness: a discriminated-union block array

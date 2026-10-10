@@ -158,6 +158,8 @@ runner aggregating them). Most run server-less and need env vars:
   header's "View live site" link and the server's live-status check: base paths, query/hash,
   and escape attempts (`//host`, `/\host`, `javascript:`, and paths that only normalise to
   `//host`, such as `/.//host`) falling back to the site root.
+- `bun tests/clean-nullable.test.js` — `cleanEmptyValues` reads through a nullable wrapper
+  (both converters' shapes), so an emptied optional array inside a nullable object is dropped.
 - `bun tests/preview-cache-bust.test.js` — preview reloads and polls add `t=<timestamp>` through
   `withCacheBuster` (`ui/cache-bust.js`), never `'?t='` by hand: a URL that already has a query
   (the component preview's `?field=`) must keep it, or the block renders empty.
