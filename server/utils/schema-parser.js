@@ -638,8 +638,11 @@ function detectBlockCollectionReferences(discriminatedUnions, declaredCollection
         const nonNull = (rawFieldSchema?.anyOf || []).filter((member) => member?.type !== 'null');
         const fieldSchema = nonNull.length === 1 ? nonNull[0] : rawFieldSchema;
         let collectionName = fieldSchema?.referenceCollection || null;
-        // A single reference('c') is a string carrying the mark; a list is an array.
-        const isReference = Boolean(collectionName) && fieldSchema?.type === 'string';
+        // A single reference('c') is a string carrying the mark; a list of
+        // reference()s is an array whose ITEMS carry it (a `<name>Ids` list of
+        // plain strings is marked on the array only).
+        const isReference = Boolean(collectionName)
+          && (fieldSchema?.type === 'string' || Boolean(fieldSchema?.items?.referenceCollection));
         if (!collectionName && fieldSchema?.type === 'string' && fieldName.endsWith('Id')) {
           collectionName = resolveCollectionName(fieldName.slice(0, -2), declaredCollections);
         }
@@ -649,7 +652,7 @@ function detectBlockCollectionReferences(discriminatedUnions, declaredCollection
         // array (integration/preview-route.astro `single`, `collection`).
         const cardinality = fieldSchema?.type === 'string'
           ? { single: true, ...(isReference ? { reference: true } : {}) }
-          : {};
+          : (isReference ? { reference: true } : {});
         collectionRefs[collectionName].push({ blockType, field: fieldName, ...cardinality });
       }
     }

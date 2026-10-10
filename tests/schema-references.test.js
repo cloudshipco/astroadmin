@@ -77,7 +77,7 @@ const authors = defineCollection({ loader: file('src/data/authors.json'), schema
 
 const quoteBlock = z.object({ type: z.literal('quotes'), teamIds: z.array(z.string()).optional() });
 const plainBlock = z.object({ type: z.literal('plain'), heading: z.string() });
-const bylineBlock = z.object({ type: z.literal('byline'), author: reference('team'), teamId: z.string().optional() });
+const bylineBlock = z.object({ type: z.literal('byline'), author: reference('team'), teamId: z.string().optional(), crew: z.array(reference('team')).optional() });
 
 const posts = defineCollection({
   loader: glob({ pattern: '**/*.md', base: './src/content/posts' }),
@@ -163,6 +163,7 @@ export const collections = { team, categories, boxes, authors, posts };
       assert.deepEqual(refs.find((ref) => ref.field === 'author'), { blockType: 'byline', field: 'author', single: true, reference: true });
       assert.deepEqual(refs.find((ref) => ref.field === 'teamId'), { blockType: 'byline', field: 'teamId', single: true });
       assert.deepEqual(refs.find((ref) => ref.field === 'teamIds'), { blockType: 'quotes', field: 'teamIds' }, 'control: a list stays a list');
+      assert.deepEqual(refs.find((ref) => ref.field === 'crew'), { blockType: 'byline', field: 'crew', reference: true }, 'a list of reference()s is a reference list');
     });
 
     check('the collection -> block map the dashboard reads keeps single and reference', () => {
@@ -173,6 +174,7 @@ export const collections = { team, categories, boxes, authors, posts };
       assert.deepEqual(used.find((ref) => ref.field === 'author'), { type: 'byline', field: 'author', single: true, reference: true });
       assert.deepEqual(used.find((ref) => ref.field === 'teamId'), { type: 'byline', field: 'teamId', single: true });
       assert.deepEqual(used.find((ref) => ref.field === 'teamIds'), { type: 'quotes', field: 'teamIds' }, 'control: a list has no flags');
+      assert.deepEqual(used.find((ref) => ref.field === 'crew'), { type: 'byline', field: 'crew', reference: true });
     });
 
     check('the preview path tells the route a single field from a list', () => {

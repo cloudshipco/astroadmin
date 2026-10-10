@@ -76,6 +76,15 @@ const member = block.author && !Array.isArray(block.author) ? await getEntry(blo
 ---
 <p class="author">{member ? member.data.name : 'no author: ' + JSON.stringify(block.author)}</p>
 `);
+// A list of reference()s: the build hands each item as {collection, id}, so the
+// component passes each straight to getEntry (a bare id would fail there).
+writeFile('src/components/blocks/CrewBlock.astro', `---
+import { getEntry } from 'astro:content';
+const { block } = Astro.props;
+const members = await Promise.all((block.members || []).map((ref) => (typeof ref === 'object' ? getEntry(ref) : null)));
+---
+<ul class="crew">{members.map((member, index) => <li class="crew-member">{member ? member.data.name : 'bare id: ' + JSON.stringify(block.members[index])}</li>)}</ul>
+`);
 // A single plain id field (\`<base>Id\`): the component looks it up by id.
 writeFile('src/components/blocks/LeadBlock.astro', `---
 import { getEntry } from 'astro:content';
@@ -145,6 +154,14 @@ try {
     const preview = await get(pathname);
     assert.equal(preview.status, 200, preview.text.slice(0, 400));
     assert.match(preview.text, /<p class="author"[^>]*>Ada from the team<\/p>/, preview.text.slice(0, 600));
+  });
+
+  await check('a list of reference()s is given {collection, id} items, as the build gives them', async () => {
+    const pathname = componentPreviewPath({ type: 'crew', field: 'members', reference: true }, 'team', 'ada');
+    assert.equal(pathname, '/component-preview/crew/ada?field=members&collection=team');
+    const preview = await get(pathname);
+    assert.equal(preview.status, 200, preview.text.slice(0, 400));
+    assert.match(preview.text, /<li class="crew-member"[^>]*>Ada from the team<\/li>/, preview.text.slice(0, 600));
   });
 
   await check('a single plain id field is given one id, not a list', async () => {

@@ -70,7 +70,10 @@ function buildSyntheticBlock(blockType: string, ids: string[], field: string | n
   // testimonials -> testimonialIds, team -> teamIds
   const singular = blockType.endsWith('s') ? blockType.slice(0, -1) : blockType;
   const fieldName = field && /^[A-Za-z_$][\w$]*$/.test(field) ? field : `${singular}Ids`;
-  if (!single) return { type: blockType, [fieldName]: ids };
+  if (!single) {
+    // A list of reference()s: each item is {collection, id}, as the build gives it.
+    return { type: blockType, [fieldName]: collection ? ids.map((id) => ({ collection, id })) : ids };
+  }
   const id = ids[0];
   if (id === undefined) return { type: blockType };
   return {

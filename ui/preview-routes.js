@@ -130,10 +130,9 @@ export function resolvePreviewTarget(norm, pages = [], collections = [], collect
 export function componentPreviewPath(block, collection, slug) {
   const query = new URLSearchParams();
   if (block.field) query.set('field', block.field);
-  if (block.single) {
-    query.set('single', '1');
-    if (block.reference) query.set('collection', collection);
-  }
+  if (block.single) query.set('single', '1');
+  // A reference() (single or a list): the build gives {collection, id}.
+  if (block.reference) query.set('collection', collection);
   const search = query.toString();
   return `/component-preview/${block.type}/${slug}${search ? `?${search}` : ''}`;
 }
