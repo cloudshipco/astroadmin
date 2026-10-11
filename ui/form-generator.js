@@ -1413,14 +1413,25 @@ function extractValues(container, schema) {
   container.querySelectorAll('input[data-array-data]').forEach((input) => {
     for (const itemPath of finalItemPaths(getNestedValue(data, input.name), input.name)) kept.add(itemPath);
   });
-  // A gallery's images come from its lossless JSON value, never from form
-  // controls, so they are final too: a structural edit (data-structural-edit)
-  // makes the gallery read from the DOM, and cleanup must not then strip a
-  // surviving image's empty optional fields. The emptied gallery itself can
-  // still be dropped.
+  // A gallery's STORED images survive a structural edit whole: once the gallery
+  // is read from the DOM (data-structural-edit), cleanup must not strip a
+  // surviving image's empty optional fields. An image the editor added is
+  // cleaned like any new value (an empty alt is left out, not saved as ''),
+  // and the emptied gallery itself can still be dropped.
+  const binding = boundContainers.get(container);
   container.querySelectorAll('.gallery-field[data-field]').forEach((gallery) => {
+    const bound = binding?.controls.get(gallery);
+    if (!bound) return;
     const listPath = gallery.dataset.field;
-    for (const itemPath of finalItemPaths(getNestedValue(data, listPath), listPath)) kept.add(itemPath);
+    const items = getNestedValue(data, listPath);
+    if (!Array.isArray(items)) return;
+    const storedImages = decodeGalleryValue(bound.baseline).map((image) => JSON.stringify(image));
+    items.forEach((image, index) => {
+      const match = storedImages.indexOf(JSON.stringify(image));
+      if (match < 0) return;
+      storedImages.splice(match, 1);
+      kept.add(`${listPath}[${index}]`);
+    });
   });
 
   // Strip empty optional fields, but keep required ones (see cleanEmptyValues) —

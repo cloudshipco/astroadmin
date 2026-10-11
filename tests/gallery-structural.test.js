@@ -142,6 +142,36 @@ await check('after an add and a remove, a surviving image keeps its empty option
   assert.deepEqual(second.gallery, stored.gallery, 'a later title-only save');
 });
 
+const strictAltSchema = z.toJSONSchema(z.object({
+  title: z.string(),
+  gallery: z.array(z.object({ src: z.string(), alt: z.string().min(1).optional() })).optional(),
+}), { unrepresentable: 'any' });
+
+await check('a NEWLY added image is still cleaned: its empty alt is left out, not saved as an invalid ""', async () => {
+  document.body.innerHTML = '';
+  const stored = { title: 'T', gallery: [{ src: '/images/kept.png', alt: 'Kept' }] };
+  const form = document.createElement('form');
+  form.innerHTML = generateForm(strictAltSchema, stored);
+  document.body.appendChild(form);
+  setupFormHandlers(form, () => {});
+  bindOriginalValues(form, structuredClone(stored));
+  click(form.querySelector('[data-edit-gallery]'));
+  await settle();
+  const galleryModal = document.getElementById('galleryEditorModal');
+  click(galleryModal.querySelector('[data-add]'));
+  await settle();
+  const library = document.getElementById('imageLibraryModal');
+  click(library.querySelector('.image-library-item[data-url="/images/a.png"]'));
+  click(library.querySelector('[data-select]'));
+  await settle();
+  click(galleryModal.querySelector('[data-save]'));
+  await settle();
+  const gallery = extractFormData(form, strictAltSchema).gallery;
+  assert.equal(gallery.length, 2, `positive control: the new image was added (${JSON.stringify(gallery)})`);
+  assert.deepEqual(gallery[0], { src: '/images/kept.png', alt: 'Kept' }, 'the stored image is unchanged');
+  assert.deepEqual(gallery[1], { src: '/images/a.png' }, `the new image's empty alt is cleaned (${JSON.stringify(gallery[1])})`);
+});
+
 console.log('='.repeat(40));
 console.log(`\n📊 ${passed} checks passed, ${failed} failed.\n`);
 if (failed > 0) process.exit(1);
