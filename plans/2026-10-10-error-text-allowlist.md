@@ -46,3 +46,24 @@ the unquoted-absolute-path regex, URL exemptions, HOME exclusions.
 - A 422 whose output names an absolute path outside the known roots falls back
   to the fixed message.
 - Every round 2-5 leak case from the review files becomes a regression case.
+
+## Round 6: the 422 carries no Astro text
+
+Showing Astro's output with server paths "detected and hidden" kept failing
+review the same way the scrubber did (a sibling `/srv/site,backup`, Windows
+and absent mount points missed; zod values like `'/home/about'` hidden), and
+on the hosted box a sibling directory names another client's site. So the
+publish check's refusal is built from structured parts only:
+
+- the entries Astro refused (the ids already parsed from its output);
+- the Astro error code, mapped to a plain sentence for the codes editors hit
+  (invalid entry data, a missing image file, an MDX/markdown syntax error,
+  ...); any other code reads "Astro refused the build (<code>); see the
+  server log";
+- for each refused entry, AstroAdmin's own schema validation of it (field
+  paths, messages and accepted values; this text is ours).
+
+Astro's raw output goes to the server log only. The same applies to the
+production build and the doctor's build output; build responses carry no
+configured command line, and a deploy response carries chosen status fields,
+not adapter output.
