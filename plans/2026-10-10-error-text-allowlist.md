@@ -76,3 +76,14 @@ their own shape. Entries come only from the checked commit, and their
 validation reads the committed text (`git show`), not the live tree. One
 loss: Astro's MDX syntax error names no file, so the editor learns that an
 MDX entry is broken but not which one (the log has the line and column).
+
+Round 7 (done, shipped in 1.6.0 on 2026-10-11): a refused entry is listed only
+when it is CONFIRMED in the checked commit: a Location line pointing at a
+committed regular file of the same collection, or an id computed as Astro 7
+assigns it (a frontmatter `slug` first; full `file()` ids, spaces included)
+matching exactly one committed entry. A missing image is blamed only on an
+entry whose own `./` or `../` reference fails to resolve in the commit (body
+images read with the site's markdown processor). Validation uses the checked
+commit's schemas, never the live cache. Otherwise the editor gets the code's
+sentence with no entry. Deferred to #66: the commit's schema parse uses
+`fs/promises` (capped at 20 s, falls back to listing the entry unchecked).

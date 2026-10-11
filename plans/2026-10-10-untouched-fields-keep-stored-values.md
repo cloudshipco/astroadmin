@@ -93,3 +93,16 @@ forced to `datetime-local`).
   how many items it needs and, only when the schema proves the key optional,
   how to leave it out. No new control.
 - Tests: `tests/untouched-structure.test.js`.
+
+## Later rounds and status (done, shipped in 1.6.0 on 2026-10-11)
+
+- Round 4: cleanup reads through a nullable wrapper (an emptied optional
+  array inside a nullable object is dropped); a gallery's add/remove/reorder
+  in its modal marks the field `data-structural-edit`, so add-then-remove
+  leaves an optional `.min(1)` gallery unset.
+- Rounds 5-6: after a structural edit, cleanup skips only the gallery images
+  that match one it was loaded with (by value, as a multiset); a newly added
+  image is cleaned like any new value.
+- Deferred to #66: a new `z.date()` inside a nested object is saved quoted; an
+  empty value in a newly added nullable primitive row saves `''`; top-level
+  stored keys the schema does not render are dropped.
