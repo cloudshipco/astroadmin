@@ -131,7 +131,8 @@ git(projectRoot, 'remote', 'add', 'origin', remoteDir);
 git(projectRoot, 'push', '-q', '-u', 'origin', 'main');
 
 const { publishHandler } = await import('../server/api/publish.js');
-const { checkHeadWithAstro, parseInvalidEntries, cleanCheckOutput } = await import('../server/utils/astro-check.js');
+const { checkHeadWithAstro } = await import('../server/utils/astro-check.js');
+const { parseFailureKeys } = await import('../server/utils/build-failure.js');
 const { getConfig } = await import('../server/config.js');
 
 async function publish() {
@@ -159,9 +160,9 @@ try {
 console.log('\n🧪 Publish gate (astro sync on the exact commit)\n' + '='.repeat(40));
 
 await check("Astro's error names the entry it rejected", () => {
-  const output = '[InvalidContentEntryDataError] pages → home data does not match collection schema.\n'
+  const output = '\u001b[31m[InvalidContentEntryDataError]\u001b[39m \u001b[1mpages → home\u001b[22m data does not match collection schema.\n'
     + '[InvalidContentEntryDataError] pages → home data does not match collection schema.';
-  assert.deepEqual(parseInvalidEntries(output), [{ collection: 'pages', slug: 'home' }]);
+  assert.deepEqual(parseFailureKeys(output).ids, [{ collection: 'pages', id: 'home' }]);
 });
 
 await check('valid content, including an object-shaped file() collection, is pushed', async () => {
@@ -181,11 +182,13 @@ await check('content Astro rejects is committed locally but not pushed', async (
   assert.equal(res.statusCode, 422, JSON.stringify(res.body));
   assert.equal(res.body.committed, true);
   assert.equal(res.body.pushed, false);
-  assert.deepEqual(res.body.check.entries, [{ collection: 'pages', slug: 'broken', editable: true }]);
-  assert.ok(res.body.check.output.includes('InvalidContentEntryDataError'), 'Astro\'s own error is passed on');
-  assert.ok(!res.body.check.output.includes(fs.realpathSync(os.tmpdir())), 'no server temp paths');
-  assert.ok(!res.body.check.output.includes(fs.realpathSync(projectRoot)), 'no server project path');
-  assert.ok(!res.body.check.output.includes('Stack trace'), 'no stack trace (it lists server paths)');
+  assert.deepEqual(res.body.check.entries.map(({ collection, slug, editable }) => ({ collection, slug, editable })),
+    [{ collection: 'pages', slug: 'broken', editable: true }]);
+  assert.deepEqual(res.body.check.problems, [{ code: 'InvalidContentEntryDataError', message: "An entry's data does not match its collection's schema." }]);
+  assert.deepEqual(res.body.check.entries[0].issues.map((issue) => issue.path), ['title'], 'our validator names the field');
+  const body = JSON.stringify(res.body);
+  assert.ok(!body.includes(fs.realpathSync(os.tmpdir())) && !body.includes(os.tmpdir()), 'no server temp paths');
+  assert.ok(!body.includes('Stack trace') && !body.includes('docs.astro.build'), 'no Astro text');
   assert.equal(remoteHead(), remoteBefore, 'nothing reached the remote');
   assert.notEqual(localHead(), remoteBefore, 'the edit is kept as a local commit');
 });
@@ -210,12 +213,14 @@ await check('an uncommitted bad edit does not fail a check of a good HEAD', asyn
   git(projectRoot, 'checkout', '--', 'src/content/pages/home.md');
 });
 
-await check("an entry Astro names by an ID that is not an editor slug is not linked", async () => {
-  // Astro slugifies the file name (ID "bad-page"); the editor's slug is "Bad Page".
+await check("an entry Astro names by its ID is resolved to the editor's slug", async () => {
+  // Astro slugifies the file name (ID "bad-page"); the editor's slug is "Bad Page",
+  // which the refusal finds from the commit's files.
   writeFile(projectRoot, 'src/content/pages/Bad Page.md', '---\nheading: no title\n---\n');
   const res = await publish();
   assert.equal(res.statusCode, 422, JSON.stringify(res.body));
-  assert.deepEqual(res.body.check.entries, [{ collection: 'pages', slug: 'bad-page', editable: false }]);
+  assert.deepEqual(res.body.check.entries.map(({ collection, slug, editable }) => ({ collection, slug, editable })),
+    [{ collection: 'pages', slug: 'Bad Page', editable: true }]);
   fs.rmSync(path.join(projectRoot, 'src/content/pages/Bad Page.md'));
   assert.equal((await publish()).statusCode, 200);
 });
@@ -226,11 +231,11 @@ await check('a missing image() file is refused (the build checks what sync does 
   const res = await publish();
   assert.equal(res.statusCode, 422, JSON.stringify(res.body));
   assert.equal(remoteHead(), remoteBefore);
-  // Astro's message reaches the editor: its `Location:` names a file in the
-  // linked node_modules by its resolved path, a known directory, so the
-  // output is cleaned rather than replaced by the fixed message.
-  assert.match(res.body.check.output, /ImageNotFound/, res.body.check.output);
-  assert.match(res.body.check.output, /\.\/missing\.png/, res.body.check.output);
+  // The sentence for ImageNotFound, and the entry whose committed content
+  // holds the missing path, with the field (found by our own reading).
+  assert.deepEqual(res.body.check.problems.map((problem) => problem.code), ['ImageNotFound']);
+  assert.deepEqual(res.body.check.entries.map(({ collection, slug, issues }) => ({ collection, slug, issues })),
+    [{ collection: 'covers', slug: 'second', issues: [{ path: 'cover', message: 'The image file ./missing.png was not found.' }] }]);
   fs.rmSync(path.join(projectRoot, 'src/content/covers/second.md'));
   const fixed = await publish();
   assert.equal(fixed.statusCode, 200, JSON.stringify(fixed.body));
@@ -303,7 +308,8 @@ await check('the combined result of a rebase onto the remote is what gets checke
   const res = await publish();
 
   assert.equal(res.statusCode, 422, JSON.stringify(res.body));
-  assert.deepEqual(res.body.check.entries, [{ collection: 'pages', slug: 'news', editable: true }]);
+  assert.deepEqual(res.body.check.entries.map(({ collection, slug, editable }) => ({ collection, slug, editable })),
+    [{ collection: 'pages', slug: 'news', editable: true }]);
   assert.equal(remoteHead(), remoteBefore, 'the invalid combination was not pushed');
 });
 
@@ -311,6 +317,7 @@ await check('the check fails closed when it cannot run', async () => {
   const fullConfig = await getConfig();
   const result = await checkHeadWithAstro({ ...fullConfig, build: { check: 'exit 3' } });
   assert.equal(result.success, false);
+  assert.deepEqual(result.problems, [{ code: null, message: "The site's build failed without naming an error; see the server log." }]);
 });
 
 await check("the check runs in its own worktree, at HEAD, without the site's Astro cache", async () => {
@@ -319,10 +326,10 @@ await check("the check runs in its own worktree, at HEAD, without the site's Ast
     ...fullConfig,
     build: { check: 'pwd; git rev-parse HEAD; test -L node_modules/astro && test ! -e node_modules/.astro && echo isolated' },
   });
-  assert.equal(result.success, true, result.output);
-  const [workingDirectory, checkedCommit, marker] = result.output.split('\n');
-  // Server paths are stripped from output, so the worktree shows as relative.
-  assert.equal(workingDirectory, 'worktree', 'ran in the check worktree (and its path was stripped)');
+  assert.equal(result.success, true, result.rawOutput);
+  const [workingDirectory, checkedCommit, marker] = result.rawOutput.trim().split('\n');
+  assert.equal(path.basename(workingDirectory), 'worktree', 'ran in the check worktree');
+  assert.ok(workingDirectory.includes('astroadmin-check-'), workingDirectory);
   assert.equal(checkedCommit, localHead());
   assert.equal(marker, 'isolated', 'packages linked, cache directory left out');
   assert.equal(git(projectRoot, 'worktree', 'list').split('\n').length, 1, 'the worktree was removed');
@@ -336,7 +343,7 @@ await check('a timed-out check kills everything it started', async () => {
     build: { check: `(sleep 2; touch ${marker}) & wait`, checkTimeoutMs: 300 },
   });
   assert.equal(result.success, false);
-  assert.ok(result.output.includes('did not finish'), result.output);
+  assert.ok(result.problems[0].message.includes('did not finish'), JSON.stringify(result.problems));
   await new Promise((resolve) => setTimeout(resolve, 3000));
   assert.equal(fs.existsSync(marker), false, 'the background child was killed too');
 });
@@ -364,7 +371,7 @@ await check('a site with a git submodule (gitlink) is refused, not checked as em
   git(withGitlink, 'commit', '-qm', 'add a submodule');
   const result = await checkHeadWithAstro({ paths: { projectRoot: withGitlink }, build: { check: 'true' } });
   assert.equal(result.success, false);
-  assert.ok(result.output.includes('submodules'), result.output);
+  assert.ok(result.problems[0].message.includes('submodules'), JSON.stringify(result.problems));
 });
 
 await check('a monorepo site sees hoisted packages; a workspace package link is refused', async () => {
@@ -376,17 +383,14 @@ await check('a monorepo site sees hoisted packages; a workspace package link is 
   fs.mkdirSync(path.join(mono, 'node_modules/hoisted-package'), { recursive: true });
   const siteConfig = { paths: { projectRoot: path.join(mono, 'site') }, build: { check: 'test -d ../node_modules/hoisted-package && echo found' } };
   const hoisted = await checkHeadWithAstro(siteConfig);
-  assert.equal(hoisted.success, true, hoisted.output);
-  assert.equal(hoisted.output, 'found', 'control: the hoisted package is visible from the site');
-  // The repository root sits above the site directory; its path is stripped too.
-  const repoPath = await checkHeadWithAstro({ ...siteConfig, build: { check: `echo ${fs.realpathSync(mono)}/packages/schema` } });
-  assert.equal(repoPath.output, 'packages/schema');
+  assert.equal(hoisted.success, true, hoisted.rawOutput);
+  assert.equal(hoisted.rawOutput.trim(), 'found', 'control: the hoisted package is visible from the site');
 
   // A link back into the repo would resolve to the live checkout's uncommitted code.
   fs.symlinkSync('../packages/schema', path.join(mono, 'node_modules/schema'));
   const linked = await checkHeadWithAstro(siteConfig);
   assert.equal(linked.success, false);
-  assert.ok(linked.output.includes('workspace package (schema)'), linked.output);
+  assert.ok(linked.problems[0].message.includes('workspace package (schema)'), JSON.stringify(linked.problems));
 });
 
 await check('a check whose descendant daemonises still times out and settles', async () => {
@@ -409,20 +413,20 @@ await check('a tracked .env stays as committed; an untracked one is copied in', 
   const tracked = makeRepo('tracked-env', { '.env': 'VALUE=committed\n' });
   fs.writeFileSync(path.join(tracked, '.env'), 'VALUE=live edit\n');
   const trackedResult = await checkHeadWithAstro({ paths: { projectRoot: tracked }, build: { check: 'cat .env' } });
-  assert.equal(trackedResult.output, 'VALUE=committed');
+  assert.equal(trackedResult.rawOutput.trim(), 'VALUE=committed');
 
   const untracked = makeRepo('untracked-env', { '.gitignore': '.env\n' });
   fs.writeFileSync(path.join(untracked, '.env'), 'VALUE=local secret\n');
   const untrackedResult = await checkHeadWithAstro({ paths: { projectRoot: untracked }, build: { check: 'cat .env' } });
-  assert.equal(untrackedResult.output, 'VALUE=local secret');
+  assert.equal(untrackedResult.rawOutput.trim(), 'VALUE=local secret');
 });
 
 await check("the check builds the way the site is built, without the admin's secrets", async () => {
   const repo = makeRepo('commands', { 'README.md': 'x\n' });
   const production = await checkHeadWithAstro({ paths: { projectRoot: repo }, build: { production: 'echo production-build' } });
-  assert.equal(production.output, 'production-build', 'build.production is used when there is no build.check');
+  assert.equal(production.rawOutput.trim(), 'production-build', 'build.production is used when there is no build.check');
   const explicit = await checkHeadWithAstro({ paths: { projectRoot: repo }, build: { check: 'echo check', production: 'echo production-build' } });
-  assert.equal(explicit.output, 'check', 'build.check wins');
+  assert.equal(explicit.rawOutput.trim(), 'check', 'build.check wins');
 
   process.env.SESSION_SECRET = 'do-not-leak';
   process.env.ADMIN_PASSWORD = 'do-not-leak';
@@ -432,20 +436,7 @@ await check("the check builds the way the site is built, without the admin's sec
   });
   delete process.env.SESSION_SECRET;
   delete process.env.ADMIN_PASSWORD;
-  assert.equal(envResult.output, '[][][][home]', 'admin variables gone, ordinary ones (HOME) kept');
-});
-
-await check('output shown to editors carries no server paths or stack frames', () => {
-  const root = '/srv/sites/example site';
-  const raw = [
-    `Error at file://${encodeURI(root)}/src/content/pages/a.md`,
-    `    at load (${root}/node_modules/astro/dist/x.js:1:2)`,
-    `Location: ${root}/src/content/pages/a.md:0:0`,
-  ].join('\n');
-  const cleaned = cleanCheckOutput(raw, [root]);
-  assert.ok(!cleaned.includes('/srv/sites'), cleaned);
-  assert.ok(!cleaned.includes('    at '), 'stack frames removed');
-  assert.ok(cleaned.includes('src/content/pages/a.md'), 'the useful relative path is kept');
+  assert.equal(envResult.rawOutput.trim(), '[][][][home]', 'admin variables gone, ordinary ones (HOME) kept');
 });
 
 await check("no check rewrote the site's own Astro cache", () => {

@@ -96,11 +96,26 @@ An API error response NEVER carries `error.message` (or stderr, or a command lin
 sends a fixed, route-specific message ("This entry could not be saved; see the server log.")
 and logs the error with `console.error`. The exceptions are refusals that are the editor's to
 fix and whose text we wrote without server data (`ContentPathError`, `GitRequestError`, an
-image `status = 400` refusal, multer's own messages, the missing-git-identity advice). The only
-free text shown is BUILD output (the publish check's 422, a production build, the doctor), and
-it goes through `cleanCheckOutput` (`server/utils/redact-server-paths.js`): known roots removed,
-else the whole output replaced. Do not add rules that rewrite paths in free text: five review
-rounds found a new leak or over-redaction in each version of that.
+image `status = 400` refusal, multer's own messages, the missing-git-identity advice).
+
+BUILD output is no exception: no text of it reaches a response either
+(`server/utils/build-failure.js`). The publish check's 422 is built from structured parts:
+the error CODES in the output (`[ImageNotFound]`, `InvalidContentEntryDataError`, a bare
+identifier) mapped to sentences we wrote (`describeCode`; an unknown code reads "Astro refused
+the build (<code>); see the server log"; none, a fixed sentence); the refused ENTRIES, which
+are only ever ones found in the checked commit (Astro ids, `Location:` files under the check's
+own site directory, files whose committed text holds a missing image path); and for each
+entry, AstroAdmin's own validation of its text AT THE CHECKED COMMIT (`git show`, then
+`validateCommittedText`: field paths, messages, `accepted` values). A production build and
+the build routes return status plus the same code sentences; build responses describe the
+command ("the site's production build"), never the configured command line; a deploy
+response carries chosen status fields (`deployResultForEditor`), never adapter output. The
+raw output goes to the server log; `checkHeadWithAstro`'s `rawOutput` is for the server and
+tests only. The doctor CLI prints a failed build's raw output to its own stderr (the site
+owner's terminal); its report carries the sentences. Six review rounds found a new leak or
+over-redaction in every version of "show the output with server paths removed or hidden"
+(a sibling `/srv/site,backup`, Windows paths, mount points absent locally, a zod enum of
+`'/home/about'`): do not reintroduce any free text from a build or git.
 
 ## Testing
 
@@ -159,9 +174,29 @@ runner aggregating them). Most run server-less and need env vars:
   other configured refs, even with a same-named tag), a failed push is reported as NOT
   published, a timeout settles even when a descendant daemonises, gitlinks and workspace
   links are refused, a tracked `.env` stays as committed, `build.production` is honoured,
-  the admin's secrets are not in the build's environment, server paths are stripped, and
-  the site's own `node_modules/.astro` is byte-identical afterwards. Takes ~1-2 min (each
-  publish runs a full `astro build`).
+  the admin's secrets are not in the build's environment, the 422 carries a code sentence and
+  our validation of the refused entry (an Astro id such as `bad-page` resolved to the editor's
+  `Bad Page`), and the site's own `node_modules/.astro` is byte-identical afterwards. Takes
+  ~1-2 min (each publish runs a full `astro build`).
+- `bun tests/publish-refusal-reasons.test.js` — what the 422 says, from REAL failing builds:
+  (i) a zod enum of `'/home/about'`-style values (entry, field, `accepted` values from our
+  validator), (ii) a missing `image()` file (entry and field, found by the committed text),
+  (iii) an MDX syntax error (SKIPPED, and says so, unless `@astrojs/mdx` is installed here;
+  it passed against Astro 7.0.5 + @astrojs/mdx 7.0.1 on 2026-10-11), (iv) invalid frontmatter
+  YAML (our parser's line), plus a locale file (`homefr` -> `home (fr)`), a nested id, a data
+  entry's invalid JSON, and an entry fixed on disk but not in the commit (the commit is what
+  is reported). Each: no server path or Astro text in the body, and the raw output in the
+  server log. ~25 s.
+- `bun tests/build-failure.test.js` — `server/utils/build-failure.js` on captured Astro 7 output
+  (colour codes kept, paths swapped for `/srv`): codes, sentences, unknown and absent codes,
+  bracketed paths that are not codes, entry keys (a `Location:` in a sibling such as
+  `<site>,backup` or a `../` climb is not the site), Astro's glob id for a file, and every
+  review-round leak shape producing no path. <1 s.
+- `bun tests/build-deploy-responses.test.js` — over HTTP: `/api/build/status` and
+  `/api/build/production` describe the build instead of the configured command (a script with
+  a server path), carry no output, and a failure carries the code sentences; `/api/publish`
+  with a real local rsync deploy returns `{success, adapter, dryRun}` while rsync's
+  "created directory <destination>" goes to the log. ~2 s.
 - `bun tests/astro-bin.test.js` — the default build commands run the site's OWN installed
   astro (`server/utils/astro-bin.js`), never a package runner: with no astro installed the
   publish check and the production build refuse and a fake `bunx`/`npx` first on PATH is
@@ -182,13 +217,17 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/publish-failure.test.js` — a publish that fails outright (500) tells the editor why:
   a real "Author identity unknown" from git becomes the fix (set user.name/user.email), any
   other error is the fixed "Publishing failed; see the server log.", and the toast shows that
-  message. A real failing `build.production` comes back with the project root removed from
-  its output and `error` a fixed text (never `Command failed: <command line>`).
-- `bun tests/publish-refusal-paths.test.js` — the 422 refusal names no server path, including
-  one the check does not know: a real `git worktree add` failure in a site whose git directory
-  lives elsewhere (`--separate-git-dir`) gets the fixed message, with git's text (and the
-  external directory) in the server log. `checkRefusalBody` applies the same fallback as a
-  last stop, and keeps Astro's real message (`'/about' | '/blog/[slug]'`, URLs) whole.
+  message. A real failing `build.production` comes back as `buildResultForEditor`: success,
+  duration, a fixed `error` (never `Command failed: <command line>`) and the code sentences;
+  its output only in the log.
+- `bun tests/publish-refusal-paths.test.js` — the 422 refusal names no server path, through the
+  real publish handler: a real `git worktree add` failure in a site whose git directory lives
+  elsewhere (`--separate-git-dir`) gets a fixed sentence; a "build" printing every leak shape
+  from review rounds 2-6 (spaces, quotes, backticks, `file://` `%20`, `../` climbs, symlinked
+  roots, query strings, `<root>,backup`, `C:\`, `D:/`, `/app`, `/data`, an rsync destination,
+  a command line) beside Astro lines whose id, `Location:` and image path are server paths
+  gets codes and our sentences only, together and one leak at a time; the text is in the
+  server log. On the pre-change code 8 of the single leaks reached the body.
 - `bun tests/error-paths.test.js` — API errors send a fixed, route-specific message, over
   HTTP: an image() preview whose file vanishes after its stat() (sendFile's callback, not the
   error middleware), an unreadable `/images` file (the app error middleware), upload, delete,
@@ -199,17 +238,6 @@ runner aggregating them). Most run server-less and need env vars:
   names `../site-a/src/content.config.ts`, which only the log may carry. Refusals that are the
   editor's to fix (a file type, an undeclared collection, a missing entry) keep their own
   path-free text.
-- `bun tests/redact-server-paths.test.js` — `cleanCheckOutput`, the one function for BUILD
-  output an editor reads (the publish check's 422, a production build, the doctor's build and
-  checks). It removes only the directories the caller names (and their realpaths) where a path
-  starts, and rewrites nothing else; if a server path is left (an absolute path whose first
-  segment is a top-level directory of a server, a `file://` URL, a `~/` path, a known
-  directory anywhere, a `../` climb to the root or into something that exists beside the
-  directory it climbed to), the whole output becomes a fixed message and the original is
-  logged. Every leak from the old scrubber's review rounds is a case (spaces, apostrophes,
-  both quotes, backticks, `file://` with `%20`, sibling climbs, external git dirs, symlinked
-  roots, roots in URL queries), and every over-redaction one (`'/blog/[slug]'`, URLs,
-  `../assets/x.png`) asserts the text survives.
 - `bun tests/preview-live-link.test.js` — the preview's pageNavigation message -> live link and
   entry, with and without a base path (the iframe reports its pathname WITH the preview base,
   which must be stripped before the live link adds publicUrl's).
@@ -410,9 +438,9 @@ Two layers, deliberately unequal:
    the commit checked is the commit pushed. The push names that SHA and the branch's
    upstream explicitly (`pushCheckedCommit`), so a configured push refspec or
    `push.default=matching` cannot send unchecked refs. A failure keeps the commit local
-   and returns 422 with Astro's output, the check's worktree and the project root removed
-   and stack trace stripped (or, if it names any other server path, a fixed message and the
-   output in the server log: `cleanCheckOutput`). A push
+   and returns 422 built from structured parts (the error codes as our sentences, the
+   refused entries, our validation of each at the checked commit: `build-failure.js`), with
+   Astro's output in the server log only. A push
    that fails (with an upstream configured) returns 502 and the editor is told it is NOT
    live; only `pushed` or a deploy counts as published in the UI.
    It is a full build, not `astro sync`: sync passes a missing `image()` file, and for

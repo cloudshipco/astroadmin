@@ -17,7 +17,7 @@ import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import simpleGit from 'simple-git';
-import { publishFailureMessage, redactBuildResult } from '../server/api/publish.js';
+import { buildResultForEditor, publishFailureMessage } from '../server/api/publish.js';
 import { runProductionBuildIn } from '../server/utils/build.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
@@ -149,26 +149,28 @@ async function withLog(fn) {
   }
 }
 
-await check('a real failed production build: the project root removed, the error a fixed text', async () => {
-  // A configured build command that fails the way a build does, naming a
-  // file under the project root.
-  const command = `node -e "console.error('error in ${repo}/src/pages/index.astro:3:1'); process.exit(1)"`;
+await check('a real failed production build: a fixed error and the code sentence, the output only in the log', async () => {
+  // A configured build command that fails the way Astro does, naming a file
+  // under the project root and one in a sibling directory.
+  const command = `node -e "console.error('[ImageNotFound] in ${repo}/src/pages/index.astro:3:1 and /srv/site,backup/x.md'); process.exit(1)"`;
   const [raw, logged] = await withLog(() => runProductionBuildIn({ build: { production: command } }, repo));
   assert.equal(raw.success, false, 'positive control: the build failed');
-  assert.ok(logged.includes('Production build failed'), `positive control: logged (${logged})`);
-  const build = redactBuildResult(raw, [repo]);
-  assert.equal(build.output, 'error in src/pages/index.astro:3:1');
-  assert.equal(build.error, 'The build command failed.', 'not `Command failed: <command line>`');
+  assert.ok(logged.includes(`${repo}/src/pages/index.astro`) && logged.includes('/srv/site,backup'), `positive control: the output is in the log (${logged})`);
+  const build = buildResultForEditor(raw);
+  assert.deepEqual(build, {
+    success: false,
+    duration: raw.duration,
+    error: 'The build command failed.',
+    problems: [{ code: 'ImageNotFound', message: 'An image an entry uses was not found in the site.' }],
+  });
   assert.ok(!JSON.stringify(build).includes(scratch), JSON.stringify(build));
 });
 
-await check('build output naming a path outside the project is replaced, and logged', async () => {
-  const output = `error: cannot read '/srv/shared cache/astro/x.json' for ${repo}/src/a.md`;
-  const [build, logged] = await withLog(() => redactBuildResult({ success: false, duration: 5, output, error: 'The build command failed.' }, [repo]));
-  assert.equal(build.output, 'The build failed; its output is in the server log.');
-  assert.ok(logged.includes(output), `positive control: the original is in the server log (${logged})`);
-  assert.equal(build.error, 'The build command failed.');
-  assert.equal(redactBuildResult(null, [repo]), null);
+await check('a production build result for the editor: status only', async () => {
+  assert.deepEqual(buildResultForEditor({ success: true, duration: 5, output: `built ${repo}/dist` }), { success: true, duration: 5 });
+  assert.deepEqual(buildResultForEditor({ success: false, duration: 5, output: 'Error: /srv/x', error: 'The build command failed.' }),
+    { success: false, duration: 5, error: 'The build command failed.', problems: [{ code: null, message: "The site's build failed without naming an error; see the server log." }] });
+  assert.equal(buildResultForEditor(null), null);
 });
 
 fs.rmSync(scratch, { recursive: true, force: true });

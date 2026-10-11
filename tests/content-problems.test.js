@@ -148,27 +148,43 @@ check('marks do not change what the next save reads back', () => {
   assert.deepStrictEqual(extractFields(form), unmarked);
 });
 
-check('a refused publish links the entries Astro named and shows its output', () => {
+check('a refused publish shows the reasons, links the entries and lists their issues', () => {
   const problems = renderPublishProblems({
     message: 'Your changes are saved and committed, but were not published.',
     check: {
-      output: '[InvalidContentEntryDataError] pages → home data does not match collection schema.',
-      entries: [{ collection: 'pages', slug: 'home', editable: true }, { collection: 'pages', slug: 'homefr', editable: false }],
+      problems: [{ code: 'InvalidContentEntryDataError', message: "An entry's data does not match its collection's schema." }],
+      entries: [
+        { collection: 'pages', slug: 'home', locale: 'fr', editable: true, issues: [{ path: 'link', message: 'Invalid option', accepted: ['/home/about', '/home/contact'] }] },
+        { collection: 'pages', slug: 'archive', locale: null, editable: false, issues: [] },
+      ],
+      output: 'ignored: the structured parts are shown',
     },
   });
-  assert.equal(problems.querySelectorAll('a').length, 1, 'an Astro ID with no editor slug is not a link');
-  assert.ok(problems.textContent.includes('pages/homefr'), 'but it is still named');
+  assert.ok(problems.textContent.includes("An entry's data does not match its collection's schema."), problems.textContent);
+  assert.equal(problems.querySelectorAll('a').length, 1, 'an entry the editor cannot open is not a link');
+  assert.ok(problems.textContent.includes('pages/archive'), 'but it is still named');
   const link = problems.querySelector('a[data-collection="pages"]');
   assert.equal(link.dataset.slug, 'home');
+  assert.equal(link.textContent, 'pages/home (fr)');
   assert.equal(link.getAttribute('href'), '/dashboard/pages/home');
-  assert.ok(problems.querySelector('pre').textContent.includes('InvalidContentEntryDataError'));
-  assert.equal(problems.querySelector('details').open, false, 'output folded when an entry is named');
+  const issue = problems.querySelector('li li');
+  assert.equal(issue.textContent, 'Link: Invalid option Accepted: /home/about, /home/contact.');
+  assert.equal(problems.querySelector('pre'), null, 'no raw output block');
+  assert.ok(!problems.textContent.includes('ignored'), 'the plain-text output is not shown twice');
 });
 
-check('a refusal naming no entry opens the output', () => {
-  const problems = renderPublishProblems({ message: 'Not published.', check: { output: 'Config failed to load', entries: [] } });
+check('a refusal naming no entry shows its reason', () => {
+  const problems = renderPublishProblems({ message: 'Not published.', check: { problems: [{ code: null, message: 'The publish check could not run.' }], entries: [] } });
   assert.equal(problems.querySelectorAll('a').length, 0);
-  assert.equal(problems.querySelector('details').open, true);
+  assert.ok(problems.textContent.includes('The publish check could not run.'));
+});
+
+check('hostile text in a refusal stays text', () => {
+  const problems = renderPublishProblems({
+    message: 'Not published.',
+    check: { problems: [{ code: 'X', message: '<img src=x onerror=alert(1)>' }], entries: [{ collection: 'pages', slug: '<b>x</b>', editable: false, issues: [{ path: 'title', message: '<script>1</script>' }] }] },
+  });
+  assert.equal(problems.querySelector('img, b, script'), null, problems.innerHTML);
 });
 
 check('an issue on a whole inline array is marked on that field', () => {

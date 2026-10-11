@@ -26,12 +26,12 @@ import os from 'os';
 import path from 'path';
 import {
   buildEnvironment,
-  cleanCheckOutput,
   findWorkspaceLinkForProject,
   listGitlinks,
   runCommand,
 } from '../utils/astro-check.js';
 import { listBuiltPagePaths } from './html-scan.js';
+import { buildProblems } from '../utils/build-failure.js';
 import {
   computeFieldCoverage,
   findAnnotatedLinks,
@@ -242,13 +242,17 @@ export const CHECKS = [
       const result = await runCommand(command, context.projectRoot, BUILD_TIMEOUT_MS, buildEnvironment());
       if (result.timedOut || result.exitCode !== 0) {
         context.buildSkippedReason = 'The build failed, so the built HTML could not be checked.';
-        // A report can be shared; output naming a server path outside the
-        // site and its build goes to stderr instead (cleanCheckOutput logs it).
-        const output = cleanCheckOutput(result.output, [context.projectRoot, outDir], {
-          label: 'The doctor\'s build',
-          hiddenMessage: 'The build output named a server path, so it was written to stderr instead.',
-        }).slice(-2000);
-        return { severity: 'fail', message: result.timedOut ? `The build did not finish within ${BUILD_TIMEOUT_MS / 1000} seconds.` : 'The build failed.', details: [output] };
+        // The raw output goes to the terminal of whoever ran the doctor (the
+        // site's owner) on stderr. The report can be shared (--json), so it
+        // carries only sentences we wrote: what the output's error codes mean.
+        console.error(`The doctor's build output:\n${result.output}`);
+        return {
+          severity: 'fail',
+          message: result.timedOut
+            ? `The build did not finish within ${BUILD_TIMEOUT_MS / 1000} seconds; its output is above (stderr).`
+            : 'The build failed; its output is above (stderr).',
+          details: result.timedOut ? [] : buildProblems(result.output).map((problem) => problem.message),
+        };
       }
       if ((await listBuiltPagePaths(outDir)).length === 0) {
         context.buildSkippedReason = NO_HTML_MESSAGE;

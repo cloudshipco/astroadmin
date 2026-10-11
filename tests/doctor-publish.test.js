@@ -227,6 +227,33 @@ try {
     }
   });
 
+  await check("a check's text naming the scan's directory is replaced; page paths such as /home/about stay", async () => {
+    resetLatestDoctorResult();
+    // A stand-in scan whose check text names the worktree (a check that one
+    // day interpolates a directory) beside an ordinary page path.
+    const stubScript = path.join(tempRoot, 'stub-scan.js');
+    fs.writeFileSync(stubScript, `const { siteDir } = JSON.parse(process.argv[2]);
+process.stdout.write('\\nASTROADMIN_DOCTOR_RESULT ' + JSON.stringify({ ok: { coverage: null, results: [
+  { id: 'a', severity: 'warn', message: 'built in ' + siteDir + '/dist', details: ['/home/about: "title" is inside a link'] },
+] } }) + '\\n');
+`);
+    const siteDir = path.join(tempRoot, 'site-check', 'worktree');
+    const logged = [];
+    const realError = console.error;
+    console.error = (...args) => logged.push(args.map(String).join(' '));
+    try {
+      await recordDoctorAfterCheck(fullConfig, { siteDir, commit: 'abc', command: 'astro build' }, { scanScript: stubScript, timeoutMs: 5000 });
+    } finally {
+      console.error = realError;
+    }
+    const result = getLatestDoctorResult();
+    assert.equal(result.status, 'ok', JSON.stringify(result));
+    assert.equal(result.results[0].message, 'This detail named a server path; see the server log.');
+    assert.ok(logged.join('\n').includes(siteDir), 'positive control: the text, directory and all, is in the server log');
+    assert.deepEqual(result.results[0].details, ['/home/about: "title" is inside a link'], 'a page path is not mistaken for a server path');
+    assert.ok(!JSON.stringify(result).includes(tempRoot), JSON.stringify(result));
+  });
+
   await check('the scan reads the commit it built, not an edit made since (an autosave mid-publish)', async () => {
     resetLatestDoctorResult();
     const committed = fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf-8');

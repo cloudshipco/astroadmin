@@ -18,6 +18,7 @@
 
 import { loadSchemas } from './collections.js';
 import { readContent } from './content.js';
+import { parseFrontmatter } from './content-format.js';
 import { IMAGE_MARKER } from './schema-parser.js';
 
 /**
@@ -114,6 +115,18 @@ function findEmptyRequiredImages(node, value, issuePath, found) {
 }
 
 /**
+ * The values an enum or literal issue accepts (zod 4 `values`, zod 3
+ * `options`), as text, or null.
+ * @param {Object} issue - a zod issue
+ * @returns {string[]|null}
+ */
+function acceptedValues(issue) {
+  const values = Array.isArray(issue.values) ? issue.values : Array.isArray(issue.options) ? issue.options : null;
+  if (!values || values.length === 0) return null;
+  return values.map((value) => (typeof value === 'string' ? value : JSON.stringify(value)));
+}
+
+/**
  * Validate entry data against an already-loaded collection schema entry.
  * @param {Object|undefined} collectionSchema - one value of loadSchemas()
  * @param {Object} data - entry data as the build would read it
@@ -133,10 +146,12 @@ export async function validateAgainstSchema(collectionSchema, data) {
   const result = await zodSchema.safeParseAsync(data);
   const issues = result.success
     ? []
-    : result.error.issues.map((issue) => ({
-      path: formatIssuePath(issue.path),
-      message: issue.message,
-    }));
+    : result.error.issues.map((issue) => {
+      const described = { path: formatIssuePath(issue.path), message: issue.message };
+      const accepted = acceptedValues(issue);
+      if (accepted) described.accepted = accepted;
+      return described;
+    });
 
   const emptyImages = [];
   findEmptyRequiredImages(collectionSchema.schema, data, [], emptyImages);
@@ -168,4 +183,95 @@ export async function validateStoredEntry(collection, slug, locale = null) {
 
   const entry = await readContent(collection, slug, locale);
   return validateAgainstSchema(schemas[collection], entry.data);
+}
+
+/**
+ * Every image() field in stored data, with its value.
+ * @returns {Array<{path: Array<string|number>, value: *}>}
+ */
+function findImageFields(node, value, issuePath, found) {
+  const schema = nonNullMember(node);
+  if (!schema || value === null || value === undefined) return found;
+  if (schema[IMAGE_MARKER] === true) {
+    found.push({ path: issuePath, value });
+    return found;
+  }
+  if (Array.isArray(value)) {
+    if (schema.items) value.forEach((item, index) => findImageFields(itemSchemaFor(schema.items, item), item, [...issuePath, index], found));
+    return found;
+  }
+  if (typeof value === 'object' && schema.properties) {
+    for (const [key, propertyNode] of Object.entries(schema.properties)) {
+      findImageFields(propertyNode, value[key], [...issuePath, key], found);
+    }
+  }
+  return found;
+}
+
+/**
+ * Validate an entry from its file's text as committed. The publish check's
+ * refusal reads the text at the checked commit, not from the live tree, which
+ * an autosave may have changed since. Every message is ours or the site's
+ * schema's: nothing from a build's output.
+ *
+ * @param {Object} options
+ * @param {Object} options.schemas - loadSchemas() result
+ * @param {string} options.collection
+ * @param {string} options.file - the file's path, for its extension
+ * @param {string} options.text - the file's committed text
+ * @param {string|null} [options.itemId] - a file() collection's entry id
+ * @param {string[]} [options.missingImages] - image paths the build could not find
+ * @returns {Promise<EntryValidation>}
+ */
+export async function validateCommittedText({ schemas, collection, file, text, itemId = null, missingImages = [] }) {
+  let data;
+  let body = null;
+  if (/\.json$/i.test(file)) {
+    try {
+      data = JSON.parse(text);
+    } catch (error) {
+      const position = /line (\d+) column (\d+)/.exec(error.message);
+      return {
+        status: 'invalid',
+        issues: [{ path: '', message: position ? `This entry's JSON is not valid (line ${position[1]}, column ${position[2]}).` : "This entry's JSON is not valid." }],
+      };
+    }
+    if (itemId !== null) {
+      const items = Array.isArray(data)
+        ? data
+        : (data && typeof data === 'object' ? Object.entries(data).map(([id, item]) => ({ id, ...item })) : []);
+      data = items.find((item) => item?.id === itemId || item?.slug === itemId);
+      if (!data) return { status: 'unchecked', issues: [], reason: 'The entry was not found in its file.' };
+    }
+  } else {
+    try {
+      const parsed = parseFrontmatter(text);
+      data = parsed.data;
+      body = parsed.content;
+    } catch (error) {
+      // js-yaml counts lines within the frontmatter, which starts on line 2.
+      const line = Number.isInteger(error?.mark?.line) ? error.mark.line + 2 : null;
+      return {
+        status: 'invalid',
+        issues: [{ path: '', message: line ? `The frontmatter is not valid YAML (near line ${line} of the file).` : 'The frontmatter is not valid YAML.' }],
+      };
+    }
+  }
+
+  const validation = await validateAgainstSchema(schemas[collection], data);
+  const issues = [...validation.issues];
+  if (missingImages.length > 0 && schemas[collection]?.schema) {
+    for (const field of findImageFields(schemas[collection].schema, data, [], [])) {
+      if (missingImages.includes(field.value)) {
+        issues.push({ path: formatIssuePath(field.path), message: `The image file ${field.value} was not found.` });
+      }
+    }
+  }
+  for (const image of missingImages) {
+    if (typeof body === 'string' && body.includes(image) && !issues.some((issue) => issue.message.includes(image))) {
+      issues.push({ path: 'body', message: `The body uses the image file ${image}, which was not found.` });
+    }
+  }
+  if (validation.status === 'unchecked' && issues.length === 0) return validation;
+  return issues.length === 0 ? { status: 'valid', issues: [] } : { status: 'invalid', issues };
 }

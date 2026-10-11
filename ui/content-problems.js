@@ -168,8 +168,13 @@ export function showEntryProblems(form, validation, schema = null) {
 
 /**
  * The body of a refused publish: the site's own Astro rejected the content.
- * Lists the entries Astro named (each opens in the editor) and its output.
- * @param {{message: string, check: {output: string, entries: Array<{collection: string, slug: string, editable: boolean}>}}} refusal
+ * Shows why (the server's sentences for Astro's error codes) and the entries
+ * it refused, each opening in the editor, with what AstroAdmin's own
+ * validation finds wrong in it at the checked commit. Astro's output is not
+ * in the response (it names server paths); it is in the server log.
+ * @param {{message: string, check: {problems?: Array<{code: string|null, message: string}>,
+ *   entries: Array<{collection: string, slug: string, locale?: string|null, editable: boolean,
+ *   issues?: Array<{path: string, message: string, accepted?: string[]}>}>}}} refusal
  * @returns {HTMLElement}
  */
 export function renderPublishProblems(refusal) {
@@ -180,12 +185,19 @@ export function renderPublishProblems(refusal) {
   intro.textContent = refusal.message;
   container.appendChild(intro);
 
+  for (const problem of refusal.check?.problems || []) {
+    const reason = document.createElement('p');
+    reason.className = 'publish-problem';
+    reason.textContent = problem.message;
+    container.appendChild(reason);
+  }
+
   const entries = refusal.check?.entries || [];
   if (entries.length > 0) {
     const list = document.createElement('ul');
     for (const entry of entries) {
       const item = document.createElement('li');
-      const label = `${entry.collection}/${entry.slug}`;
+      const label = `${entry.collection}/${entry.slug}${entry.locale ? ` (${entry.locale})` : ''}`;
       // Only an entry the server matched to an editor slug can be opened.
       if (entry.editable) {
         const link = document.createElement('a');
@@ -197,21 +209,20 @@ export function renderPublishProblems(refusal) {
       } else {
         item.textContent = label;
       }
+      const issues = entry.issues || [];
+      if (issues.length > 0) {
+        const issueList = document.createElement('ul');
+        for (const issue of issues) {
+          const issueItem = document.createElement('li');
+          const accepted = issue.accepted?.length ? ` Accepted: ${issue.accepted.join(', ')}.` : '';
+          issueItem.textContent = `${issue.path ? `${describeIssuePath(issue.path)}: ` : ''}${issue.message}${accepted}`;
+          issueList.appendChild(issueItem);
+        }
+        item.appendChild(issueList);
+      }
       list.appendChild(item);
     }
     container.appendChild(list);
-  }
-
-  if (refusal.check?.output) {
-    const details = document.createElement('details');
-    // Open when there is no entry to point at: the output is all there is.
-    details.open = entries.length === 0;
-    const summary = document.createElement('summary');
-    summary.textContent = "The site's build said";
-    const output = document.createElement('pre');
-    output.textContent = refusal.check.output;
-    details.append(summary, output);
-    container.appendChild(details);
   }
 
   return container;

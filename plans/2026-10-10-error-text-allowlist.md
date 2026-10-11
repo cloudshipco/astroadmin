@@ -67,3 +67,12 @@ Astro's raw output goes to the server log only. The same applies to the
 production build and the doctor's build output; build responses carry no
 configured command line, and a deploy response carries chosen status fields,
 not adapter output.
+
+Done (2026-10-11): `server/utils/build-failure.js` builds the refusal; the
+redactor (`redact-server-paths.js`) is deleted. Codes are read from Astro's
+`[Code]` / `Code:` lines; frontmatter YAML errors (js-yaml prints no code)
+and MDX syntax errors (a rule id such as `(mdx-jsx:...)`) are recognised by
+their own shape. Entries come only from the checked commit, and their
+validation reads the committed text (`git show`), not the live tree. One
+loss: Astro's MDX syntax error names no file, so the editor learns that an
+MDX entry is broken but not which one (the log has the line and column).

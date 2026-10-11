@@ -23,7 +23,7 @@ import { checkHeadWithAstro } from '../utils/astro-check.js';
 import { listSlugs } from '../utils/content.js';
 // Shared with the editor's "View live site" link (ui/ is served to the browser).
 import { resolveLiveUrl } from '../../ui/live-url.js';
-import { cleanCheckOutput } from '../utils/redact-server-paths.js';
+import { buildProblems } from '../utils/build-failure.js';
 
 const router = express.Router();
 // Conservative fallback for a malformed config; an explicitly-configured
@@ -146,9 +146,9 @@ export function pushFailureBody({ committed = false, commitResult = null } = {})
 }
 
 /**
- * Astro names a refused entry by its own ID, which is not always the editor's
- * slug (a locale file home.fr.md has the ID "homefr"). Only an ID that is an
- * existing slug of its collection can be opened from the refusal.
+ * A refused entry is opened from the refusal only when it is an existing slug
+ * of its collection (build-failure.js resolves Astro's ids, such as "homefr"
+ * for home.fr.md, to the editor's slug and locale when it can).
  */
 async function markEditableEntries(entries) {
   const marked = [];
@@ -166,6 +166,8 @@ async function markEditableEntries(entries) {
 
 /** Response body for a push the content check refused. */
 export async function checkRefusalBody(check, { committed = false, commitResult = null } = {}) {
+  const problems = (check.problems || []).map(({ code, message }) => ({ code, message }));
+  const entries = await markEditableEntries(check.entries || []);
   return {
     success: false,
     committed,
@@ -175,11 +177,32 @@ export async function checkRefusalBody(check, { committed = false, commitResult 
     message: committed
       ? 'Your changes are saved and committed, but were not published: the site would not build with them.'
       : 'Nothing was published: the site would not build with the current content.',
-    // checkHeadWithAstro cleans its output against the directories it knows;
-    // this is the last stop before the client, so output that still names a
-    // server path is replaced here too.
-    check: { commit: check.commit, output: cleanCheckOutput(check.output, [], { label: 'A publish refusal' }), entries: await markEditableEntries(check.entries) },
+    // Structured parts only (build-failure.js): no text of the build's output.
+    check: {
+      commit: check.commit,
+      problems,
+      entries,
+      // The same, as plain text, for a client that shows one block of text.
+      output: refusalText(problems, entries),
+    },
   };
+}
+
+/**
+ * A refusal as plain text: the problems, then each entry with its issues.
+ * @param {Array<{message: string}>} problems
+ * @param {Array<{collection: string, slug: string, locale?: string|null, issues?: Array}>} entries
+ */
+export function refusalText(problems, entries) {
+  const lines = problems.map((problem) => problem.message);
+  for (const entry of entries) {
+    lines.push(`${entry.collection}/${entry.slug}${entry.locale ? ` (${entry.locale})` : ''}`);
+    for (const issue of entry.issues || []) {
+      const accepted = issue.accepted ? ` Accepted: ${issue.accepted.join(', ')}.` : '';
+      lines.push(`  ${issue.path || '(the entry)'}: ${issue.message}${accepted}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function commitInfo(commitResult) {
@@ -285,7 +308,7 @@ export async function publishHandler(req, res) {
     let deployResult = null;
 
     if (deployConfig?.adapter) {
-      buildResult = redactBuildResult(await runProductionBuild(), [fullConfig.paths.projectRoot]);
+      buildResult = buildResultForEditor(await runProductionBuild());
 
       if (!buildResult.success) {
         return res.json({
@@ -301,7 +324,7 @@ export async function publishHandler(req, res) {
       }
 
       try {
-        deployResult = await deploy(deployConfig, fullConfig.paths.projectRoot);
+        deployResult = deployResultForEditor(await deploy(deployConfig, fullConfig.paths.projectRoot));
         console.log('✅ Deployment completed');
       } catch (deployError) {
         // The adapter's message can carry server paths and command lines.
@@ -341,24 +364,37 @@ export async function publishHandler(req, res) {
 const DEPLOY_FAILED_MESSAGE = 'The deployment failed; see the server log.';
 
 /**
- * A production build's result as the editor may see it: its output and error
- * text through cleanCheckOutput (the project root removed; text that names
- * any other server path replaced by a fixed message and logged in full).
- * @param {{output?: string, error?: string}|null} buildResult
- * @param {string[]} roots - the directories to remove (the project root)
+ * A production build's result as the editor may see it: whether it worked,
+ * how long it took, and on failure a fixed error with the problems its
+ * output names as error codes (build-failure.js). The output itself is in
+ * the server log (build.js logs it), never in the response.
+ * @param {{success: boolean, duration?: number, output?: string, error?: string}|null} buildResult
  */
-export function redactBuildResult(buildResult, roots = []) {
+export function buildResultForEditor(buildResult) {
   if (!buildResult) return buildResult;
-  const redacted = { ...buildResult };
-  for (const key of ['output', 'error']) {
-    if (typeof redacted[key] === 'string') {
-      redacted[key] = cleanCheckOutput(redacted[key], roots, {
-        label: 'The production build',
-        hiddenMessage: 'The build failed; its output is in the server log.',
-      });
-    }
+  const forEditor = { success: buildResult.success, duration: buildResult.duration };
+  if (!buildResult.success) {
+    // build.js sets only sentences of ours (a failed command, astro missing).
+    forEditor.error = buildResult.error || 'The build failed; see the server log.';
+    if (buildResult.output) forEditor.problems = buildProblems(buildResult.output);
   }
-  return redacted;
+  return forEditor;
+}
+
+/**
+ * A deployment's result as the editor may see it: chosen status fields only.
+ * An adapter's output names its destination (rsync's "created directory
+ * /srv/..."), so it is logged, never returned.
+ * @param {Object|null} deployResult - deploy() result
+ */
+export function deployResultForEditor(deployResult) {
+  if (!deployResult) return deployResult;
+  if (deployResult.output) console.log(`Deployment output (${deployResult.adapter || 'no adapter'}):\n${deployResult.output}`);
+  const forEditor = { success: deployResult.success === true };
+  if (typeof deployResult.adapter === 'string') forEditor.adapter = deployResult.adapter;
+  if (typeof deployResult.dryRun === 'boolean') forEditor.dryRun = deployResult.dryRun;
+  if (deployResult.skipped === true) forEditor.skipped = true;
+  return forEditor;
 }
 
 /**

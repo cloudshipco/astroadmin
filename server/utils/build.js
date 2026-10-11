@@ -13,6 +13,11 @@ const execAsync = promisify(exec);
 
 /**
  * Run the production build for deployment.
+ *
+ * `output` is the build's raw output, for the server (it is logged here):
+ * it names server paths, so a response carries publish.js
+ * buildResultForEditor() of this result, never the result itself. `error` is
+ * always a sentence we wrote.
  * @returns {Promise<{success: boolean, duration: number, output?: string, error?: string}>}
  */
 export async function runProductionBuild() {
@@ -43,7 +48,7 @@ export async function runProductionBuildIn(fullConfig, projectRoot) {
     });
 
     const duration = Date.now() - startTime;
-    console.log(`✅ Production build completed in ${duration}ms`);
+    console.log(`✅ Production build completed in ${duration}ms. Its output:\n${stdout}${stderr}`);
 
     return {
       success: true,
@@ -52,7 +57,7 @@ export async function runProductionBuildIn(fullConfig, projectRoot) {
     };
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error('❌ Production build failed:', error.message);
+    console.error(`❌ Production build failed: ${error.message}\nIts output:\n${error.stdout || ''}${error.stderr || ''}`);
 
     return {
       success: false,

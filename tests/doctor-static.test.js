@@ -374,7 +374,7 @@ export default defineConfig({ integrations: [astroadmin()], ${VITE} });
     assert.ok(importsPromises('server/config.js'), 'the import pattern no longer matches a real fs/promises import');
     const doctorFiles = fs.readdirSync(path.join(repoRoot, 'server/doctor')).filter((name) => name.endsWith('.js')).map((name) => `server/doctor/${name}`);
     assert.ok(doctorFiles.length >= 8, `expected the doctor modules, found ${doctorFiles.length}`);
-    const offenders = [...doctorFiles, 'server/utils/astro-check.js', 'server/utils/astro-bin.js', 'server/utils/redact-server-paths.js'].filter(importsPromises);
+    const offenders = [...doctorFiles, 'server/utils/astro-check.js', 'server/utils/astro-bin.js', 'server/utils/build-failure.js'].filter(importsPromises);
     assert.deepStrictEqual(offenders, []);
   });
 } finally {

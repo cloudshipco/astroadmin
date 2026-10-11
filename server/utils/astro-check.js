@@ -34,7 +34,7 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 import { ASTRO_NOT_INSTALLED_MESSAGE, DEFAULT_BUILD_ARGS, defaultAstroCommand } from './astro-bin.js';
-import { cleanCheckOutput } from './redact-server-paths.js';
+import { buildProblems, describeRefusedEntries } from './build-failure.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -46,34 +46,16 @@ const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
  * @typedef {Object} AstroCheckResult
  * @property {boolean} success
  * @property {string} commit - the SHA that was checked
- * @property {string} output - the command's output, cleaned for an editor to read
- * @property {Array<{collection: string, slug: string}>} entries - entries Astro named as invalid (Astro IDs)
+ * @property {Array<{code: string|null, message: string}>} problems - why, in sentences we wrote
+ *   (build-failure.js); empty on success. No text of the build's output.
+ * @property {Array<import('./build-failure.js').RefusedEntry>} entries - the entries the build
+ *   refused, each with AstroAdmin's own validation of it at the checked commit
+ * @property {string} rawOutput - the command's raw output (or our failure's detail),
+ *   for the server and tests ONLY: it names server paths, so no response may carry it
  */
 
 // The admin's own secrets and settings, which the site's build has no use for.
 const ADMIN_ENV_PATTERN = /^(ASTROADMIN_|ADMIN_|SESSION_SECRET$)/;
-
-// cleanCheckOutput lives in redact-server-paths.js; re-exported for its callers.
-export { cleanCheckOutput };
-
-/**
- * Entries named in Astro's errors, e.g.
- * "[InvalidContentEntryDataError] pages → home data does not match collection schema."
- * These are Astro IDs, which are not always the editor's slugs.
- * @param {string} output
- * @returns {Array<{collection: string, slug: string}>}
- */
-export function parseInvalidEntries(output) {
-  const entries = [];
-  const seen = new Set();
-  for (const match of output.matchAll(/\[InvalidContentEntryDataError\]\s+(\S+)\s+→\s+(\S+)/g)) {
-    const key = `${match[1]}/${match[2]}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    entries.push({ collection: match[1], slug: match[2] });
-  }
-  return entries;
-}
 
 async function realpathOrNull(target) {
   try {
@@ -269,16 +251,21 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
   const timeoutMs = fullConfig.build?.checkTimeoutMs || DEFAULT_CHECK_TIMEOUT_MS;
   let commit = '';
   let tempDir = null;
-  const serverPaths = [projectRoot, await realpathOrNull(projectRoot)];
+  let siteDirs = [];
 
-  // A refusal reaches the editor (publish.js checkRefusalBody): Astro's
-  // output with the known directories removed or, if it names any other
-  // server path (an external git directory, say), a fixed message, with the
-  // output in the server log. Entries are Astro IDs, read from the original.
-  const fail = (output) => {
-    console.error(`❌ Content check failed for ${commit.slice(0, 7) || 'HEAD'}`);
-    const cleaned = cleanCheckOutput(output, serverPaths, { label: 'The publish check' });
-    return { success: false, commit, output: cleaned.slice(-4000), entries: parseInvalidEntries(String(output)) };
+  // A refusal reaches the editor (publish.js checkRefusalBody), so it is
+  // built from structured parts only (build-failure.js): the error codes in
+  // the output as sentences we wrote, and the entries it refused with our
+  // own validation of each. The output itself goes to the server log.
+  const failBuild = async (output) => {
+    console.error(`❌ Content check failed for ${commit.slice(0, 7) || 'HEAD'}. The build's output:\n${output}`);
+    const entries = await describeRefusedEntries({ output, siteDirs, projectRoot, commit, fullConfig });
+    return { success: false, commit, problems: buildProblems(output), entries, rawOutput: String(output) };
+  };
+  // A refusal of ours, in a sentence we wrote (logged with any detail).
+  const fail = (message, detail = '') => {
+    console.error(`❌ Content check failed for ${commit.slice(0, 7) || 'HEAD'}: ${message}${detail ? `\n${detail}` : ''}`);
+    return { success: false, commit, problems: [{ code: null, message }], entries: [], rawOutput: detail };
   };
 
   try {
@@ -286,10 +273,8 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     // A site in a subdirectory of its repo (monorepo `subdir`) sits at the same
     // place inside the worktree.
     const { realRepoTop, siteSubdir } = await locateSite(projectRoot);
-    serverPaths.push(realRepoTop);
 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-check-'));
-    serverPaths.push(tempDir, await realpathOrNull(tempDir));
     const worktreeDir = path.join(tempDir, 'worktree');
     await git(projectRoot, ['worktree', 'add', '--detach', worktreeDir, commit]);
 
@@ -302,11 +287,11 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     // node_modules can live in the site's directory or any directory above it
     // up to the repository root (hoisted monorepo installs); mirror each one.
     const siteDir = path.join(worktreeDir, siteSubdir);
+    // Where the build names the commit's files (Location: lines), so a refused
+    // file can be matched to its entry.
+    siteDirs = [siteDir, path.join(await realpathOrNull(tempDir), 'worktree', siteSubdir)];
     for (const { relativeDir, liveNodeModules } of nodeModulesLevels(realRepoTop, siteSubdir)) {
       if (!(await exists(liveNodeModules))) continue;
-      // Linked in, so known: Vite names files in it by their resolved path
-      // (an Astro error's `Location:` inside astro's own code).
-      serverPaths.push(await realpathOrNull(liveNodeModules));
       const workspaceLink = await findWorkspaceLink(liveNodeModules, realRepoTop);
       if (workspaceLink) {
         return fail(`This site depends on a workspace package (${workspaceLink}) inside its own repository, which the publish check does not support, so nothing was pushed.`);
@@ -327,10 +312,10 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     console.log(`🔎 Checking ${commit.slice(0, 7)} with: ${command}`);
     const result = await runCommand(command, siteDir, timeoutMs, buildEnvironment());
     if (result.timedOut) {
-      return fail(`${result.output}\nThe check did not finish within ${Math.round(timeoutMs / 1000)} seconds.`);
+      return fail(`The check did not finish within ${Math.max(1, Math.round(timeoutMs / 1000))} seconds, so nothing was pushed.`, result.output);
     }
     if (result.exitCode !== 0) {
-      return fail(result.output);
+      return await failBuild(result.output);
     }
     if (onBuilt) {
       try {
@@ -339,9 +324,12 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
         console.error('After-check hook failed (ignored):', error.message);
       }
     }
-    return { success: true, commit, output: cleanCheckOutput(result.output, serverPaths, { label: 'The publish check', hiddenMessage: 'The publish check passed; its output is in the server log.' }).slice(-4000), entries: [] };
+    console.log(`✅ Content check passed for ${commit.slice(0, 7)}`);
+    return { success: true, commit, problems: [], entries: [], rawOutput: result.output };
   } catch (error) {
-    return fail(`${error.stdout || ''}${error.stderr || ''}` || error.message);
+    // git or the file system, not the build: nothing in it is the editor's to fix.
+    return fail('The publish check could not run, so nothing was pushed; see the server log.',
+      `${error.stack || error.message}\n${error.stdout || ''}${error.stderr || ''}`);
   } finally {
     // Deleting the directory and pruning removes the worktree and git's record of it.
     if (tempDir) {

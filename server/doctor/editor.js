@@ -16,7 +16,7 @@ import express from 'express';
 import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { cleanCheckOutput } from '../utils/redact-server-paths.js';
+import fs from 'fs';
 import { RESULT_MARKER, outDirFor } from './editor-scan.js';
 import { bunExecutable } from '../utils/astro-bin.js';
 
@@ -57,17 +57,39 @@ function bounded(text, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+/** What a check's text becomes if it names the scan's own directories. */
+const NAMED_SERVER_PATH_MESSAGE = 'This detail named a server path; see the server log.';
+
 /**
- * A check's message or detail for the API: through cleanCheckOutput (the
- * check's worktree and the project root removed; page paths such as
- * /services/a are the site's, and stay; text naming any other server path
- * is replaced and logged), bounded.
+ * A check's message or detail for the API, bounded. The built-HTML checks
+ * write their own sentences from page paths (/services/a), entry slugs and
+ * field names; no build output is in them. As a guard against a check that
+ * one day interpolates a directory, text containing the check's worktree or
+ * the project root (exactly, or resolved) is replaced and logged. Nothing is
+ * guessed: page paths such as /home/about stay.
  */
 function textForApi(text, serverPaths) {
-  return bounded(cleanCheckOutput(String(text), serverPaths, {
-    label: 'A doctor check',
-    hiddenMessage: 'This detail named a server path; see the server log.',
-  }), MAX_TEXT_LENGTH);
+  const value = String(text);
+  if (serverPaths.some((directory) => value.includes(directory))) {
+    console.error(`A doctor check's text named a server directory, so the editor was shown "${NAMED_SERVER_PATH_MESSAGE}". The text:\n${value}`);
+    return NAMED_SERVER_PATH_MESSAGE;
+  }
+  return bounded(value, MAX_TEXT_LENGTH);
+}
+
+/** Directories, with their resolved paths; never `/`. */
+function knownDirectories(directories) {
+  const known = new Set();
+  for (const directory of directories.filter(Boolean)) {
+    known.add(path.resolve(directory));
+    try {
+      known.add(fs.realpathSync(directory));
+    } catch {
+      // gone
+    }
+  }
+  known.delete(path.sep);
+  return [...known];
 }
 
 /**
@@ -130,9 +152,8 @@ export async function recordDoctorAfterCheck(fullConfig, build, { timeoutMs = DE
   const record = (result) => {
     if (generation === scanGeneration) latestResult = { commit: build.commit, checkedAt, durationMs: Date.now() - startedAt, ...result };
   };
-  // The check's worktree and the project root (cleanCheckOutput adds their
-  // resolved paths).
-  const serverPaths = [build.siteDir, fullConfig.paths?.projectRoot];
+  // The check's worktree and the project root, which textForApi refuses.
+  const serverPaths = knownDirectories([build.siteDir, fullConfig.paths?.projectRoot]);
   // The reason is one of the fixed texts below; the error goes to the log.
   const unavailable = (logMessage, reason) => {
     console.warn(`Doctor scan unavailable: ${logMessage}`);

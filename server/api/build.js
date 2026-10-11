@@ -7,8 +7,8 @@ import express from 'express';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { config, getConfig, IS_DEV } from '../config.js';
-import { DEFAULT_BUILD_ARGS, resolveBuildCommand } from '../utils/astro-bin.js';
-import { cleanCheckOutput } from '../utils/redact-server-paths.js';
+import { resolveBuildCommand } from '../utils/astro-bin.js';
+import { buildProblems } from '../utils/build-failure.js';
 
 const execAsync = promisify(exec);
 const router = express.Router();
@@ -23,22 +23,19 @@ async function buildCommandFor(kind) {
   return resolveBuildCommand(fullConfig.build?.[kind], kind, config.paths.projectRoot);
 }
 
-/** What the status endpoint shows for a build: the configured command, or the default's description. */
-async function describeBuildCommand(kind) {
-  const fullConfig = await getConfig();
-  return fullConfig.build?.[kind] || `astro ${DEFAULT_BUILD_ARGS[kind].join(' ')} (the site's installed astro)`;
-}
-
-/** A build's output for the editor: cleanCheckOutput against the project root. */
-function buildOutputForEditor(text) {
-  return cleanCheckOutput(text || '', [config.paths.projectRoot], {
-    label: 'A build',
-    hiddenMessage: 'The build output is in the server log.',
-  });
+/**
+ * What a response says a build runs: a fixed description. Not the configured
+ * command line, which can name a script by its server path.
+ * @param {'staging'|'production'} kind
+ */
+function describeBuildCommand(kind) {
+  return `the site's ${kind} build`;
 }
 
 /**
- * Execute build command
+ * Run a build. The result carries no output: a build's output names server
+ * paths, so it goes to the server log, and a failure carries a fixed error
+ * plus the problems its output names as error codes (build-failure.js).
  */
 async function runBuild(kind, label) {
   console.log(`🔨 Starting ${label} build...`);
@@ -56,26 +53,20 @@ async function runBuild(kind, label) {
     });
 
     const duration = Date.now() - startTime;
-    console.log(`✅ ${label} build completed in ${duration}ms`);
+    console.log(`✅ ${label} build completed in ${duration}ms. Its output:\n${stdout}${stderr}`);
 
-    return {
-      success: true,
-      duration,
-      stdout: buildOutputForEditor(stdout).slice(-1000), // Last 1000 chars
-      stderr: buildOutputForEditor(stderr).slice(-1000),
-    };
+    return { success: true, duration };
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error(`❌ ${label} build failed:`, error.message);
+    const output = `${error.stdout || ''}${error.stderr || ''}`;
+    console.error(`❌ ${label} build failed: ${error.message}\nIts output:\n${output}`);
 
     return {
       success: false,
       duration,
-      // Not error.message: it is `Command failed: <resolved command line>`,
-      // which holds server paths. The output says why.
-      error: 'The build command failed.',
-      stdout: buildOutputForEditor(error.stdout).slice(-1000),
-      stderr: buildOutputForEditor(error.stderr).slice(-1000),
+      // Not error.message: it is `Command failed: <resolved command line>`.
+      error: 'The build failed; its output is in the server log.',
+      problems: buildProblems(output),
     };
   }
 }
@@ -102,8 +93,7 @@ router.post('/staging', async (req, res) => {
       message: result.success
         ? 'Staging build completed successfully'
         : 'Staging build failed',
-      // The description, not the resolved command line, which holds server paths.
-      command: await describeBuildCommand('staging'),
+      command: describeBuildCommand('staging'),
     });
   } catch (error) {
     console.error('Error triggering staging build:', error);
@@ -128,7 +118,7 @@ router.post('/production', async (req, res) => {
       message: result.success
         ? 'Production build completed successfully'
         : 'Production build failed',
-      command: await describeBuildCommand('production'),
+      command: describeBuildCommand('production'),
     });
   } catch (error) {
     console.error('Error triggering production build:', error);
@@ -150,12 +140,12 @@ router.get('/status', async (req, res) => {
       success: true,
       environment: IS_DEV ? 'development' : 'production',
       staging: {
-        command: await describeBuildCommand('staging'),
+        command: describeBuildCommand('staging'),
         previewUrl: config.preview.url,
         method: config.preview.method,
       },
       production: {
-        command: await describeBuildCommand('production'),
+        command: describeBuildCommand('production'),
       },
     });
   } catch (error) {
