@@ -107,8 +107,10 @@ by `config.git.paths`) and pushes. A host that builds on push, such as Netlify,
 Cloudflare Pages or GitHub Pages via Actions, then rebuilds the site.
 
 Before pushing, AstroAdmin builds that exact commit with the site's own
-installed Astro. If the build fails, the commit stays local and the editor
-sees Astro's error, so content your schema rejects never reaches the host.
+installed Astro. If the build fails, the commit stays local and the editor is
+told why in plain terms: the kind of error and, where it can be confirmed, the
+entry and field to fix. Astro's full output goes to the server log. Content
+your schema rejects never reaches the host.
 See [the pre-push build check](./docs/configuration.md#the-pre-push-build-check).
 
 Images picked for an `image()` field are stored in

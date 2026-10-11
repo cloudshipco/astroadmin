@@ -146,8 +146,12 @@ commit from the changes panel push too; Publish always pushes.
 
 Before pushing, Publish builds exactly the commit it is about to push, in a
 temporary git worktree. If the build fails, nothing is pushed: the commit
-stays local and the editor shows Astro's error. This stops content the
-schema rejects from reaching the host.
+stays local. The editor is told the kind of error in a plain sentence (an
+entry that does not match its schema, a missing image file, invalid YAML or
+MDX), and for each entry that can be confirmed from the commit, which fields
+are wrong and what values are accepted. Astro's own output, which can name
+server paths, goes to the server log only. This stops content the schema
+rejects from reaching the host.
 
 The check runs `build.check` if set, else `build.production`, else the site's
 own installed Astro (`astro build`, under Bun with automatic installs turned
