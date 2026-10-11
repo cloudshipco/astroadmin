@@ -97,8 +97,9 @@ await check('the publish check refuses when the site has no astro, and runs no p
   const result = await checkHeadWithAstro({ ...fullConfig, paths: { ...fullConfig.paths, projectRoot: bare } });
   assert.equal(runnerCalls(), '', `a package runner was spawned: ${runnerCalls()}`);
   assert.equal(result.success, false);
-  assert.ok(result.output.includes(ASTRO_NOT_INSTALLED_MESSAGE), `refusal names the cause: ${result.output}`);
-  assert.ok(!result.output.includes(tempRoot), 'no server path in the refusal');
+  const refusal = result.problems.map((problem) => problem.message).join('\n');
+  assert.ok(refusal.includes(ASTRO_NOT_INSTALLED_MESSAGE), `refusal names the cause: ${refusal}`);
+  assert.ok(!refusal.includes(tempRoot), 'no server path in the refusal');
 });
 
 await check('the production build refuses when the site has no astro, and runs no package runner', async () => {
@@ -136,15 +137,15 @@ await check('the publish check builds with the installed astro when node_modules
     },
   );
   assert.equal(runnerCalls(), '', `a package runner was spawned: ${runnerCalls()}`);
-  assert.equal(result.success, true, result.output);
+  assert.equal(result.success, true, result.rawOutput);
   assert.ok(builtHtml && builtHtml.includes('built-by-the-site-astro'), 'the build ran and wrote the page');
 });
 
 await check('a configured check command is left alone', async () => {
   const fullConfig = await getConfig();
   const result = await checkHeadWithAstro({ ...fullConfig, paths: { ...fullConfig.paths, projectRoot: bare }, build: { check: 'echo custom-check' } });
-  assert.equal(result.success, true, result.output);
-  assert.equal(result.output, 'custom-check');
+  assert.equal(result.success, true, result.rawOutput);
+  assert.equal(result.rawOutput.trim(), 'custom-check');
 });
 
 await check('the default command quotes paths and keeps its fixed arguments plain', async () => {
