@@ -102,11 +102,20 @@ BUILD output is no exception: no text of it reaches a response either
 (`server/utils/build-failure.js`). The publish check's 422 is built from structured parts:
 the error CODES in the output (`[ImageNotFound]`, `InvalidContentEntryDataError`, a bare
 identifier) mapped to sentences we wrote (`describeCode`; an unknown code reads "Astro refused
-the build (<code>); see the server log"; none, a fixed sentence); the refused ENTRIES, which
-are only ever ones found in the checked commit (Astro ids, `Location:` files under the check's
-own site directory, files whose committed text holds a missing image path); and for each
-entry, AstroAdmin's own validation of its text AT THE CHECKED COMMIT (`git show`, then
-`validateCommittedText`: field paths, messages, `accepted` values). A production build and
+the build (<code>); see the server log"; none, a fixed sentence); the refused ENTRIES; and for
+each entry, AstroAdmin's own validation of its text AT THE CHECKED COMMIT (`git cat-file`,
+then `validateCommittedText` against the commit's OWN schemas, parsed from the check's
+worktree and never through the live schema cache: field paths, messages, `accepted` values).
+An entry is named only when it is CONFIRMED in the checked commit, else the editor gets the
+code's sentence and no entry: a `Location:` under the check's site directory that is a
+committed regular file of a collection (and, inside an id error, of THAT collection; it wins
+over the id); an Astro id (whole, up to "data does not match", so `Jane Doe` keeps its space)
+that exactly one committed entry has, with a frontmatter `slug` overriding the file name as
+in Astro's glob loader, and a `file()` item by `(id ?? slug)`; or, for `[ImageNotFound]`, an
+entry whose OWN image reference (an `image()` field, or a markdown body image as the site's
+own markdown processor collects it) is that path and resolves `./`/`../` from the entry to a
+path absent from the commit. When the commit's schemas cannot be loaded (20 s cap), entries
+are listed with `validation: 'unchecked'` and no schema issues, never the live schema's. A production build and
 the build routes return status plus the same code sentences; build responses describe the
 command ("the site's production build"), never the configured command line; a deploy
 response carries chosen status fields (`deployResultForEditor`), never adapter output. The
@@ -161,7 +170,9 @@ runner aggregating them). Most run server-less and need env vars:
   `file()` items, an EMPTY required `image()` — the bundled stand-in is `z.string()`, so ''
   passes it while the build refuses it; an empty optional image is not reported), that
   `z.coerce.date()` is `format: 'date'` in a `glob()` and a `file()` collection, and that a
-  save still writes invalid content and reports why.
+  save still writes invalid content and reports why. Also: a bigint literal's accepted value
+  (`1n`) formats without throwing, a YAML error's line is the FILE's line, and with no
+  schemas at the commit nothing is checked against a schema.
 - `bun tests/save-body.test.js` — a markdown entry's body survives a save: the editor shows
   the body whatever the schema (it used to hide it when the schema had `blocks`, and the save
   then wrote `body: ''`), the save payload carries `body` only when the form shows one
@@ -186,11 +197,18 @@ runner aggregating them). Most run server-less and need env vars:
   YAML (our parser's line), plus a locale file (`homefr` -> `home (fr)`), a nested id, a data
   entry's invalid JSON, and an entry fixed on disk but not in the commit (the commit is what
   is reported). Each: no server path or Astro text in the body, and the raw output in the
-  server log. ~25 s.
+  server log. Then WHICH entries are blamed, each with a negative control (the healthy entry
+  is not listed): a missing image only on the entry whose own folder lacks it (not a sibling
+  folder's entry that has it, not prose or code naming it), a `slug:` that is another file's
+  name, the same with no `Location:` line, a shared id (glob and `file()`) naming nobody, a
+  `file()` id with a space, a loader's own `generateId` (the Location wins), the commit's
+  schema rather than a relaxed uncommitted live one (and the live cache left untouched), and
+  a file the build generated (not committed) listing nothing. ~50 s.
 - `bun tests/build-failure.test.js` — `server/utils/build-failure.js` on captured Astro 7 output
   (colour codes kept, paths swapped for `/srv`): codes, sentences, unknown and absent codes,
   bracketed paths that are not codes, entry keys (a `Location:` in a sibling such as
-  `<site>,backup` or a `../` climb is not the site), Astro's glob id for a file, and every
+  `<site>,backup` or a `../` climb is not the site; an id keeps its own error's Location and
+  no later error's), Astro's glob id for a file (a data `slug` wins), and every
   review-round leak shape producing no path. <1 s.
 - `bun tests/build-deploy-responses.test.js` — over HTTP: `/api/build/status` and
   `/api/build/production` describe the build instead of the configured command (a script with
@@ -331,7 +349,8 @@ runner aggregating them). Most run server-less and need env vars:
   `component-preview/` at the START of the path, checked with and without a `base` (a
   second dev() on the next port). ~15 s; `COMPONENT_PREVIEW_PORT` overrides the port.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
-  their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel.
+  their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel
+  (a link opens the translation it names: `pages/home (fr)` selects French first).
 - `bun tests/date-round-trip.test.js` — a date-time through render -> `extractFormData` ->
   serialiser, three saves in a row, for a JSON `file()` entry and a markdown entry, in
   Europe/London, America/New_York and UTC (one child process per zone, each proving its

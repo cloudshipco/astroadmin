@@ -12,23 +12,33 @@
  * - the error CODES found in it (an identifier such as `ImageNotFound`, read
  *   from Astro's `[Code]` / `Code:` lines and checked to be a bare
  *   identifier), each mapped to a sentence we wrote (describeCode);
- * - the ENTRIES it refused, as collection and slug: Astro's own ids, files
- *   named in its `Location:` lines (only under the site's own directory, and
- *   only when the file is a collection's entry), and entries whose committed
- *   content holds an image path Astro could not find;
- * - for each entry, AstroAdmin's own reading of it at the checked commit
- *   (content-validation.js): field paths, messages, accepted values.
+ * - the ENTRIES it refused, as collection and slug, each only when it is
+ *   CONFIRMED in the checked commit (describeRefusedEntries): a `Location:`
+ *   file that is a committed entry, an id exactly one committed entry has,
+ *   or an entry whose own image reference resolves to a path the commit
+ *   lacks. Otherwise no entry is named, and the code's sentence stands alone;
+ * - for each entry, AstroAdmin's own reading of it at the checked commit,
+ *   against the commit's own schemas (content-validation.js): field paths,
+ *   messages, accepted values.
  *
  * The output itself goes to the server log (the caller logs it).
  *
  * Synchronous fs only, like the publish check that imports it (see CLAUDE.md:
  * Bun can lose an fs/promises completion while child processes come and go).
+ * One exception it cannot avoid: the commit's schemas are parsed by
+ * schema-parser.js, which uses fs/promises; that load is capped
+ * (SCHEMA_LOAD_TIMEOUT_MS), and on a timeout nothing is validated.
  */
 
-import { execFile } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import fs from 'fs';
+import { createRequire } from 'module';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import { promisify } from 'util';
+import {
+  fileLoaderItems, findImageFields, formatIssuePath, parseCommittedText, validateCommittedText,
+} from './content-validation.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -124,36 +134,61 @@ export function buildProblems(output) {
 }
 
 /**
- * What the output says about entries, as raw keys to resolve later: Astro
- * ids (`[InvalidContentEntryDataError] pages → home`), files named in
- * `Location:` lines, and image paths Astro could not find. None of these is
- * shown; each is only matched against the site's own entries.
+ * What the output says about entries, as raw keys to resolve later. None of
+ * these is shown; each is only matched against the commit's own entries.
+ *
+ * - ids: Astro's `[InvalidContentEntryDataError] <collection> → <id> data does
+ *   not match collection schema.` The id runs to that suffix, so it may hold
+ *   spaces (a file() item named `Jane Doe`). When the same error names a file
+ *   in its `Location:` (Astro does, for a glob entry and a file() collection's
+ *   file), that file is kept with the id: it is Astro's own word for which file.
+ * - files: the other `Location:` files, under the site's directory only.
+ * - images: the paths in `[ImageNotFound]` messages, exactly as the entry wrote them.
+ *
  * @param {string} output
  * @param {string[]} siteDirs - the site's directory in the check (and its resolved path)
- * @returns {{ids: Array<{collection: string, id: string}>, files: string[], images: string[]}}
+ * @returns {{ids: Array<{collection: string, id: string, file: string|null}>, files: string[], images: string[]}}
  */
 export function parseFailureKeys(output, siteDirs = []) {
-  const text = stripAnsi(output);
+  const lines = stripAnsi(output).split('\n');
+  const roots = [...new Set(siteDirs.filter(Boolean))].sort((a, b) => b.length - a.length);
+  const siteRelative = (located) => {
+    const root = roots.find((directory) => located.startsWith(`${directory}${path.sep}`));
+    if (!root) return null;
+    const relative = located.slice(root.length + 1).split(path.sep).join('/');
+    return relative.split('/').includes('..') ? null : relative;
+  };
+
   const ids = [];
-  for (const match of text.matchAll(/^\[(?:InvalidContentEntryDataError|ContentEntryDataError)\]\s+(\S+)\s+→\s+(\S+)/gm)) {
-    if (!ids.some((known) => known.collection === match[1] && known.id === match[2])) {
-      ids.push({ collection: match[1], id: match[2] });
+  const files = [];
+  const images = [];
+  let current = null; // the id error whose block we are in
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    // An error's own lines are indented; an unindented line starts another.
+    if (/^\S/.test(line)) current = null;
+    const id = /^\[(?:InvalidContentEntryDataError|ContentEntryDataError)\]\s+(.+?) → (.+?) data does not match collection schema\.?\s*$/.exec(line);
+    if (id) {
+      current = ids.find((known) => known.collection === id[1] && known.id === id[2]);
+      if (!current) {
+        current = { collection: id[1], id: id[2], file: null };
+        ids.push(current);
+      }
+      continue;
+    }
+    const image = /^\[ImageNotFound\][^`\n]*`([^`\n]+)`/.exec(line);
+    if (image && !images.includes(image[1])) images.push(image[1]);
+    if (/^\s*Location:\s*$/.test(line)) {
+      const where = /^\s*(?:file:\/\/)?(.+?):\d+:\d+\s*$/.exec(lines[index + 1] ?? '');
+      const relative = where ? siteRelative(where[1]) : null;
+      if (!relative) continue;
+      if (current && current.file === null) current.file = relative;
+      else if (!files.includes(relative)) files.push(relative);
     }
   }
-  const files = [];
-  const roots = [...new Set(siteDirs.filter(Boolean))].sort((a, b) => b.length - a.length);
-  for (const match of text.matchAll(/^\s*Location:\s*\n\s*(?:file:\/\/)?(.+?):\d+:\d+\s*$/gm)) {
-    const located = match[1];
-    const root = roots.find((directory) => located.startsWith(`${directory}${path.sep}`));
-    if (!root) continue;
-    const relative = located.slice(root.length + 1).split(path.sep).join('/');
-    if (!relative.split('/').includes('..') && !files.includes(relative)) files.push(relative);
-  }
-  const images = [];
-  for (const match of text.matchAll(/^\[ImageNotFound\][^`\n]*`([^`\n]+)`/gm)) {
-    if (!images.includes(match[1])) images.push(match[1]);
-  }
-  return { ids, files, images };
+  // A file paired with an id is not listed again on its own.
+  const paired = new Set(ids.map((entry) => entry.file).filter(Boolean));
+  return { ids, files: files.filter((file) => !paired.has(file)), images };
 }
 
 /** Lower-case, drop what github-slugger drops, spaces to hyphens: Astro's glob id for a path segment. */
@@ -163,8 +198,8 @@ function slugifySegment(segment) {
 
 /**
  * Astro's default id for a glob entry's file (relative to its base): each
- * path segment slugified, the extension dropped. An entry with a `slug` in
- * its frontmatter has that id instead, which is matched separately.
+ * path segment slugified, the extension dropped. An entry whose data has a
+ * `slug` has that id instead (globEntryId).
  */
 export function astroIdForFile(relativeFile) {
   const withoutExtension = relativeFile.slice(0, relativeFile.length - path.extname(relativeFile).length);
@@ -172,15 +207,46 @@ export function astroIdForFile(relativeFile) {
 }
 
 /**
- * Resolve a failure's keys to entries, and read each one at the checked
- * commit with AstroAdmin's own validator. Never throws: an entry that cannot
- * be read is listed without issues (and the reason logged).
+ * The id Astro's glob loader gives an entry (generateIdDefault in
+ * astro/dist/content/loaders/glob.js): its data's `slug` when that is truthy,
+ * else the id from its path. null when the data cannot be read, since then
+ * Astro assigns it no id either. A loader's own `generateId` is not known
+ * here; a Location line still identifies such an entry.
+ * @param {string} inner - the file relative to the collection's base
+ * @param {string} text - its committed text
+ */
+export function globEntryId(inner, text) {
+  const parsed = parseCommittedText(inner, text);
+  if (parsed.issue) return null;
+  const slug = parsed.data && typeof parsed.data === 'object' ? parsed.data.slug : undefined;
+  return slug ? String(slug) : astroIdForFile(inner);
+}
+
+/** The file's extensions the id lookup can read (markdown frontmatter, JSON). */
+const READABLE_ENTRY = /\.(?:md|mdx|markdown|json)$/i;
+
+/** Body images can only be read in markdown: MDX is compiled by its own pipeline. */
+const MARKDOWN_BODY = /\.(?:md|markdown)$/i;
+
+/** How long the commit's content config may take to load before it is given up. */
+const SCHEMA_LOAD_TIMEOUT_MS = 20000;
+
+/**
+ * Resolve a failure's keys to entries of the checked commit, and read each one
+ * there with AstroAdmin's own validator. An entry is listed only when it is
+ * CONFIRMED: a Location naming a regular file committed in a collection, an id
+ * that exactly one committed entry has, or an image reference of the entry's
+ * own that resolves to a path absent from the commit. Anything less lists no
+ * entry, and the editor reads only the code's sentence. Never throws.
  * @param {Object} options
  * @param {string} options.output - the failed build's output
  * @param {string[]} options.siteDirs - the site's directory in the check
  * @param {string} options.projectRoot - the live site directory
  * @param {string} options.commit - the checked commit
  * @param {Object} options.fullConfig - getConfig() result (content store, i18n)
+ * @param {string|null} [options.checkSiteDir] - the site's directory in the
+ *   check's worktree (the commit checked out), to load the commit's schemas from
+ * @param {(siteDir: string) => Promise<Object>} [options.loadCommitSchemas] - tests only
  * @returns {Promise<Array<RefusedEntry>>}
  *
  * @typedef {Object} RefusedEntry
@@ -190,33 +256,36 @@ export function astroIdForFile(relativeFile) {
  * @property {'invalid'|'valid'|'unchecked'} validation - AstroAdmin's reading at the commit
  * @property {Array<{path: string, message: string, accepted?: string[]}>} issues
  */
-export async function describeRefusedEntries({ output, siteDirs, projectRoot, commit, fullConfig }) {
+export async function describeRefusedEntries({ output, siteDirs, projectRoot, commit, fullConfig, checkSiteDir = null, loadCommitSchemas = null }) {
   const keys = parseFailureKeys(output, siteDirs);
   if (keys.ids.length === 0 && keys.files.length === 0 && keys.images.length === 0) return [];
   try {
-    const site = await commitSite({ projectRoot, commit, fullConfig });
+    const site = await commitSite({ projectRoot, commit, fullConfig, checkSiteDir, loadCommitSchemas });
     const found = [];
     const addEntry = (entry) => {
       if (!entry || found.length >= MAX_ENTRIES) return null;
       const key = `${entry.collection}\u0000${entry.slug}\u0000${entry.locale || ''}`;
       const existing = found.find((candidate) => candidate.key === key);
       if (existing) return existing;
-      const added = { ...entry, key, images: [] };
+      const added = { ...entry, key, imageIssues: [] };
       found.push(added);
       return added;
     };
-    // Only an id that is an entry of the commit is listed: an unresolved one
-    // is Astro's text, which is never shown.
-    for (const { collection, id } of keys.ids) addEntry(await site.entryForId(collection, id));
-    for (const file of keys.files) addEntry(site.entryForFile(file));
+    // A Location in the same error is Astro's own word for the file; without
+    // one, the id must belong to exactly one committed entry.
+    for (const { collection, id, file } of keys.ids) {
+      addEntry(file ? site.entryForLocatedId(collection, id, file) : site.entryForId(collection, id));
+    }
+    for (const file of keys.files) addEntry(site.entryForCommittedFile(file));
     for (const image of keys.images) {
-      for (const file of await site.filesContaining(image)) {
-        addEntry(site.entryForFile(file))?.images.push(image);
+      for (const { entry, issues } of await site.entriesMissingImage(image)) {
+        const added = addEntry(entry);
+        if (added) added.imageIssues.push(...issues);
       }
     }
     const entries = [];
-    for (const { key, file, images, itemId, ...entry } of found) {
-      const reading = await site.validate({ ...entry, itemId }, file, images);
+    for (const { key, file, imageIssues, itemId, ...entry } of found) {
+      const reading = await site.validate({ ...entry, itemId }, file, imageIssues);
       entries.push({ ...entry, validation: reading.status, issues: reading.issues });
     }
     return entries;
@@ -232,28 +301,109 @@ async function gitOutput(cwd, args) {
 }
 
 /**
- * The site's collections as files in a commit: which file is which entry, and
- * each entry's stored data at that commit.
+ * The commit's own collection schemas, loaded from the check's worktree (the
+ * commit checked out) and never through the live schema cache. null when they
+ * cannot be loaded in time: then nothing is validated against a schema.
  */
-async function commitSite({ projectRoot, commit, fullConfig }) {
+async function loadSchemasAtCommit(checkSiteDir, loadCommitSchemas) {
+  if (!checkSiteDir) return null;
+  let timer;
+  try {
+    const load = loadCommitSchemas
+      ? loadCommitSchemas(checkSiteDir)
+      : import('./schema-parser.js').then(({ parseAstroSchemas }) => parseAstroSchemas(checkSiteDir));
+    const timeout = new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`timed out after ${SCHEMA_LOAD_TIMEOUT_MS / 1000} s`)), SCHEMA_LOAD_TIMEOUT_MS);
+    });
+    return await Promise.race([load, timeout]);
+  } catch (error) {
+    console.error('Could not load the content schemas at the checked commit; refused entries are listed without validation:', error);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The image paths the site's own markdown processor collects from a body as
+ * local images (Astro 7's satteri processor, else @astrojs/markdown-remark):
+ * so a path mentioned in prose or in code is not an image reference. null
+ * when no processor can be loaded: then no body is blamed.
+ */
+async function siteMarkdownImages(projectRoot) {
+  try {
+    const fromSite = createRequire(path.join(projectRoot, 'package.json'));
+    const fromAstro = createRequire(fromSite.resolve('astro/package.json'));
+    let processor = null;
+    try {
+      const satteri = await import(pathToFileURL(fromAstro.resolve('@astrojs/markdown-satteri')).href);
+      processor = await satteri.createSatteriMarkdownProcessor({ syntaxHighlight: false });
+    } catch {
+      const remark = await import(pathToFileURL(fromAstro.resolve('@astrojs/markdown-remark')).href);
+      processor = await remark.createMarkdownProcessor({ syntaxHighlight: false });
+    }
+    return async (body) => {
+      const result = await processor.render(body, { frontmatter: {} });
+      return result.metadata.localImagePaths ?? result.metadata.imagePaths ?? [];
+    };
+  } catch (error) {
+    console.error("Could not load the site's markdown processor; no entry body is blamed for a missing image:", error.message);
+    return null;
+  }
+}
+
+/**
+ * The site-relative path an entry's image reference names, when it is one we
+ * can resolve exactly: `./` or `../` relative to the entry's file, staying in
+ * the site. Anything else (an alias, a root path, a bare name Vite resolves
+ * as a package) is not resolved, so it confirms nothing.
+ */
+function resolveEntryImage(entryFile, reference) {
+  if (typeof reference !== 'string' || !/^\.\.?\//.test(reference)) return null;
+  const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(entryFile), reference.split(/[?#]/)[0]));
+  return resolved.startsWith('../') || resolved === '..' ? null : resolved;
+}
+
+/**
+ * The site's collections as files in a commit: which committed file is which
+ * entry, and each entry's stored data at that commit.
+ */
+async function commitSite({ projectRoot, commit, fullConfig, checkSiteDir, loadCommitSchemas }) {
   const { loadSchemas } = await import('./collections.js');
   const { getGlobBaseDirectory, getGlobPatterns, matchesAnyPattern, resolveProjectPath, splitLocale } = await import('./glob-files.js');
-  const schemas = await loadSchemas();
+  const commitSchemas = await loadSchemasAtCommit(checkSiteDir, loadCommitSchemas);
+  // Which files are which collection: the commit's config, or (when it could
+  // not be loaded) the live one, which is what the editor itself opens by.
+  const layoutSchemas = commitSchemas || await loadSchemas();
   const i18n = fullConfig.i18n || { enabled: false, locales: [] };
   const repoTop = fs.realpathSync((await gitOutput(projectRoot, ['rev-parse', '--show-toplevel'])).trim());
   const siteInRepo = path.relative(repoTop, fs.realpathSync(projectRoot)).split(path.sep).join('/');
   const inRepo = (siteRelative) => (siteInRepo ? `${siteInRepo}/${siteRelative}` : siteRelative);
   const siteRelativeOf = (absolute) => path.relative(projectRoot, absolute).split(path.sep).join('/');
 
+  // Every regular file committed under the site, site-relative. A symlink,
+  // a gitlink or a file only the build produced is not a committed entry.
+  const committed = new Set();
+  {
+    const listed = await gitOutput(projectRoot, ['ls-tree', '-r', '-z', '--full-tree', commit, '--', inRepo('.')]);
+    const prefix = siteInRepo ? `${siteInRepo}/` : '';
+    for (const record of listed.split('\0')) {
+      const match = /^(\d+) (\w+) [0-9a-f]+\t(.+)$/s.exec(record);
+      if (!match || match[2] !== 'blob' || !['100644', '100755'].includes(match[1])) continue;
+      if (match[3].startsWith(prefix)) committed.add(match[3].slice(prefix.length));
+    }
+  }
+
   // Each collection's files, relative to the site: a glob() base with its
   // patterns, or a file() collection's one file.
-  const layouts = Object.entries(schemas).map(([collection, schema]) => (
+  const layouts = Object.entries(layoutSchemas).map(([collection, schema]) => (
     schema.loaderType === 'file' && schema.loaderFilePath
       ? { collection, file: siteRelativeOf(resolveProjectPath(schema.loaderFilePath)) }
       : { collection, base: siteRelativeOf(getGlobBaseDirectory(collection, schema)), patterns: getGlobPatterns(schema) }
   )).filter((layout) => !(layout.base ?? layout.file).startsWith('..'));
 
-  const entryForFile = (file) => {
+  /** The glob entry a site-relative file is, committed or not (null if none). */
+  const globEntryForFile = (file) => {
     for (const layout of layouts) {
       if (layout.file !== undefined) {
         if (layout.file === file) return null; // a file() collection's file: no one entry
@@ -264,75 +414,157 @@ async function commitSite({ projectRoot, commit, fullConfig }) {
       const inner = file.slice(prefix.length);
       if (!matchesAnyPattern(inner, layout.patterns)) continue;
       const { slug, locale } = splitLocale(inner.slice(0, inner.length - path.extname(inner).length), i18n);
-      return { collection: layout.collection, slug, locale, file };
+      return { collection: layout.collection, slug, locale, file, inner };
     }
     return null;
   };
-
-  const filesCache = new Map();
-  const filesOf = async (layout) => {
-    if (!filesCache.has(layout.collection)) {
-      const listed = await gitOutput(projectRoot, ['ls-tree', '-r', '--name-only', '--full-tree', commit, '--', inRepo(layout.base || '.')]);
-      const prefix = siteInRepo ? `${siteInRepo}/` : '';
-      filesCache.set(layout.collection, listed.split('\n').filter(Boolean).map((name) => name.slice(prefix.length)));
-    }
-    return filesCache.get(layout.collection);
+  const entryForCommittedFile = (file) => {
+    if (!committed.has(file)) return null;
+    const entry = globEntryForFile(file);
+    if (!entry) return null;
+    const { inner, ...rest } = entry;
+    return rest;
   };
 
-  const readAtCommit = (file) => gitOutput(projectRoot, ['show', `${commit}:${inRepo(file)}`]);
+  // Committed texts, read in one git process per batch.
+  const texts = new Map();
+  const readAll = (files) => {
+    const wanted = files.filter((file) => !texts.has(file));
+    if (wanted.length === 0) return;
+    const raw = execFileSync('git', ['cat-file', '--batch'], {
+      cwd: projectRoot,
+      input: wanted.map((file) => `${commit}:${inRepo(file)}\n`).join(''),
+      maxBuffer: 100 * 1024 * 1024,
+    });
+    let offset = 0;
+    for (const file of wanted) {
+      const headerEnd = raw.indexOf(0x0a, offset);
+      const header = raw.subarray(offset, headerEnd).toString('utf-8');
+      offset = headerEnd + 1;
+      const object = /^[0-9a-f]+ (\w+) (\d+)$/.exec(header);
+      if (!object) {
+        texts.set(file, null); // missing
+        continue;
+      }
+      const size = Number(object[2]);
+      texts.set(file, object[1] === 'blob' ? raw.subarray(offset, offset + size).toString('utf-8') : null);
+      offset += size + 1;
+    }
+  };
+  const textOf = (file) => {
+    readAll([file]);
+    return texts.get(file) ?? null;
+  };
+
+  /** A file() collection's item ids, read as Astro reads them; null if unreadable. */
+  const fileItemIds = (layout) => {
+    if (!committed.has(layout.file) || !/\.json$/i.test(layout.file)) return null;
+    const text = textOf(layout.file);
+    if (text === null) return null;
+    const parsed = parseCommittedText(layout.file, text);
+    return parsed.issue ? null : fileLoaderItems(parsed.data).map((item) => item.id);
+  };
+  const fileEntry = (layout, id) => {
+    const ids = fileItemIds(layout);
+    if (!ids || ids.filter((candidate) => candidate === id).length !== 1) return null;
+    return { collection: layout.collection, slug: id, locale: null, file: layout.file, itemId: id };
+  };
+
+  let markdownImages; // loaded on first use
+  const bodyImagesOf = async (body) => {
+    if (markdownImages === undefined) markdownImages = await siteMarkdownImages(projectRoot);
+    if (!markdownImages) return null;
+    try {
+      return await markdownImages(body);
+    } catch (error) {
+      console.error('Could not read an entry body for its images:', error.message);
+      return null;
+    }
+  };
 
   return {
-    entryForFile,
+    entryForCommittedFile,
 
-    /** The entry Astro calls `id` in `collection`, or null. */
-    async entryForId(collection, id) {
+    /** The entry an id error's own Location names, when it is a committed file of that collection. */
+    entryForLocatedId(collection, id, file) {
       const layout = layouts.find((candidate) => candidate.collection === collection);
       if (!layout) return null;
-      if (layout.file !== undefined) {
-        let items;
-        try {
-          const parsed = JSON.parse(await readAtCommit(layout.file));
-          items = Array.isArray(parsed) ? parsed.map((item) => item?.id ?? item?.slug) : Object.keys(parsed || {});
-        } catch {
-          return null;
-        }
-        return items.includes(id) ? { collection, slug: id, locale: null, file: layout.file, itemId: id } : null;
-      }
-      for (const file of await filesOf(layout)) {
-        const entry = entryForFile(file);
-        if (!entry) continue;
-        const inner = file.slice(layout.base ? layout.base.length + 1 : 0);
-        if (astroIdForFile(inner) === id || inner.slice(0, inner.length - path.extname(inner).length) === id) return entry;
-      }
-      return null;
+      if (layout.file !== undefined) return layout.file === file ? fileEntry(layout, id) : null;
+      const entry = entryForCommittedFile(file);
+      return entry && entry.collection === collection ? entry : null;
     },
 
-    /** Site-relative files in the commit's collections whose text contains `value`. */
-    async filesContaining(value) {
-      const bases = layouts.map((layout) => inRepo(layout.base ?? layout.file));
+    /** The one committed entry Astro calls `id` in `collection`, or null (none, or more than one). */
+    entryForId(collection, id) {
+      const layout = layouts.find((candidate) => candidate.collection === collection);
+      if (!layout) return null;
+      if (layout.file !== undefined) return fileEntry(layout, id);
+      const prefix = layout.base ? `${layout.base}/` : '';
+      const files = [...committed].filter((file) => file.startsWith(prefix) && matchesAnyPattern(file.slice(prefix.length), layout.patterns));
+      // A file whose id cannot be worked out (a format not read here) could
+      // be the one: then nothing is confirmed.
+      if (files.some((file) => !READABLE_ENTRY.test(file))) return null;
+      readAll(files);
+      const matches = files.filter((file) => {
+        const text = texts.get(file);
+        return text !== null && text !== undefined && globEntryId(file.slice(prefix.length), text) === id;
+      });
+      return matches.length === 1 ? entryForCommittedFile(matches[0]) : null;
+    },
+
+    /**
+     * The committed entries one of whose OWN image references (an image()
+     * field, or an image in a markdown body as the site's processor reads
+     * it) is `image` and resolves, from the entry's file, to a path the
+     * commit does not have; each with the issues that say where.
+     */
+    async entriesMissingImage(image) {
+      const resolvedFrom = (file) => resolveEntryImage(file, image);
+      const bases = layouts.filter((layout) => layout.base !== undefined).map((layout) => inRepo(layout.base || '.'));
       if (bases.length === 0) return [];
       let listed = '';
       try {
-        listed = await gitOutput(projectRoot, ['grep', '-l', '-F', '--full-name', '-e', value, commit, '--', ...bases]);
+        listed = await gitOutput(projectRoot, ['grep', '-l', '-F', '--full-name', '-e', image, commit, '--', ...bases]);
       } catch (error) {
         if (error.code === 1) return []; // no match
         throw error;
       }
       const prefix = `${commit}:${siteInRepo ? `${siteInRepo}/` : ''}`;
-      return listed.split('\n').filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+      const candidates = listed.split('\n').filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+      const results = [];
+      for (const file of candidates) {
+        const entry = entryForCommittedFile(file);
+        if (!entry) continue;
+        const resolved = resolvedFrom(file);
+        if (resolved === null || committed.has(resolved)) continue; // not ours to confirm, or present
+        const text = textOf(file);
+        if (text === null) continue;
+        const parsed = parseCommittedText(file, text);
+        if (parsed.issue) continue;
+        const issues = [];
+        const schema = commitSchemas?.[entry.collection]?.schema;
+        if (schema) {
+          for (const field of findImageFields(schema, parsed.data)) {
+            if (field.value === image) issues.push({ path: formatIssuePath(field.path), message: `The image file ${image} was not found.` });
+          }
+        }
+        if (typeof parsed.body === 'string' && MARKDOWN_BODY.test(file)) {
+          const bodyImages = await bodyImagesOf(parsed.body);
+          if (bodyImages?.includes(image)) issues.push({ path: 'body', message: `The body uses the image file ${image}, which was not found.` });
+        }
+        if (issues.length > 0) results.push({ entry, issues });
+      }
+      return results;
     },
 
-    /** AstroAdmin's validation of one entry as stored at the commit. */
-    async validate(entry, file, images) {
-      const { validateCommittedText } = await import('./content-validation.js');
-      let text;
-      try {
-        text = await readAtCommit(file);
-      } catch (error) {
-        console.error(`Could not read ${file} at ${commit.slice(0, 7)}:`, error.message);
+    /** AstroAdmin's validation of one entry as stored at the commit, against the commit's schemas. */
+    async validate(entry, file, imageIssues) {
+      const text = textOf(file);
+      if (text === null) {
+        console.error(`Could not read ${file} at ${commit.slice(0, 7)}.`);
         return { status: 'unchecked', issues: [] };
       }
-      return validateCommittedText({ schemas, collection: entry.collection, file, text, itemId: entry.itemId ?? null, missingImages: images });
+      return validateCommittedText({ schemas: commitSchemas, collection: entry.collection, file, text, itemId: entry.itemId ?? null, extraIssues: imageIssues });
     },
   };
 }

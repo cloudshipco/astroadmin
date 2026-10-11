@@ -64,7 +64,7 @@ writeFile('astro.config.mjs', mdxInstalled
   : 'export default {};\n');
 writeFile('astroadmin.config.js', "export default { git: { enabled: true, paths: ['src/content/'] }, i18n: { enabled: true, defaultLocale: 'en', locales: ['en', 'fr'] } };\n");
 writeFile('src/content.config.ts', `import { defineCollection, z } from 'astro:content';
-import { glob } from 'astro/loaders';
+import { file, glob } from 'astro/loaders';
 
 const pages = defineCollection({
   loader: glob({ pattern: '**/*.${mdxInstalled ? '{md,mdx}' : 'md'}', base: './src/content/pages' }),
@@ -79,7 +79,12 @@ const authors = defineCollection({
   schema: z.object({ name: z.string() }),
 });
 
-export const collections = { pages, covers, authors };
+const people = defineCollection({
+  loader: file('src/data/people.json'),
+  schema: z.object({ name: z.string() }),
+});
+
+export const collections = { pages, covers, authors, people };
 `);
 writeFile('src/pages/index.astro', `---
 import { getCollection, render } from 'astro:content';
@@ -91,6 +96,7 @@ const rendered = await Promise.all(pages.map((page) => render(page)));
 `);
 writeFile('src/content/pages/home.md', '---\ntitle: Home\n---\nHello\n');
 writeFile('src/content/authors/ann.json', '{ "name": "Ann" }\n');
+writeFile('src/data/people.json', JSON.stringify([{ id: 'Jane Doe', name: 'Jane' }, { id: 'Jane', name: 'Jay' }]));
 writeFile('src/content/covers/first.md', '---\ncover: ./first.png\n---\n');
 fs.writeFileSync(path.join(projectRoot, 'src/content/covers/first.png'), Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAAABJRU5ErkJggg==', 'base64'));
@@ -103,6 +109,7 @@ git('commit', '-q', '-m', 'initial');
 
 const { checkHeadWithAstro } = await import('../server/utils/astro-check.js');
 const { checkRefusalBody } = await import('../server/api/publish.js');
+const { describeRefusedEntries } = await import('../server/utils/build-failure.js');
 const { getConfig } = await import('../server/config.js');
 
 // The server log: what the app writes, kept for the positive controls.
@@ -245,6 +252,150 @@ try {
     assert.equal(entry.slug, 'about');
     assert.equal(entry.editable, true, 'the live tree has the entry, so it opens');
     assert.deepEqual(entry.issues.map((issue) => issue.path), ['link'], 'the committed value is reported, not the fixed one on disk');
+  });
+
+  // ---- Which entries are blamed: only ones that can be CONFIRMED ----
+
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAAABJRU5ErkJggg==', 'base64');
+  const slugsOf = (body) => entriesOf(body).map(({ collection, slug, locale }) => `${collection}/${slug}${locale ? ` (${locale})` : ''}`);
+
+  await check('a missing image is blamed on the entry whose OWN folder lacks it, not on one whose folder has it', async () => {
+    fs.mkdirSync(path.join(projectRoot, 'src/content/covers/a'), { recursive: true });
+    const body = await refuse('image-folders', {
+      'src/content/covers/a/one.md': '---\ncover: ./pic.png\n---\n',
+      'src/content/covers/a/pic.png': PNG,
+      'src/content/covers/b/two.md': '---\ncover: ./pic.png\n---\n',
+      // Prose that names the file, and the same syntax inside inline code.
+      'src/content/pages/notes.md': '---\ntitle: Notes\n---\nThe file ./pic.png is the cover. `![x](./pic.png)`\n',
+    }, { logged: ['ImageNotFound', '`./pic.png`'] });
+    assert.deepEqual(body.check.problems.map((problem) => problem.code), ['ImageNotFound']);
+    assert.deepEqual(slugsOf(body), ['covers/b/two'], 'negative controls: a/one (its pic.png is committed) and pages/notes (prose) are not blamed');
+    assert.deepEqual(entriesOf(body)[0].issues, [{ path: 'cover', message: 'The image file ./pic.png was not found.' }]);
+  });
+
+  await check("a markdown body's own image, as the site's processor reads it, is blamed; a mention in code is not", async () => {
+    const body = await refuse('image-body', {
+      'src/content/pages/gallery.md': '---\ntitle: Gallery\n---\n![A view](./view.png)\n',
+      'src/content/pages/howto.md': '---\ntitle: How to\n---\nWrite `![A view](./view.png)` to show it.\n\n```\n![A view](./view.png)\n```\n',
+    }, { logged: ['ImageNotFound', '`./view.png`'] });
+    assert.deepEqual(slugsOf(body), ['pages/gallery'], 'negative control: howto mentions it only in code');
+    assert.deepEqual(entriesOf(body)[0].issues, [{ path: 'body', message: 'The body uses the image file ./view.png, which was not found.' }]);
+  });
+
+  await check('an entry whose slug is another file name: the entry Astro means, not the file named like the id', async () => {
+    const body = await refuse('slug', {
+      'src/content/pages/intro.md': '---\nslug: start\nlink: /nowhere\n---\n',
+      'src/content/pages/start.md': '---\ntitle: Start\nslug: other\n---\n',
+    }, { logged: ['pages → start'] });
+    assert.deepEqual(slugsOf(body), ['pages/intro'], 'negative control: the healthy start.md is not listed');
+    assert.deepEqual(entriesOf(body)[0].issues.map((issue) => issue.path).sort(), ['link', 'title']);
+  });
+
+  await check('the same, with no Location line: the id is resolved through the committed slugs', async () => {
+    git('checkout', '-q', '-f', 'case-slug');
+    const check = await checkHeadWithAstro(await getConfig());
+    const [worktreeSite] = /\S*astroadmin-check-[^/\s]+\/worktree/.exec(check.rawOutput) || [];
+    assert.ok(worktreeSite, 'positive control: the output names the worktree');
+    const withoutLocation = check.rawOutput.replace(/^\s*Location:\s*\n.*\n/gm, '');
+    assert.ok(!withoutLocation.includes('intro.md') && withoutLocation.includes('pages → start'), 'the stripped output names only the id');
+    const entries = await describeRefusedEntries({
+      output: withoutLocation, siteDirs: [worktreeSite], projectRoot, commit: git('rev-parse', 'HEAD'), fullConfig: await getConfig(),
+    });
+    assert.deepEqual(entries.map((entry) => `${entry.collection}/${entry.slug}`), ['pages/intro']);
+    assert.equal(entries[0].validation, 'unchecked', 'no check worktree: the commit\'s schemas are not loaded, so nothing is validated');
+    assert.deepEqual(entries[0].issues, []);
+    // A check directory whose config cannot be loaded: the same, listed without issues.
+    const unloadable = await describeRefusedEntries({
+      output: withoutLocation, siteDirs: [worktreeSite], projectRoot, commit: git('rev-parse', 'HEAD'), fullConfig: await getConfig(),
+      checkSiteDir: path.join(scratch, 'no-such-site'),
+    });
+    assert.deepEqual(unloadable.map((entry) => [entry.slug, entry.validation, entry.issues.length]), [['intro', 'unchecked', 0]]);
+  });
+
+  await check('an id that two committed entries (or two file() items) share confirms neither', async () => {
+    const describe = async (files, output) => {
+      git('checkout', '-q', '-f', '-B', 'case-shared-id', 'main');
+      for (const [relativePath, content] of Object.entries(files)) writeFile(relativePath, content);
+      git('add', '-A');
+      git('commit', '-q', '-m', 'shared id');
+      const entries = await describeRefusedEntries({ output, siteDirs: [], projectRoot, commit: git('rev-parse', 'HEAD'), fullConfig: await getConfig() });
+      return entries.map((entry) => `${entry.collection}/${entry.slug}`);
+    };
+    const pageError = '[InvalidContentEntryDataError] pages → shared data does not match collection schema.\n';
+    assert.deepEqual(await describe({ 'src/content/pages/one.md': '---\nslug: shared\n---\n' }, pageError), ['pages/one'], 'positive control: one entry has the id');
+    assert.deepEqual(await describe({ 'src/content/pages/one.md': '---\nslug: shared\n---\n', 'src/content/pages/two.md': '---\nslug: shared\n---\n' }, pageError), []);
+    const itemError = '[InvalidContentEntryDataError] people → Jay data does not match collection schema.\n';
+    assert.deepEqual(await describe({ 'src/data/people.json': JSON.stringify([{ id: 'Jay', name: 1 }]) }, itemError), ['people/Jay'], 'positive control: one item has the id');
+    assert.deepEqual(await describe({ 'src/data/people.json': JSON.stringify([{ id: 'Jay', name: 1 }, { slug: 'Jay', name: 'x' }]) }, itemError), []);
+    // An id error whose Location is another collection's file names nothing.
+    const located = (file) => `${pageError}  Location:\n    ${projectRoot}/${file}:0:0\n`;
+    const entries = await describeRefusedEntries({
+      output: located('src/content/covers/first.md'), siteDirs: [projectRoot], projectRoot, commit: git('rev-parse', 'HEAD'), fullConfig: await getConfig(),
+    });
+    assert.deepEqual(entries, []);
+    const control = await describeRefusedEntries({
+      output: located('src/content/pages/home.md'), siteDirs: [projectRoot], projectRoot, commit: git('rev-parse', 'HEAD'), fullConfig: await getConfig(),
+    });
+    assert.deepEqual(control.map((entry) => entry.slug), ['home'], "positive control: the collection's own file is named");
+  });
+
+  await check("a loader's own generateId: the error's Location names the entry, not the file named like the id", async () => {
+    const config = fs.readFileSync(path.join(projectRoot, 'src/content.config.ts'), 'utf-8')
+      .replace("base: './src/content/pages' })", "base: './src/content/pages', generateId: ({ entry }) => `x-${entry.replace(/\\.md$/, '')}` })");
+    assert.ok(config.includes('generateId'), 'the fixture changed the loader');
+    const body = await refuse('generate-id', {
+      'src/content.config.ts': config,
+      'src/content/pages/intro.md': '---\nlink: /nowhere\n---\n',
+      'src/content/pages/x-intro.md': '---\ntitle: Healthy\n---\n',
+    }, { logged: ['pages → x-intro'] });
+    assert.deepEqual(slugsOf(body), ['pages/intro'], 'negative control: x-intro.md (default id x-intro) is not listed');
+  });
+
+  await check("a file() item whose id has a space: Astro's whole id, not the item named like its first word", async () => {
+    const body = await refuse('item-space', {
+      'src/data/people.json': JSON.stringify([{ id: 'Jane Doe', name: 5 }, { id: 'Jane', name: 'Jay' }]),
+    }, { logged: ['people → Jane Doe'] });
+    assert.deepEqual(entriesOf(body).map(({ collection, slug }) => `${collection}/${slug}`), ['people/Jane Doe'], 'negative control: "Jane" is not listed');
+    assert.deepEqual(entriesOf(body)[0].issues.map((issue) => issue.path), ['name']);
+  });
+
+  await check("committed content is validated against the COMMIT's schema, not a different live one", async () => {
+    const liveConfigPath = path.join(projectRoot, 'src/content.config.ts');
+    const committedConfig = fs.readFileSync(liveConfigPath, 'utf-8');
+    const { loadSchemas, clearSchemaCache } = await import('../server/utils/collections.js');
+    try {
+      git('checkout', '-q', '-f', '-B', 'case-live-schema', 'main');
+      writeFile('src/content/pages/about.md', '---\ntitle: About\nlink: /home/elsewhere\n---\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'bad link');
+      // The live config, uncommitted, relaxes the enum; the live cache holds it.
+      fs.writeFileSync(liveConfigPath, committedConfig.replace("z.enum(['/home/about', '/home/contact'])", 'z.string()'));
+      clearSchemaCache();
+      const live = await loadSchemas();
+      assert.equal((await live.pages._zodSchema.safeParseAsync({ title: 'x', link: '/home/elsewhere' })).success, true, 'positive control: the live schema accepts the value');
+      const check = await checkHeadWithAstro(await getConfig());
+      assert.equal(check.success, false, "positive control: Astro (the commit's config) refuses it");
+      const body = await checkRefusalBody(check, { committed: true });
+      const [entry] = body.check.entries;
+      assert.equal(entry.validation, 'invalid', JSON.stringify(entry));
+      assert.deepEqual(entry.issues.map((issue) => issue.path), ['link']);
+      assert.deepEqual(entry.issues[0].accepted, ['/home/about', '/home/contact']);
+      assert.equal(await loadSchemas(), live, "the live schema cache is untouched by the commit's schemas");
+    } finally {
+      fs.writeFileSync(liveConfigPath, committedConfig);
+      clearSchemaCache();
+    }
+  });
+
+  await check('a Location naming a file the build made, not the commit, lists no entry', async () => {
+    const generator = `import fs from 'fs';
+export default { integrations: [{ name: 'gen', hooks: { 'astro:config:setup': ({ config }) => {
+  fs.writeFileSync(new URL('./src/content/pages/generated.md', config.root), '---\\nlink: /nowhere\\n---\\n');
+} } }] };
+`;
+    const body = await refuse('generated', { 'astro.config.mjs': generator }, { logged: ['pages → generated', 'generated.md'] });
+    assert.deepEqual(body.check.problems.map((problem) => problem.code), ['InvalidContentEntryDataError'], 'the sentence still says what is wrong');
+    assert.deepEqual(entriesOf(body), [], 'negative control: the generated file is not a committed entry');
   });
 
   report('='.repeat(40));

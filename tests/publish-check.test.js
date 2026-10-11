@@ -162,7 +162,7 @@ console.log('\n🧪 Publish gate (astro sync on the exact commit)\n' + '='.repea
 await check("Astro's error names the entry it rejected", () => {
   const output = '\u001b[31m[InvalidContentEntryDataError]\u001b[39m \u001b[1mpages → home\u001b[22m data does not match collection schema.\n'
     + '[InvalidContentEntryDataError] pages → home data does not match collection schema.';
-  assert.deepEqual(parseFailureKeys(output).ids, [{ collection: 'pages', id: 'home' }]);
+  assert.deepEqual(parseFailureKeys(output).ids, [{ collection: 'pages', id: 'home', file: null }]);
 });
 
 await check('valid content, including an object-shaped file() collection, is pushed', async () => {

@@ -29,6 +29,7 @@ const {
   findFieldForPath,
   showEntryProblems,
   renderPublishProblems,
+  localeToOpen,
 } = await import('../ui/content-problems.js');
 
 let passed = 0;
@@ -171,6 +172,35 @@ check('a refused publish shows the reasons, links the entries and lists their is
   assert.equal(issue.textContent, 'Link: Invalid option Accepted: /home/about, /home/contact.');
   assert.equal(problems.querySelector('pre'), null, 'no raw output block');
   assert.ok(!problems.textContent.includes('ignored'), 'the plain-text output is not shown twice');
+});
+
+check('a refused translation opens THAT translation, not the one being edited', () => {
+  const opened = [];
+  const problems = renderPublishProblems({
+    message: 'Not published.',
+    check: {
+      problems: [],
+      entries: [
+        { collection: 'pages', slug: 'home', locale: 'fr', editable: true, issues: [] },
+        { collection: 'pages', slug: 'home', locale: null, editable: true, issues: [] },
+      ],
+    },
+  }, { onOpenEntry: (target) => opened.push(target) });
+  document.body.appendChild(problems);
+  const [french, plain] = problems.querySelectorAll('a[data-collection]');
+  const click = new window.MouseEvent('click', { bubbles: true, cancelable: true });
+  french.dispatchEvent(click);
+  assert.equal(click.defaultPrevented, true, 'the link does not navigate away');
+  plain.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.deepEqual(opened, [
+    { collection: 'pages', slug: 'home', locale: 'fr' },
+    { collection: 'pages', slug: 'home', locale: null },
+  ]);
+  const i18n = { enabled: true, defaultLocale: 'en', locales: ['en', 'fr'] };
+  assert.equal(localeToOpen('fr', i18n), 'fr');
+  assert.equal(localeToOpen(null, i18n), 'en', 'a file with no locale suffix is the default locale');
+  assert.equal(localeToOpen('fr', { enabled: false }), null, 'no i18n: no locale to select');
+  problems.remove();
 });
 
 check('a refusal naming no entry shows its reason', () => {

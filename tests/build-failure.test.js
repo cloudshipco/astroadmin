@@ -17,7 +17,7 @@
 import assert from 'assert';
 
 const {
-  astroIdForFile, buildProblems, describeCode, findErrorCodes, NO_CODE_MESSAGE, parseFailureKeys,
+  astroIdForFile, buildProblems, globEntryId, describeCode, findErrorCodes, NO_CODE_MESSAGE, parseFailureKeys,
 } = await import('../server/utils/build-failure.js');
 
 let passed = 0;
@@ -107,10 +107,36 @@ try {
   });
 
   check('entry keys: Astro ids, files under the site only, missing image paths', () => {
-    assert.deepEqual(parseFailureKeys(SCHEMA, [SITE]), { ids: [{ collection: 'pages', id: 'about' }], files: ['src/content/pages/about.md'], images: [] });
+    assert.deepEqual(parseFailureKeys(SCHEMA, [SITE]), { ids: [{ collection: 'pages', id: 'about', file: 'src/content/pages/about.md' }], files: [], images: [] },
+      "the error's own Location is kept with its id");
     assert.deepEqual(parseFailureKeys(IMAGE, [SITE]), { ids: [], files: [], images: ['./missing.png'] }, "astro's own Location is not under the site");
     assert.deepEqual(parseFailureKeys(YAML, [SITE]).files, ['src/content/pages/bad.md']);
     assert.deepEqual(parseFailureKeys(JSON_PARSE, [SITE]).files, ['src/content/authors/bob.json']);
+  });
+
+  check("a file() item id with spaces is Astro's whole id, up to its suffix", () => {
+    // Astro 7.3's real lines for an item `{ "id": "Jane Doe", "name": 5 }`.
+    const JANE = `${E}[31m[InvalidContentEntryDataError]${E}[39m ${E}[1mpeople → Jane Doe${E}[22m data does not match collection schema.
+  name**: **name: Expected type "string", received "number"
+  ${E}[1mLocation:${E}[22m
+    ${E}[4m${SITE}/src/data/people.json:0:0${E}[24m
+${STACK}`;
+    assert.deepEqual(parseFailureKeys(JANE, [SITE]).ids, [{ collection: 'people', id: 'Jane Doe', file: 'src/data/people.json' }]);
+  });
+
+  check("a Location belongs to its own error: a later error's file is not paired with an earlier id", () => {
+    const noLocation = '[InvalidContentEntryDataError] pages → start data does not match collection schema.\n  title: Required\n';
+    const keys = parseFailureKeys(`${noLocation}${YAML}`, [SITE]);
+    assert.deepEqual(keys.ids, [{ collection: 'pages', id: 'start', file: null }], "the YAML error's file is not the id's");
+    assert.deepEqual(keys.files, ['src/content/pages/bad.md']);
+  });
+
+  check("Astro's glob id: a truthy data slug wins over the file name", () => {
+    assert.equal(globEntryId('home.md', '---\nslug: start\n---\n'), 'start');
+    assert.equal(globEntryId('home.md', '---\ntitle: Home\n---\n'), 'home');
+    assert.equal(globEntryId('home.md', '---\nslug: ""\n---\n'), 'home', 'an empty slug is not one');
+    assert.equal(globEntryId('a/b.json', '{ "slug": 42 }'), '42');
+    assert.equal(globEntryId('home.md', '---\ntitle: "x\n---\n'), null, 'unreadable data: Astro assigns no id');
   });
 
   check('a Location in a sibling of the site directory is not the site', () => {

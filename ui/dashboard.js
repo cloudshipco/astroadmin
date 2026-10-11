@@ -32,7 +32,7 @@ import { initEntryPicker, syncEntryPickerLabel } from './entry-picker.js';
 import { escapeHtml } from './escape-html.js';
 import { savePayload } from './save-payload.js';
 import { liveSiteHref } from './live-url.js';
-import { showEntryProblems, renderPublishProblems } from './content-problems.js';
+import { showEntryProblems, renderPublishProblems, localeToOpen } from './content-problems.js';
 
 // Reference fields can appear anywhere a field can — including inside the array item
 // modal — so hand their wiring to the shared field layer rather than binding it to
@@ -2138,12 +2138,17 @@ function showPublishProblems(refusal) {
   closeButton.addEventListener('click', () => panel.remove());
   panel.appendChild(closeButton);
 
-  const problems = renderPublishProblems(refusal);
-  problems.addEventListener('click', (event) => {
-    const link = event.target.closest('a[data-collection]');
-    if (!link) return;
-    event.preventDefault();
-    loadEntry(link.dataset.collection, link.dataset.slug);
+  // A link opens the translation it names (pages/home (fr) opens French,
+  // whichever locale is being edited now).
+  const problems = renderPublishProblems(refusal, {
+    onOpenEntry: ({ collection, slug, locale }) => {
+      const target = localeToOpen(locale, i18nConfig);
+      if (target && target !== currentLocale) {
+        currentLocale = target;
+        renderLocaleTabs();
+      }
+      loadEntry(collection, slug);
+    },
   });
   panel.appendChild(problems);
   document.body.appendChild(panel);

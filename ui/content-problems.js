@@ -175,11 +175,23 @@ export function showEntryProblems(form, validation, schema = null) {
  * @param {{message: string, check: {problems?: Array<{code: string|null, message: string}>,
  *   entries: Array<{collection: string, slug: string, locale?: string|null, editable: boolean,
  *   issues?: Array<{path: string, message: string, accepted?: string[]}>}>}}} refusal
+ * @param {Object} [options]
+ * @param {(target: {collection: string, slug: string, locale: string|null}) => void} [options.onOpenEntry] -
+ *   called when an entry's link is clicked (instead of following it), with
+ *   the translation it names
  * @returns {HTMLElement}
  */
-export function renderPublishProblems(refusal) {
+export function renderPublishProblems(refusal, { onOpenEntry } = {}) {
   const container = document.createElement('div');
   container.className = 'publish-problems';
+  if (onOpenEntry) {
+    container.addEventListener('click', (event) => {
+      const link = event.target.closest('a[data-collection]');
+      if (!link || !container.contains(link)) return;
+      event.preventDefault();
+      onOpenEntry({ collection: link.dataset.collection, slug: link.dataset.slug, locale: link.dataset.locale || null });
+    });
+  }
 
   const intro = document.createElement('p');
   intro.textContent = refusal.message;
@@ -204,6 +216,8 @@ export function renderPublishProblems(refusal) {
         link.href = entryDashboardPath(entry.collection, entry.slug);
         link.dataset.collection = entry.collection;
         link.dataset.slug = entry.slug;
+        // The translation it names: '' is the file without a locale suffix.
+        link.dataset.locale = entry.locale || '';
         link.textContent = label;
         item.appendChild(link);
       } else {
@@ -226,4 +240,17 @@ export function renderPublishProblems(refusal) {
   }
 
   return container;
+}
+
+/**
+ * The locale to select before opening a refused entry: the translation it
+ * names, or the default locale for a file without a locale suffix. null when
+ * the site has no i18n.
+ * @param {string|null} entryLocale
+ * @param {{enabled?: boolean, defaultLocale?: string}} i18nConfig
+ * @returns {string|null}
+ */
+export function localeToOpen(entryLocale, i18nConfig) {
+  if (!i18nConfig?.enabled) return null;
+  return entryLocale || i18nConfig.defaultLocale || null;
 }

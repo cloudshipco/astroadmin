@@ -252,6 +252,7 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
   let commit = '';
   let tempDir = null;
   let siteDirs = [];
+  let checkSiteDir = null; // the site in the check's worktree: the commit's own content config
 
   // A refusal reaches the editor (publish.js checkRefusalBody), so it is
   // built from structured parts only (build-failure.js): the error codes in
@@ -259,7 +260,7 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
   // own validation of each. The output itself goes to the server log.
   const failBuild = async (output) => {
     console.error(`❌ Content check failed for ${commit.slice(0, 7) || 'HEAD'}. The build's output:\n${output}`);
-    const entries = await describeRefusedEntries({ output, siteDirs, projectRoot, commit, fullConfig });
+    const entries = await describeRefusedEntries({ output, siteDirs, projectRoot, commit, fullConfig, checkSiteDir });
     return { success: false, commit, problems: buildProblems(output), entries, rawOutput: String(output) };
   };
   // A refusal of ours, in a sentence we wrote (logged with any detail).
@@ -290,6 +291,7 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     // Where the build names the commit's files (Location: lines), so a refused
     // file can be matched to its entry.
     siteDirs = [siteDir, path.join(await realpathOrNull(tempDir), 'worktree', siteSubdir)];
+    checkSiteDir = siteDir;
     for (const { relativeDir, liveNodeModules } of nodeModulesLevels(realRepoTop, siteSubdir)) {
       if (!(await exists(liveNodeModules))) continue;
       const workspaceLink = await findWorkspaceLink(liveNodeModules, realRepoTop);

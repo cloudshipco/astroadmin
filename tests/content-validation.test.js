@@ -123,7 +123,7 @@ git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q',
 git('config', 'user.name', 'Test');
 git('config', 'user.email', 'test@example.com');
 
-const { validateStoredEntry, formatIssuePath } =
+const { validateStoredEntry, formatIssuePath, validateAgainstSchema, validateCommittedText, formatAcceptedValue, fileLoaderItems } =
   await import('../server/utils/content-validation.js');
 const { writeContent } = await import('../server/utils/content.js');
 const contentRouter = (await import('../server/api/content.js')).default;
@@ -322,6 +322,54 @@ await check('z.coerce.date() is a date in the JSON Schema of a file() and a glob
     const html = generateForm(schemas[collection].schema, { joined: '2020-04-02' });
     assert.ok(/<input\s+type="date"\s+name="joined"/s.test(html), `${collection}.joined is not a date input`);
   }
+});
+
+await check('a bigint literal: the issue and its accepted value are reported, nothing throws', async () => {
+  const { z } = await import('zod');
+  const collectionSchema = { schema: { type: 'object', properties: {} }, _zodSchema: z.object({ n: z.coerce.bigint().pipe(z.literal(1n)) }) };
+  assert.equal((await validateAgainstSchema(collectionSchema, { n: 1 })).status, 'valid', 'control: 1 is accepted');
+  const result = await validateAgainstSchema(collectionSchema, { n: 2 });
+  assert.equal(result.status, 'invalid', JSON.stringify(result, (key, value) => (typeof value === 'bigint' ? `${value}n` : value)));
+  assert.equal(result.issues[0].path, 'n');
+  assert.deepEqual(result.issues[0].accepted, ['1n']);
+  // The publish refusal's path too: the entry is still read, not dropped.
+  const committed = await validateCommittedText({ schemas: { counts: collectionSchema }, collection: 'counts', file: 'a.md', text: '---\nn: 2\n---\n' });
+  assert.equal(committed.status, 'invalid');
+  assert.deepEqual(committed.issues.map((issue) => issue.accepted), [['1n']]);
+});
+
+await check('accepted values of every primitive format as text', () => {
+  assert.deepEqual([1n, 'a', 2, true, null, undefined, Symbol('s')].map(formatAcceptedValue), ['1n', 'a', '2', 'true', 'null', 'undefined', 'Symbol(s)']);
+  const cyclic = {};
+  cyclic.self = cyclic;
+  assert.equal(typeof formatAcceptedValue(cyclic), 'string', 'a cyclic object does not throw');
+});
+
+await check("a YAML error's line is the file's line", async () => {
+  // A duplicate key on line 3 of a real file, and a bad indent on line 4.
+  writeProjectFile('src/content/notes/dup.md', '---\ntitle: A\ntitle: B\n---\n');
+  writeProjectFile('src/content/notes/quote.md', '---\ntitle: A\nother: b\n  bad: indent\n---\n');
+  const dup = await validateCommittedText({ schemas: null, collection: 'notes', file: 'dup.md', text: fs.readFileSync(path.join(projectRoot, 'src/content/notes/dup.md'), 'utf-8') });
+  assert.deepEqual(dup.issues, [{ path: '', message: 'The frontmatter is not valid YAML (near line 3 of the file).' }]);
+  const quote = await validateCommittedText({ schemas: null, collection: 'notes', file: 'quote.md', text: fs.readFileSync(path.join(projectRoot, 'src/content/notes/quote.md'), 'utf-8') });
+  assert.deepEqual(quote.issues, [{ path: '', message: 'The frontmatter is not valid YAML (near line 4 of the file).' }]);
+  fs.rmSync(path.join(projectRoot, 'src/content/notes/dup.md'));
+  fs.rmSync(path.join(projectRoot, 'src/content/notes/quote.md'));
+});
+
+await check('with no schemas at the commit, nothing is validated against a schema', async () => {
+  const result = await validateCommittedText({ schemas: null, collection: 'pages', file: 'x.md', text: '---\ntitle: 5\n---\n' });
+  assert.equal(result.status, 'unchecked');
+  assert.deepEqual(result.issues, []);
+  const withImage = await validateCommittedText({
+    schemas: null, collection: 'pages', file: 'x.md', text: '---\n---\n', extraIssues: [{ path: 'body', message: 'm' }],
+  });
+  assert.deepEqual(withImage, { status: 'invalid', issues: [{ path: 'body', message: 'm' }] }, 'a confirmed image issue still shows');
+});
+
+await check("a file() item by Astro's id: (id ?? slug) as text, an object's keys as written", async () => {
+  assert.deepEqual(fileLoaderItems([{ id: 5 }, { slug: 'b' }, { name: 'no id' }]).map((item) => item.id), ['5', 'b']);
+  assert.deepEqual(fileLoaderItems({ $schema: './s.json', 'Jane Doe': { name: 'J' } }), [{ id: 'Jane Doe', data: { name: 'J' } }]);
 });
 
 await check('a date saved from the date input validates in both collections', async () => {
