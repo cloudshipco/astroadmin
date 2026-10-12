@@ -103,8 +103,11 @@ a git author (`git config user.name` and `user.email` in the site repository)
 and push access to `origin`.
 
 Publish commits the configured paths (`src/content/`, styles and images, set
-by `config.git.paths`) and pushes. A host that builds on push, such as Netlify,
-Cloudflare Pages or GitHub Pages via Actions, then rebuilds the site.
+by `config.git.paths`), brings in anything pushed to the repository since,
+and pushes. If someone else changed the same content, nothing is published
+and the editor is told to ask for the two to be combined. A host that builds
+on push, such as Netlify, Cloudflare Pages or GitHub Pages via Actions, then
+rebuilds the site.
 
 Before pushing, AstroAdmin builds that exact commit with the site's own
 installed Astro. If the build fails, the commit stays local and the editor is
