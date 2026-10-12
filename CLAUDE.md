@@ -181,7 +181,9 @@ runner aggregating them). Most run server-less and need env vars:
 - `bun tests/publish-check.test.js` — the publish gate, against this repo's real Astro: a
   throwaway site with a bare remote; invalid content is committed but not pushed, the commit
   (not the working tree) is what is checked, a rebase onto the remote is checked as
-  combined, a missing `image()` file is refused, only the checked commit is pushed (not
+  combined, unstaged saves (edits of tracked files) are committed BEFORE the pull so they
+  land on a remote that moved on (#57), a conflicting rebase is aborted and refused with a
+  409 (the checkout back on its branch), a missing `image()` file is refused, only the checked commit is pushed (not
   other configured refs, even with a same-named tag), a failed push is reported as NOT
   published, a timeout settles even when a descendant daemonises, gitlinks and workspace
   links are refused, a tracked `.env` stays as committed, `build.production` is honoured,
@@ -189,6 +191,25 @@ runner aggregating them). Most run server-less and need env vars:
   our validation of the refused entry (an Astro id such as `bad-page` resolved to the editor's
   `Bad Page`), and the site's own `node_modules/.astro` is byte-identical afterwards. Takes
   ~1-2 min (each publish runs a full `astro build`).
+- `bun tests/publish-sync.test.js` — publishing onto a site repo someone else also pushes to
+  (#57), over HTTP through the real app with a trivial check (~5 s): the commit route
+  (autoPush) rebases unstaged saves onto a moved remote and reports the rebased hash; a
+  conflicting rebase is aborted and refused (409) on both routes, with no path or git text
+  anywhere in the body; a rebase (stopped, or its state left on an attached branch), merge or
+  unmerged files left by someone else are refused (409, `committed: false`) before anything
+  is staged and left as they were (aborting an earlier rebase reset the branch to ITS start
+  and dropped the new commit); an inherited `rebase.autoStash` leaves no markers; and a save
+  arriving mid-rebase waits, so the abort's hard reset cannot discard an acknowledged save;
+  likewise a save during `/api/git/pull` and an image-details update during publish's commit
+  (the details the rebase brings in survive). Timed by barrier hooks the test releases, never
+  by sleeps, and each asserts the waiting request is still pending. An upload in progress is
+  never in the site (publish commits none of it; the finished image is installed whole; its
+  staging folder is removed), and an abandoned upload leaves nothing and holds up nothing. Each check was seen red on the unfixed code.
+- `bun tests/checkout-lock.test.js` — `server/utils/checkout-lock.js`: writes share the
+  checkout, the exclusive hold waits for running writes and later writes wait for it, a
+  failure releases either, nested writes run (reentrant), the exclusive hold from inside a
+  write is refused, and a continuation outliving its write takes its own hold. Each check
+  has a 3 s deadline, since a lock bug shows as a deadlock.
 - `bun tests/publish-refusal-reasons.test.js` — what the 422 says, from REAL failing builds:
   (i) a zod enum of `'/home/about'`-style values (entry, field, `accepted` values from our
   validator), (ii) a missing `image()` file (entry and field, found by the committed text),
@@ -453,7 +474,28 @@ Two layers, deliberately unequal:
 2. **Nothing is pushed until the site's own Astro accepts the exact commit**
    (`server/utils/astro-check.js`): `build.check`, else the site's `build.production`,
    else the site's own installed astro (`server/utils/astro-bin.js`), runs in a throwaway `git worktree` at HEAD, after the commit
-   and after `pull --rebase`, under `withGitLock` (which `/api/git/pull` also takes) so
+   and after `pull --rebase --no-autostash` (in that order: before the commit the saves are
+   unstaged and git refuses the pull, #57). The commit and the pull run in ONE exclusive
+   checkout hold (`server/utils/checkout-lock.js`, `commitInCheckout`): every write to the
+   checkout (content store writes, revert/restore, image writes) takes a shared hold, so a
+   save waits rather than landing between the commit and the pull or mid-rebase, where
+   `rebase --abort`'s hard reset would discard it. Inside the hold, an unfinished rebase,
+   merge or unmerged files refuse the publish (409) before anything is staged: they are
+   someone else's, and aborting an earlier rebase resets to ITS starting point. Only our own
+   conflicting rebase is aborted (409). `/api/git/pull` takes the exclusive hold too. Multer
+   streams an upload into its own temporary folder OUTSIDE the site, and only the complete
+   file is installed under a hold (`installUpload`: copy to a hidden name, rename). Writing
+   into the site as the body arrived let a publish commit 64 KB of a 256 KB image; holding
+   the lock for the whole request instead stranded the hold when a client disconnected while
+   waiting, and released it before multer's cleanup. Never tie a hold to a request's
+   lifetime. The image metadata is changed by ONE read-modify-write under a hold
+   (`updateMetadata`), never a read outside it. Shared holds are reentrant (AsyncLocalStorage), and asking for the exclusive hold from
+   inside one throws: both would otherwise deadlock. A new route that writes the checkout
+   must take `withCheckoutWrite` around its whole read-modify-write. Not covered:
+   `git.includeDb` (a SQLite write after the commit dirties the tracked DB; #66), and build
+   or deploy commands, which must write only ignored output (`dist/`) and deploy outside the
+   checkout (holding the lock across a build would stall every save behind a queued publish). The whole
+   thing runs under `withGitLock` (which `/api/git/pull` also takes) so
    the commit checked is the commit pushed. The push names that SHA and the branch's
    upstream explicitly (`pushCheckedCommit`), so a configured push refspec or
    `push.default=matching` cannot send unchecked refs. A failure keeps the commit local

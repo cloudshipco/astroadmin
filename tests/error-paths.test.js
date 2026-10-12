@@ -209,7 +209,8 @@ try {
     const response = await request('/api/images', { method: 'POST', body: form });
     assert.equal(response.status, 500, response.body);
     assert.deepEqual(response.json, { success: false, error: 'Failed to store the image' });
-    assertLogged(mark, `${projectRoot}/public/images/new`, 'EACCES');
+    // Uploads are staged outside the site and copied in under a hidden name.
+    assertLogged(mark, `${projectRoot}/public/images/`, 'EACCES');
     assertNoServerPath('upload', response.body);
   });
 

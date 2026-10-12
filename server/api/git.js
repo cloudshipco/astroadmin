@@ -13,11 +13,15 @@ import {
   pushIfAstroAccepts,
   checkRefusalBody,
   pushFailureBody,
+  conflictBody,
+  blockedBody,
+  commitInCheckout,
   createGitClient,
   getGitPaths,
   stageGitPaths,
   getStagedFilesForPaths,
 } from './publish.js';
+import { withCheckoutExclusive, withCheckoutWrite } from '../utils/checkout-lock.js';
 
 const router = express.Router();
 
@@ -331,15 +335,17 @@ router.post('/commit', async (req, res) => {
       });
     }
 
-    const outcome = await withGitLock(async () => {
-      const { result } = await commitConfiguredGitPaths(fullConfig, message);
-      if (!result || !fullConfig.git.autoPush) return { result, check: null, pushError: null };
-      // A local commit is harmless; pushing it is publishing, so it is checked.
-      const { check, pushError } = await pushIfAstroAccepts(fullConfig, git);
-      return { result, check, pushError };
-    });
-    const { result } = outcome;
+    const commit = async () => (await commitConfiguredGitPaths(fullConfig, message)).result;
+    // A local commit is harmless; pushing it is publishing, so it is checked
+    // (and rebased onto the upstream first, inside pushIfAstroAccepts).
+    const outcome = await withGitLock(() => (fullConfig.git.autoPush
+      ? pushIfAstroAccepts(fullConfig, git, { commit, onlyIfCommitted: true })
+      : commitInCheckout(git, commit)));
+    const result = outcome.commitResult;
 
+    if (outcome.blocked) {
+      return res.status(409).json(blockedBody());
+    }
     if (!result) {
       return res.status(400).json({
         success: false,
@@ -347,6 +353,9 @@ router.post('/commit', async (req, res) => {
       });
     }
 
+    if (outcome.conflict) {
+      return res.status(409).json(conflictBody({ committed: true, commitResult: result }));
+    }
     if (outcome.check && !outcome.check.success) {
       return res.status(422).json(await checkRefusalBody(outcome.check, { committed: true, commitResult: result }));
     }
@@ -418,7 +427,8 @@ router.post('/pull', async (req, res) => {
     const git = createGitClient(fullConfig);
     // Under the git lock: a pull that moved HEAD during a publish's check would
     // make the pushed commit differ from the checked one.
-    const result = await withGitLock(() => git.pull());
+    // And the checkout to itself: a save landing mid-merge could be overwritten.
+    const result = await withGitLock(() => withCheckoutExclusive(() => git.pull()));
 
     res.json({
       success: true,
@@ -566,7 +576,7 @@ router.post('/revert-file', async (req, res) => {
     await assertBlobAt(git, 'HEAD', validatedFile);
 
     // Restore file from HEAD (discard uncommitted changes)
-    await git.checkout(['HEAD', '--', literalPathspec(validatedFile)]);
+    await withCheckoutWrite(() => git.checkout(['HEAD', '--', literalPathspec(validatedFile)]));
 
     res.json({
       success: true,
@@ -610,7 +620,7 @@ router.post('/restore-from-commit', async (req, res) => {
     await assertBlobAt(git, validatedCommit, validatedFile);
 
     // Restore file from specific commit
-    await git.checkout([validatedCommit, '--', literalPathspec(validatedFile)]);
+    await withCheckoutWrite(() => git.checkout([validatedCommit, '--', literalPathspec(validatedFile)]));
 
     res.json({
       success: true,

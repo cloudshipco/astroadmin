@@ -284,6 +284,65 @@ await check('a push that fails is reported as NOT published', async () => {
   assert.equal((await publish()).statusCode, 200, 'publishes once the remote is back');
 });
 
+// A developer pushing to the site repo while an editor has unpublished saves.
+const developerClone = path.join(tempRoot, 'developer');
+git(tempRoot, 'clone', '-q', remoteDir, developerClone);
+git(developerClone, 'config', 'user.name', 'Developer');
+git(developerClone, 'config', 'user.email', 'developer@example.com');
+function developerPushes(relativePath, content) {
+  git(developerClone, 'pull', '-q', '--rebase');
+  writeFile(developerClone, relativePath, content);
+  git(developerClone, 'add', relativePath);
+  git(developerClone, 'commit', '-qm', `developer: ${relativePath}`);
+  git(developerClone, 'push', '-q');
+  return git(developerClone, 'rev-parse', 'HEAD');
+}
+const isAncestor = (ancestor, descendant) => {
+  try {
+    git(remoteDir, 'merge-base', '--is-ancestor', ancestor, descendant);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const rebaseInProgress = () => ['rebase-merge', 'rebase-apply']
+  .some((name) => fs.existsSync(path.join(projectRoot, git(projectRoot, 'rev-parse', '--git-path', name))));
+
+await check('saves left unstaged are published on top of a remote that moved on (#57)', async () => {
+  const developerCommit = developerPushes('README.md', '# Site\n');
+  // The editor's save, as the dashboard leaves it: an unstaged edit of a
+  // tracked file. (A NEW file is untracked, which does not stop a pull.)
+  writeFile(projectRoot, 'src/content/pages/about.md', '---\ntitle: About us\n---\n');
+  const res = await publish();
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.pushed, true);
+  assert.equal(remoteHead(), localHead(), 'the remote has the editor commit');
+  assert.ok(isAncestor(developerCommit, remoteHead()), "the developer's commit is kept underneath");
+  assert.equal(git(projectRoot, 'log', '-1', '--format=%s'), 'Content update');
+  assert.equal(res.body.commit.hash, localHead(), 'the reported commit is the one pushed (after the rebase)');
+});
+
+await check('a save that conflicts with a pushed change is refused, and the rebase is aborted', async () => {
+  developerPushes('src/content/pages/home.md', '---\ntitle: Home (developer)\n---\n');
+  const remoteBefore = remoteHead();
+  writeFile(projectRoot, 'src/content/pages/home.md', '---\ntitle: Home (editor)\n---\n');
+  const res = await publish();
+  assert.equal(res.statusCode, 409, JSON.stringify(res.body));
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.committed, true);
+  assert.equal(res.body.pushed, false);
+  assert.ok(!res.body.message.includes(tempRoot), 'no server path in the message');
+  assert.ok(!/CONFLICT|rebase/i.test(res.body.message), 'no git text in the message');
+  assert.equal(remoteHead(), remoteBefore, 'nothing was pushed');
+  assert.equal(rebaseInProgress(), false, 'the rebase was aborted');
+  assert.equal(git(projectRoot, 'symbolic-ref', '--short', 'HEAD'), 'main', 'the checkout is back on its branch');
+  assert.equal(fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf-8'),
+    '---\ntitle: Home (editor)\n---\n', "the editor's text is still in the checkout");
+  assert.equal(git(projectRoot, 'status', '--porcelain'), '', 'the tree is clean (the save is committed)');
+  // Resolved by hand on the box; later checks start from the remote.
+  git(projectRoot, 'reset', '-q', '--hard', 'origin/main');
+});
+
 await check('the combined result of a rebase onto the remote is what gets checked', async () => {
   // Elsewhere, the schema gains a required field and is pushed.
   git(tempRoot, 'clone', '-q', remoteDir, otherClone);

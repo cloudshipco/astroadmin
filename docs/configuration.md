@@ -114,9 +114,15 @@ editor address in `ALLOWED_ORIGINS`.
 
 Publish runs these steps, in order:
 
-1. `git pull --rebase` (skipped quietly if it fails, for example with no
-   remote);
-2. stage and commit the paths in `git.paths`;
+1. stage and commit the paths in `git.paths`;
+2. `git pull --rebase`, so the commit goes on top of anything pushed to the
+   site repo since (skipped when the branch has no upstream, and logged if it
+   fails for another reason). If someone else changed the same content, the
+   rebase is undone and the editor is told the changes were committed but
+   not published; someone with access to the checkout combines the two.
+   If the checkout is already in the middle of a rebase or merge (someone
+   left one unfinished on the server), publishing is refused before
+   anything is committed, and the editor's saves stay as they are;
 3. build the resulting commit with the site's Astro (the pre-push check,
    below);
 4. push that commit to the current branch's upstream;
@@ -170,7 +176,10 @@ export default {
 Commands are `/bin/sh` command lines run in the site's directory (the check
 runs in its worktree). Keep `--no-install`: without it Bun may fetch an Astro
 from the registry instead of using the installed one. The deploy adapter
-uploads `dist/`, so `build.production` must write there. The check's
+uploads `dist/`, so `build.production` must write there. A build or a local
+deploy must not change committed files in the site (only ignored output such
+as `dist/`, and a deploy destination outside the site's folder): AstroAdmin
+does not stop it running while a publish is committing. The check's
 worktree gets the site's `node_modules` linked in (without Astro's and Vite's
 caches) and the site's gitignored `.env*` files copied in. AstroAdmin's own
 variables (`ASTROADMIN_*`, `ADMIN_*`, `SESSION_SECRET`) are removed from its

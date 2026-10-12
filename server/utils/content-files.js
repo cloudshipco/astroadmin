@@ -35,6 +35,7 @@ import {
   allowedContentExtensions,
   CONTENT_EXTENSIONS,
 } from './glob-files.js';
+import { withCheckoutWrite } from './checkout-lock.js';
 
 async function getI18n() {
   // Must be the merged config — i18n is only enableable via astroadmin.config.js.
@@ -107,11 +108,12 @@ const fileWriteQueues = new Map();
 
 /**
  * Serialize tasks targeting the same file so read-modify-write cycles (the
- * file()-collection array) can't interleave and lose an update.
+ * file()-collection array) can't interleave and lose an update. Each task is
+ * also a checkout write, so it never runs while publish commits and rebases.
  */
 function withFileWriteQueue(filePath, task) {
   const previous = fileWriteQueues.get(filePath) || Promise.resolve();
-  const run = previous.catch(() => {}).then(task);
+  const run = previous.catch(() => {}).then(() => withCheckoutWrite(task));
   fileWriteQueues.set(filePath, run);
   const cleanup = () => {
     if (fileWriteQueues.get(filePath) === run) fileWriteQueues.delete(filePath);

@@ -5,10 +5,12 @@
 
 import express from 'express';
 import multer from 'multer';
+import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../config.js';
 import { loadSchemas } from '../utils/collections.js';
+import { withCheckoutWrite } from '../utils/checkout-lock.js';
 import {
   assertContainedPath,
   assertDeclaredCollection,
@@ -44,6 +46,26 @@ async function loadMetadata() {
 async function saveMetadata(metadata) {
   const metadataPath = path.join(config.paths.images, METADATA_FILENAME);
   await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+}
+
+let metadataQueue = Promise.resolve();
+
+/**
+ * Read, change and write the metadata file as one step: one update at a time,
+ * inside a checkout hold, so neither another update nor a publish's rebase
+ * can land between the read and the write and be overwritten by a stale copy.
+ * @param {(metadata: object) => void} change mutates the metadata in place
+ * @returns {Promise<object>} the metadata as written
+ */
+function updateMetadata(change) {
+  const run = metadataQueue.then(() => withCheckoutWrite(async () => {
+    const metadata = await loadMetadata();
+    change(metadata);
+    await saveMetadata(metadata);
+    return metadata;
+  }));
+  metadataQueue = run.catch(() => {});
+  return run;
 }
 
 /**
@@ -137,26 +159,44 @@ async function imageExists(filename) {
   return false;
 }
 
-// Configure multer storage
+/**
+ * Where an upload goes: ?for=image-field puts an image for an Astro image()
+ * field where Astro can import it; anything else is a public upload. Refuses
+ * a folder that resolves out of the project BEFORE creating anything in it
+ * (mkdir would follow a linked ancestor).
+ */
+async function uploadDirectory(req) {
+  const directory = isImageFieldUpload(req) ? assetImagesDirectory() : config.paths.images;
+  await assertImageInside(path.dirname(directory), path.join(directory, 'upload'));
+  await fs.mkdir(directory, { recursive: true });
+  return directory;
+}
+
+// Multer writes each upload into its own temporary folder OUTSIDE the site, as
+// the body streams in. Only a complete file is installed into the checkout
+// (installUpload, under a checkout hold), so a publish can never commit half
+// an image, and a client that disconnects leaves nothing in the site. The
+// folder is removed when the response closes, however the request ended
+// (multer removes a partial file on abort, but not the folder).
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    // ?for=image-field: an image for an Astro image() field goes where Astro
-    // can import it; anything else is a public upload, as before.
-    const directory = isImageFieldUpload(req) ? assetImagesDirectory() : config.paths.images;
     try {
-      // Refuse a folder that resolves out of the project BEFORE creating
-      // anything in it (mkdir would follow a linked ancestor).
-      await assertImageInside(path.dirname(directory), path.join(directory, 'upload'));
+      const stagingDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'astroadmin-upload-'));
+      const removeStaging = () => {
+        fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => {});
+      };
+      req.res.once('close', removeStaging);
+      // Bun's node:http does not always emit the response's 'close' when the
+      // client abandons the body. The request's 'close' also fires once a
+      // complete body has been read, before the file is installed, so it only
+      // removes the folder for a body that never completed.
+      req.once('close', () => {
+        if (!req.complete) removeStaging();
+      });
+      cb(null, stagingDirectory);
     } catch (error) {
       cb(error);
-      return;
     }
-    try {
-      await fs.mkdir(directory, { recursive: true });
-    } catch (err) {
-      // Directory already exists, ignore
-    }
-    cb(null, directory);
   },
   filename: (req, file, cb) => {
     // Generate unique filename while preserving extension
@@ -275,13 +315,41 @@ router.get('/', async (req, res) => {
  * POST /api/images
  * Upload a new image
  */
-router.post('/', upload.single('image'), (req, res) => {
+/**
+ * Move a complete upload from its temporary folder into the site: copied to a
+ * hidden name beside its destination, then renamed (the temporary folder can
+ * be on another filesystem, where a rename fails), all inside a checkout hold.
+ */
+async function installUpload(uploadedPath, directory, filename) {
+  const targetPath = path.join(directory, filename);
+  await assertImageInside(directory, targetPath);
+  const partialPath = path.join(directory, `.${filename}.uploading`);
+  await withCheckoutWrite(async () => {
+    try {
+      await fs.copyFile(uploadedPath, partialPath, fs.constants.COPYFILE_EXCL);
+      await fs.rename(partialPath, targetPath);
+    } catch (error) {
+      await fs.rm(partialPath, { force: true });
+      throw error;
+    }
+  });
+}
+
+router.post('/', upload.single('image'), async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({
         success: false,
         error: 'No image file provided',
       });
+    }
+
+    try {
+      await installUpload(req.file.path, await uploadDirectory(req), req.file.filename);
+    } catch (error) {
+      // As when multer wrote into the site: the error middleware words a
+      // refusal (a folder outside the project) and a storage failure.
+      return next(error);
     }
 
     const imageField = isImageFieldUpload(req);
@@ -307,6 +375,8 @@ router.post('/', upload.single('image'), (req, res) => {
       error: 'Failed to upload image',
       message: 'The image could not be saved; see the server log.',
     });
+  } finally {
+    if (req.file) await fs.rm(path.dirname(req.file.path), { recursive: true, force: true });
   }
 });
 
@@ -370,18 +440,20 @@ async function importableImage(filename, preferredSource) {
     let targetName = filename;
     let targetPath = path.join(targetDirectory, targetName);
     await assertImageInside(targetDirectory, targetPath);
-    try {
-      await fs.copyFile(candidate, targetPath, fs.constants.COPYFILE_EXCL);
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      if (!(await sameFileContent(candidate, targetPath))) {
-        const extension = path.extname(filename);
-        targetName = `${path.basename(filename, extension)}-${Date.now()}${extension}`;
-        targetPath = path.join(targetDirectory, targetName);
-        await assertImageInside(targetDirectory, targetPath);
+    await withCheckoutWrite(async () => {
+      try {
         await fs.copyFile(candidate, targetPath, fs.constants.COPYFILE_EXCL);
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        if (!(await sameFileContent(candidate, targetPath))) {
+          const extension = path.extname(filename);
+          targetName = `${path.basename(filename, extension)}-${Date.now()}${extension}`;
+          targetPath = path.join(targetDirectory, targetName);
+          await assertImageInside(targetDirectory, targetPath);
+          await fs.copyFile(candidate, targetPath, fs.constants.COPYFILE_EXCL);
+        }
       }
-    }
+    });
     return { filePath: targetPath, previewUrl: `/assets/images/${targetName}` };
   }
   return null;
@@ -520,22 +592,19 @@ router.put('/:filename/metadata', express.json(), async (req, res) => {
     }
     const { alt, focalPoint } = req.body;
 
-    const metadata = await loadMetadata();
-
-    // Initialize metadata for this file if it doesn't exist
-    if (!Object.hasOwn(metadata, sanitizedFilename) || !metadata[sanitizedFilename]) {
-      metadata[sanitizedFilename] = {};
-    }
-
-    // Update fields that were provided
-    if (alt !== undefined) {
-      metadata[sanitizedFilename].alt = alt;
-    }
-    if (focalPoint !== undefined) {
-      metadata[sanitizedFilename].focalPoint = focalPoint;
-    }
-
-    await saveMetadata(metadata);
+    const metadata = await updateMetadata((current) => {
+      // Initialize metadata for this file if it doesn't exist
+      if (!Object.hasOwn(current, sanitizedFilename) || !current[sanitizedFilename]) {
+        current[sanitizedFilename] = {};
+      }
+      // Update fields that were provided
+      if (alt !== undefined) {
+        current[sanitizedFilename].alt = alt;
+      }
+      if (focalPoint !== undefined) {
+        current[sanitizedFilename].focalPoint = focalPoint;
+      }
+    });
 
     console.log(`Metadata updated for: ${sanitizedFilename}`);
 
@@ -600,7 +669,7 @@ router.delete('/:filename', async (req, res) => {
       });
     }
 
-    await fs.unlink(filePath);
+    await withCheckoutWrite(() => fs.unlink(filePath));
 
     console.log(`Image deleted: ${sanitizedFilename}`);
 

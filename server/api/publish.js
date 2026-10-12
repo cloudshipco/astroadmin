@@ -6,13 +6,14 @@
  * assets in files mode, assets only in db mode), and never the binary content
  * DB unless config.git.includeDb.
  *
- * Pipeline: [git pull/commit/push if enabled] -> build -> deploy (if adapter).
+ * Pipeline: [git commit/pull/push if enabled] -> build -> deploy (if adapter).
  *
  * Mounted at /api/publish. The handler is also re-exported and aliased at
  * /api/git/publish (git.js) for backwards compatibility when git is enabled.
  */
 
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import simpleGit from 'simple-git';
 import { recordDoctorAfterCheck } from '../doctor/editor.js';
@@ -24,6 +25,7 @@ import { listSlugs } from '../utils/content.js';
 // Shared with the editor's "View live site" link (ui/ is served to the browser).
 import { resolveLiveUrl } from '../../ui/live-url.js';
 import { buildProblems } from '../utils/build-failure.js';
+import { withCheckoutExclusive } from '../utils/checkout-lock.js';
 
 const router = express.Router();
 // Conservative fallback for a malformed config; an explicitly-configured
@@ -74,34 +76,144 @@ export function withGitLock(task) {
 }
 
 /**
- * Push HEAD only if the site's own Astro accepts its content (see
- * utils/astro-check.js). A failed check leaves the commit local and unpushed.
- * `pushError` is set when there IS somewhere to push and the push failed (a
+ * Commit, rebase onto the upstream, then push HEAD only if the site's own
+ * Astro accepts its content (see utils/astro-check.js). Every route that
+ * pushes goes through here.
+ *
+ * `commit` (optional) stages and commits, returning git's commit result or
+ * null when there was nothing to commit; with `onlyIfCommitted`, nothing is
+ * pulled, checked or pushed after a null. The commit and the pull run in ONE
+ * exclusive checkout hold (commitInCheckout): the editor's saves are unstaged
+ * edits until committed, and git refuses to pull over them (#57), so saves
+ * wait rather than land in between or mid-rebase. The check runs after the
+ * pull, outside the hold (it builds in its own worktree), so the combined
+ * result is what is checked and pushed. A failed check leaves the commit
+ * local and unpushed.
+ *
+ * Outcomes besides the check: `blocked` when the checkout already holds an
+ * unfinished rebase or merge (nothing staged or committed; left as it was);
+ * `conflict` when OUR rebase conflicted (it is aborted; the commit stays
+ * local); `pushError` when there IS somewhere to push and the push failed (a
  * site with no upstream simply is not pushed, which is not an error).
- * @returns {Promise<{pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult}>}
+ * `commitResult.commit` is the commit's hash after the rebase.
+ * @param {object} fullConfig
+ * @param {import('simple-git').SimpleGit} git
+ * @param {{commit?: () => Promise<object|null>, onlyIfCommitted?: boolean}} [options]
+ * @returns {Promise<{blocked: boolean, conflict: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
  */
-export async function pushIfAstroAccepts(fullConfig, git) {
+export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyIfCommitted = false } = {}) {
+  const outcome = { blocked: false, conflict: false, commitResult: null, pushed: false, pushError: null, check: null };
+  const prepared = await commitInCheckout(git, commit, {
+    rebase: (commitResult) => !(onlyIfCommitted && !commitResult),
+  });
+  outcome.blocked = prepared.blocked;
+  outcome.conflict = prepared.conflict;
+  outcome.commitResult = prepared.commitResult;
+  if (!prepared.ready) return outcome;
+  const { upstream } = prepared;
+
   // The check's build is reused for the doctor's click-to-edit scan (capped,
   // never fails the publish), so the editor can show coverage without a build.
   const check = await checkHeadWithAstro(fullConfig, { onBuilt: (build) => recordDoctorAfterCheck(fullConfig, build) });
-  if (!check.success) {
-    return { pushed: false, pushError: null, check };
-  }
+  outcome.check = check;
+  // The rebase replays the commit with a new hash; report the one checked.
+  if (outcome.commitResult) outcome.commitResult = { ...outcome.commitResult, commit: check.commit };
+  if (!check.success) return outcome;
 
-  const upstream = await findUpstream(git);
   if (!upstream) {
     console.log('Push skipped: no upstream branch configured');
-    return { pushed: false, pushError: null, check };
+    return outcome;
   }
 
   try {
     await pushCheckedCommit(git, check.commit, upstream);
     console.log('✅ Pushed to remote');
-    return { pushed: true, pushError: null, check };
+    outcome.pushed = true;
   } catch (pushError) {
     console.error('Push failed:', pushError.message);
-    return { pushed: false, pushError: pushError.message, check };
+    outcome.pushError = pushError.message;
   }
+  return outcome;
+}
+
+/**
+ * In one exclusive checkout hold: refuse an unfinished git operation, commit
+ * (when `commit` is given) and, when `rebase(commitResult)` says so, rebase
+ * onto the upstream. `ready` means go on to check and push. Also the commit
+ * route's path when it does not push.
+ * @returns {Promise<{blocked: boolean, conflict: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
+ */
+export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
+  return withCheckoutExclusive(async () => {
+    const prepared = { blocked: false, conflict: false, ready: false, commitResult: null, upstream: null };
+    const unfinished = await unfinishedOperation(git);
+    if (unfinished) {
+      // Someone else's (an interrupted publish, or a person on the box): not
+      // ours to finish or abort. Aborting it would reset to ITS starting point.
+      console.error(`Publish refused: the checkout has an unfinished git operation (${unfinished})`);
+      prepared.blocked = true;
+      return prepared;
+    }
+    if (commit) prepared.commitResult = await commit();
+    if (!rebase(prepared.commitResult)) return prepared;
+    prepared.upstream = await findUpstream(git);
+    if (prepared.upstream && !(await rebaseOntoUpstream(git))) {
+      prepared.conflict = true;
+      return prepared;
+    }
+    prepared.ready = true;
+    return prepared;
+  });
+}
+
+/**
+ * The unfinished operation in the checkout, or null: a rebase (stopped, or
+ * interrupted with HEAD still on the branch), a merge, a cherry-pick or
+ * revert, or unmerged index entries.
+ */
+async function unfinishedOperation(git) {
+  for (const name of ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD']) {
+    if (fs.existsSync(await gitPath(git, name))) return name;
+  }
+  return (await git.raw(['ls-files', '--unmerged'])).trim() ? 'unmerged files' : null;
+}
+
+/** A path inside the git directory, absolute (relative output would be relative to the site). */
+async function gitPath(git, name) {
+  return (await git.raw(['rev-parse', '--path-format=absolute', '--git-path', name])).trim();
+}
+
+/**
+ * `git pull --rebase` onto the branch's upstream. Returns false when the
+ * rebase stopped on a conflict, after aborting it, so the checkout is back on
+ * its branch with the local commits intact (only ever OUR rebase: an earlier
+ * one refuses the publish first). Any other failure (an unreachable remote,
+ * uncommitted edits outside git.paths) is logged and the publish goes on: if
+ * the remote has moved, the push is then rejected and reported.
+ * `--no-autostash` overrides an inherited rebase.autoStash: popping the stash
+ * can conflict after the rebase has succeeded, leaving markers in the site.
+ */
+async function rebaseOntoUpstream(git) {
+  try {
+    await git.pull(['--rebase', '--no-autostash']);
+    console.log('✅ Pulled latest changes');
+    return true;
+  } catch (pullError) {
+    if (await rebaseInProgress(git)) {
+      console.error('Pull conflicted; aborting the rebase:', pullError.message);
+      await git.raw(['rebase', '--abort']);
+      return false;
+    }
+    console.log('Pull skipped:', pullError.message);
+    return true;
+  }
+}
+
+async function rebaseInProgress(git) {
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    if (fs.existsSync(await gitPath(git, name))) return true;
+  }
+  return false;
 }
 
 /**
@@ -130,6 +242,32 @@ async function findUpstream(git) {
  */
 async function pushCheckedCommit(git, commit, upstream) {
   await git.raw(['push', '--no-follow-tags', upstream.remote, `${commit}:${upstream.ref}`]);
+}
+
+/** Response body for a checkout left mid-rebase or mid-merge by someone else. */
+export function blockedBody() {
+  return {
+    success: false,
+    committed: false,
+    pushed: false,
+    commit: null,
+    error: 'The site needs attention before it can be published',
+    message: 'Nothing was published: the site files are in the middle of another change. '
+      + 'Your changes are saved. Contact your site administrator.',
+  };
+}
+
+/** Response body for a commit whose rebase onto the upstream conflicted. */
+export function conflictBody({ committed = false, commitResult = null } = {}) {
+  return {
+    success: false,
+    committed,
+    pushed: false,
+    commit: commitInfo(commitResult),
+    error: 'Your changes clash with newer changes to the site',
+    message: 'Your changes are saved and committed, but someone else has since changed the same content, '
+      + 'so they were not published. Contact your site administrator to combine the two.',
+  };
 }
 
 /** Response body for a checked commit that could not be pushed. */
@@ -212,27 +350,21 @@ function commitInfo(commitResult) {
 }
 
 /**
- * Run the git pre-step: pull --rebase, stage configured asset paths, commit,
- * check the resulting HEAD with Astro, push. Best-effort pull/push so a missing
- * remote doesn't fail the publish; the check is not best-effort.
- * @returns {Promise<{committed: boolean, pushed: boolean, commitResult: object|null, check: object}>}
+ * Run the git pre-step: stage configured paths and commit, then pull --rebase,
+ * check the resulting HEAD with Astro and push (all in pushIfAstroAccepts). A
+ * missing remote doesn't fail the publish; the check is not best-effort.
+ * @returns {ReturnType<typeof pushIfAstroAccepts>}
  */
-async function runGitStep(fullConfig, commitMessage) {
-  let committed = false;
-  let pushed = false;
-  let commitResult = null;
-  let check = null;
-  let pushError = null;
+function runGitStep(fullConfig, commitMessage) {
   const git = createGitClient(fullConfig);
+  return pushIfAstroAccepts(fullConfig, git, {
+    commit: () => commitPublishPaths(fullConfig, git, commitMessage),
+  });
+}
+
+/** Stage the configured paths (and the content DB when asked) and commit; null if nothing changed. */
+async function commitPublishPaths(fullConfig, git, commitMessage) {
   const commitPaths = [];
-
-  try {
-    await git.pull(['--rebase']);
-    console.log('✅ Pulled latest changes');
-  } catch (pullError) {
-    console.log('Pull skipped:', pullError.message);
-  }
-
   // Optionally force-add the (gitignored) content DB.
   if (fullConfig.git?.includeDb) {
     const relDb = path.relative(fullConfig.paths.projectRoot, fullConfig.database.path);
@@ -244,21 +376,13 @@ async function runGitStep(fullConfig, commitMessage) {
     }
   }
 
-  const stagePaths = getGitPaths(fullConfig);
-  commitPaths.push(...await stageGitPaths(git, stagePaths));
+  commitPaths.push(...await stageGitPaths(git, getGitPaths(fullConfig)));
 
   const stagedFiles = await getStagedFilesForPaths(git, commitPaths);
-  if (stagedFiles.length > 0) {
-    commitResult = await git.commit(commitMessage, commitPaths);
-    committed = true;
-    console.log(`✅ Committed: ${commitMessage}`);
-  }
-
-  // Checked after the pull and the commit, so it is the combined result —
-  // exactly what the push would send — that has to pass.
-  ({ pushed, pushError, check } = await pushIfAstroAccepts(fullConfig, git));
-
-  return { committed, pushed, commitResult, check, pushError };
+  if (stagedFiles.length === 0) return null;
+  const commitResult = await git.commit(commitMessage, commitPaths);
+  console.log(`✅ Committed: ${commitMessage}`);
+  return commitResult;
 }
 
 /**
@@ -291,14 +415,19 @@ export async function publishHandler(req, res) {
     let pushed = false;
     let commitResult = null;
     if (gitEnabled) {
-      let check;
-      let pushError;
-      ({ committed, pushed, commitResult, check, pushError } =
-        await withGitLock(() => runGitStep(fullConfig, commitMessage)));
-      if (!check.success) {
-        return res.status(422).json(await checkRefusalBody(check, { committed, commitResult }));
+      const outcome = await withGitLock(() => runGitStep(fullConfig, commitMessage));
+      ({ pushed, commitResult } = outcome);
+      committed = Boolean(commitResult);
+      if (outcome.blocked) {
+        return res.status(409).json(blockedBody());
       }
-      if (pushError) {
+      if (outcome.conflict) {
+        return res.status(409).json(conflictBody({ committed, commitResult }));
+      }
+      if (!outcome.check.success) {
+        return res.status(422).json(await checkRefusalBody(outcome.check, { committed, commitResult }));
+      }
+      if (outcome.pushError) {
         return res.status(502).json(pushFailureBody({ committed, commitResult }));
       }
     }
