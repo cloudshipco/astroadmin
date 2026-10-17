@@ -6,7 +6,6 @@
 import express from 'express';
 import {
   getAllCollections,
-  getCollectionNames,
   getCollectionEntries,
   getCollectionEntriesWithPreview,
   getCollectionEntriesWithLocales,
@@ -14,7 +13,7 @@ import {
   getCollectionUsedByBlocks,
 } from '../utils/collections.js';
 import { getConfig } from '../config.js';
-import { detectPreviewRoutes, getPreviewRoute } from '../utils/routes.js';
+import { detectPreviewRoutes } from '../utils/routes.js';
 import { discoverStaticPages } from '../utils/page-discovery.js';
 import { enrichSchemaWithBlockTypes } from '../utils/block-types.js';
 import { isContentPathError } from '../utils/glob-files.js';

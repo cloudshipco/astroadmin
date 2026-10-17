@@ -241,8 +241,10 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   // all would be dropped from the entry on the next save. A single-entry file()
   // collection is found by its `id`, so losing it would orphan the entry and
   // fail the consuming site's build. A hidden input carries the value through
-  // untouched while showing the editor nothing. `data-schema-const` keeps it
-  // out of bindOriginalValues: its value is the schema's, never the editor's.
+  // untouched while showing the editor nothing. `data-schema-const` marks it as
+  // the schema's value, never the editor's: it does not count towards whether a
+  // container is unchanged, and on an edited entry a value STORED at its path
+  // is kept (bindOriginalValues, `constants`).
   if (schema.const !== undefined) {
     return `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(String(schema.const))}" data-schema-const>`;
   }
@@ -1627,6 +1629,8 @@ function nullableControlValue(binding, control, value) {
  * @property {Map<Element, {path: string, members: Element[]}>} containers -
  *   every object, list and list item, with the path it was rendered from and
  *   the controls it held, in order
+ * @property {Map<Element, string>} constants - every const input, with the
+ *   path it was rendered from (see applyOriginalValues)
  * @property {Set<Element>} structurallyEdited - lists (and card lists' JSON
  *   inputs) whose rows were added, removed or moved since binding
  * @property {?MutationObserver} observer - watches for those row changes
@@ -1637,7 +1641,8 @@ const boundContainers = new WeakMap();
 
 // The elements extractFields reads a value from: named inputs, selects and
 // textareas, and a gallery (whose value is a data attribute). A const input is
-// the schema's value, not the editor's, so it is never bound.
+// the schema's value, not the editor's: it is not a control a container's
+// "unchanged" is judged by, and it is tracked on its own (`constants`).
 const CONTROL_SELECTOR = 'input[name], select[name], textarea[name], .gallery-field[data-field]';
 
 // Containers: a nested object's fieldset, a list (blocks, inline array,
@@ -1667,6 +1672,7 @@ export function bindOriginalValues(container, original) {
     original: cloneValue(original ?? {}),
     controls: new Map(),
     containers: new Map(),
+    constants: new Map(),
     structurallyEdited: new Set(),
     observer: null,
   };
@@ -1680,6 +1686,9 @@ export function bindOriginalValues(container, original) {
     const path = containerPath(element);
     if (path === null) continue;
     binding.containers.set(element, { path, members: boundControls(element) });
+  }
+  for (const constant of container.querySelectorAll('input[name][data-schema-const]')) {
+    binding.constants.set(constant, constant.getAttribute('data-original-path') ?? constant.name);
   }
   // Rows come and go without any control changing value: a row holding only
   // a constant has no bound control, and a row added then removed leaves the
@@ -1773,6 +1782,18 @@ function applyOriginalValues(container, data) {
     if (!controlUnchanged(binding, control)) continue;
     putStoredValue(data, controlPath(control), binding.original, bound.path);
     restored.add(controlPath(control));
+  }
+
+  // A const input always carries the schema's value, so it never "changes";
+  // left to the DOM, a stored optional `z.literal('')` was re-read as '' and
+  // cleaned away whenever a sibling changed. A value stored at its path is
+  // kept. With nothing stored there the schema's value stands, so a missing
+  // required id is still written.
+  for (const [constant, storedPath] of binding.constants) {
+    if (!container.contains(constant) || insideSettled(constant)) continue;
+    if (getNestedValue(binding.original, storedPath) === undefined) continue;
+    putStoredValue(data, constant.name, binding.original, storedPath);
+    restored.add(constant.name);
   }
   return restored;
 }
@@ -2743,9 +2764,9 @@ export function createEmptyBlock(blockType, blockSchema) {
       } else if (schema.type === 'object') {
         block[key] = {};
       } else if (isNumericType(schema.type)) {
-        block[key] = schema.default ?? 0;
+        block[key] = 0;
       } else if (schema.type === 'boolean') {
-        block[key] = schema.default ?? false;
+        block[key] = false;
       } else {
         block[key] = '';
       }

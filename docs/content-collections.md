@@ -103,6 +103,23 @@ export const collections = { posts, testimonials };
 Labels come from field names: `heroImage` is shown as "Hero Image". Choose
 names an editor will understand.
 
+### Optional text fields
+
+Let an optional text field accept an empty string: write
+`z.string().trim().optional()` (or just `z.string().optional()`), not
+`z.string().min(1).optional()`, and treat `""` and a missing value the same
+in your templates (`{entry.data.caption && ...}`).
+
+An editor who empties a text field leaves `""` in the form. For a field of
+the entry itself, an optional `""` is saved as not set. For a field inside a
+block, the `""` is saved as it is: optional does not prove that `""` and a
+missing value mean the same thing to your site (a `.default()` fills a
+missing value in, and a template or a refinement can tell the two apart). So
+a block field written as `.min(1).optional()` fails your schema once an
+editor empties it. The save still goes through, but the editor is told the
+site cannot be published, and the only fix open to them is to type
+something.
+
 ### Text fields
 
 A string field is a one-line input when any of these holds:

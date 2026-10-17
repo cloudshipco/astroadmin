@@ -3,8 +3,10 @@
  * VISIBLE. An image field's named control is an <input type="hidden"> (see
  * generateImageField), and scrollIntoView/focus on a hidden input are silent
  * no-ops — so clicking an image in the preview appeared to do nothing (site
- * report, 2026-08-26). Runs the real function from dashboard.js against a
- * minimal fake DOM so the behaviour, not the source text, is asserted.
+ * report, 2026-08-26). Runs the real function from dashboard.js, with the
+ * real goToField it calls (ui/content-problems.js, shared with the problem
+ * summary's links), against a minimal fake DOM so the behaviour, not the
+ * source text, is asserted.
  *
  * Run: bun tests/focus-editor-field.test.js
  */
@@ -13,6 +15,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { goToField } from '../ui/content-problems.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(path.join(dir, '../ui/dashboard.js'), 'utf8');
@@ -41,12 +44,13 @@ function run(controlType) {
   };
   const form = { querySelector: (sel) => (sel.includes('"heroImage"') ? control : null) };
   const fn = new Function(
-    'document', 'CSS', 'flashFieldGroup',
+    'document', 'CSS', 'flashFieldGroup', 'goToField',
     `${fnSrc}; return focusEditorField;`
   )(
     { getElementById: (id) => (id === 'contentForm' ? form : null) },
     { escape: (s) => s },
     (g) => calls.flashed.push(g.id),
+    goToField,
   );
   fn('heroImage');
   return calls;

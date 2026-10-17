@@ -32,7 +32,7 @@ import { initEntryPicker, syncEntryPickerLabel } from './entry-picker.js';
 import { escapeHtml } from './escape-html.js';
 import { savePayload } from './save-payload.js';
 import { liveSiteHref } from './live-url.js';
-import { showEntryProblems, renderPublishProblems, localeToOpen } from './content-problems.js';
+import { showEntryProblems, renderPublishProblems, localeToOpen, goToField } from './content-problems.js';
 
 // Reference fields can appear anywhere a field can — including inside the array item
 // modal — so hand their wiring to the shared field layer rather than binding it to
@@ -1757,18 +1757,12 @@ function focusEditorField(field) {
   const esc = CSS.escape(field);
   const el = form.querySelector(`[name="${esc}"], [data-content-field="${esc}"]`);
   if (!el) return;
-  const block = el.closest('.block-item.collapsed');
-  if (block) block.querySelector('.block-header')?.click(); // expand it
   // Widgets whose named control is a hidden input (the image picker, array
-  // data, a block's type) have no box to scroll to and cannot take focus, so
-  // scrolling/focusing the input is a silent no-op and the editor never moves —
-  // from the preview side that reads as "clicking the image does nothing".
-  // Scroll to the visible group instead and skip the focus.
-  const group = el.closest('.form-group') || el;
-  const visible = el.type !== 'hidden';
-  (visible ? el : group).scrollIntoView({ behavior: 'smooth', block: 'center' });
-  if (visible && typeof el.focus === 'function') el.focus({ preventScroll: true });
-  flashFieldGroup(group);
+  // data, a block's type) have no box to scroll to and cannot take focus;
+  // goToField scrolls to the visible group instead, or from the preview side
+  // clicking the image reads as "does nothing".
+  goToField(el);
+  flashFieldGroup(el.closest('.form-group') || el);
 }
 
 // Briefly flash a field group. Tracks one timer + the ORIGINAL inline style per

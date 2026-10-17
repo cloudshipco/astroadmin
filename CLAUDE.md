@@ -151,7 +151,24 @@ runner aggregating them). Most run server-less and need env vars:
   as `[]` rather than vanishing, paths after a block/item is deleted, and a page round trip.
   The rule it pins: an empty array survives `extractFormData` only when its key is REQUIRED;
   an empty array the schema proves optional is dropped (`[]` fails `.optional().min(1)`),
-  inside block items too.
+  inside block items too. A `""` the DOM produced in a key the schema proves optional is
+  dropped at the top level (every optional `""`; whether that is right is #69) and KEPT
+  inside a block. Do not narrow or widen that by reading the JSON Schema: it cannot say
+  which `""` the site's zod refuses (z.coerce, .catch(), z.preprocess and zod 4's
+  .base64() serialise as stricter than they are), and optional does not make `""` and
+  absent the same (`.default('x')` fills absent in). An editor-chosen "leave this out",
+  gated on the real validation, is #70. A const (`z.literal`) input is not the editor's,
+  but a value STORED at its path is kept when a sibling changes (`binding.constants`);
+  with nothing stored, the schema's value is used.
+- `bun tests/blank-optional-round-trip.test.js` — that block rule, through the real app,
+  zod 4 and zod 3: a block holding `.min(1).optional()`, `.optional()`, `.default('x')`,
+  `z.literal('').optional()`, an enum with `''`, `z.coerce.number().optional()`,
+  `.min(1).catch('c').optional()` and an optional object is saved with nothing edited, a
+  sibling edited, a new block left empty and every field cleared, by `ui/` at
+  `BLANK_OPTIONAL_BASE` (default 9ef8871, `git archive`), by this checkout and by a mutant
+  (the block exemption removed). This checkout must write the base's bytes in every
+  scenario; the mutant must differ somewhere (else the comparison is blind). Seen red
+  with the exemption removed from the real file. ~3 s.
 - `bun tests/date-marker.test.js` — the schema parser's `x-astroadmin-date` marker for zod 3
   (`zod/v3`) and zod 4: a real date is marked through optional/nullable/default/catch, union
   and discriminated-union branches, intersections, objects and arrays; date-format strings
@@ -371,7 +388,31 @@ runner aggregating them). Most run server-less and need env vars:
   second dev() on the next port). ~15 s; `COMPONENT_PREVIEW_PORT` overrides the port.
 - `bun tests/content-problems.test.js` — the editor side (happy-dom): issue paths finding
   their fields, marks clearing, marks never leaking into `extractFields`, the refusal panel
-  (a link opens the translation it names: `pages/home (fr)` selects French first).
+  (a link opens the translation it names: `pages/home (fr)` selects French first). Blocks
+  render collapsed, so a block holding a problem (counted by issue PATH under the block's
+  own) shows "N problems" in its header, and each summary line that finds a field is a
+  button that opens the collapsed block around it (`revealField`) and focuses it
+  (`goToField`, which click-to-edit uses too); a problem on a whole block
+  (`blocks[1]`, a block-level refinement) goes to that block, not the list; a line whose
+  block was deleted since is disabled. Blocks do not nest: `findDiscriminatedUnions` does not descend into a union's
+  options, so a union inside a block is not a block list.
+- `bun tests/block-reveal.test.js` — the same on a real site's schema and content
+  (`tests/fixtures/derived-blocks-site`, derived from a client site: its blocks and pages
+  collection with comments removed and example strings made generic, a page with its text
+  replaced, plus a Vimeo video block), through the real parser, enrichment, validation,
+  renderer and handlers: the badge, the accordion closing the open block, focus, an item
+  problem inside a block, and a deleted block's line. Seen red with HEAD's
+  content-problems.js (4 of 5) and without the deleted-block guard.
+- `bun tests/schema-refinements.test.js` — a save is judged by the site's REAL zod schema,
+  not the JSON Schema the form is drawn from (which drops `.refine()`): through the real
+  `createServer()` app, for a site on zod 4 and one on zod 3 (a child process each), a
+  refinement whose rule lives in a module of the site's own gives its own message at
+  `blocks[1].url`, on an item in a block, a cross-field `superRefine` at the path it names,
+  the same on GET; a valid save is valid and a refinement-free collection saves as before.
+  Seen red by validating with `z.fromJSONSchema(collection.schema)` instead (the refinement
+  checks failed, the controls held). Also: no content response (GET, POST, PUT, DELETE)
+  carries a server path; routes name the fields they send (`entryForEditor`), never spread
+  the store's result, which holds `filePath` (and `deleted`). ~3 s.
 - `bun tests/date-round-trip.test.js` — a date-time through render -> `extractFormData` ->
   serialiser, three saves in a row, for a JSON `file()` entry and a markdown entry, in
   Europe/London, America/New_York and UTC (one child process per zone, each proving its

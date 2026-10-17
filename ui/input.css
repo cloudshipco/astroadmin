@@ -59,6 +59,17 @@
   .field-problem {
     @apply mt-1 text-xs text-red-700;
   }
+  /* A summary line that takes the editor to its field */
+  .entry-problem-link {
+    @apply text-left underline decoration-red-300 underline-offset-2 hover:decoration-red-700 cursor-pointer;
+  }
+  /* A collapsed block holding a problem says so in its header */
+  .block-item.block-has-problem {
+    @apply border-red-300;
+  }
+  .block-problem-badge {
+    @apply ml-auto mr-2 shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800;
+  }
   .publish-problems-panel {
     @apply fixed top-[60px] right-5 max-w-md max-h-[70vh] overflow-y-auto p-4 pr-8 rounded-lg shadow-lg bg-white border border-red-300 text-sm text-gray-800;
     /* Above the primary modals (50), below stacked editors and pickers. */

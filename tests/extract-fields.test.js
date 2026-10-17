@@ -363,6 +363,62 @@ check('required array inside a block item still saves as []', () => {
   equal(extractFormData(form, pageSchema), entry);
 });
 
+// A constant (z.literal) renders as a hidden input carrying the schema's value
+// and is not an editor's to change. A stored value at its path is kept when
+// another field changes (it used to be re-read and, being an optional "",
+// cleaned away); with nothing stored there, the schema's value is written.
+const literalSchema = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    marker: { type: 'string', const: '' },
+    blocks: {
+      type: 'array',
+      blockTypes: {
+        note: {
+          type: 'object',
+          properties: { type: { type: 'string', const: 'note' }, heading: { type: 'string' }, caption: { type: 'string', const: '' } },
+          required: ['type', 'heading'],
+        },
+      },
+    },
+  },
+  required: ['title', 'blocks'],
+};
+
+check('a stored optional literal "" is kept when a sibling field changes (top level)', () => {
+  const form = render(literalSchema, { title: 'Before', marker: '', blocks: [] });
+  form.querySelector('[name="title"]').value = 'After';
+  equal(extractFormData(form, literalSchema), { title: 'After', marker: '', blocks: [] });
+});
+
+check('a stored optional literal "" in a block is kept when a sibling field in that block changes', () => {
+  const form = render(literalSchema, { title: 'T', blocks: [{ type: 'note', heading: 'Before', caption: '' }] });
+  form.querySelector('[name="blocks[0].heading"]').value = 'After';
+  equal(extractFormData(form, literalSchema), { title: 'T', blocks: [{ type: 'note', heading: 'After', caption: '' }] });
+});
+
+check('an absent optional literal is saved as HEAD saved it when a sibling changes (absent at the top, "" in a block)', () => {
+  // Unchanged by this rule, and pinned so a change to it is deliberate: the
+  // const input carries '', which the top level drops as an optional '' and a
+  // block keeps ('' is a valid value of z.literal('')). Whether an absent
+  // optional key should ever be written is the open blank/absent question
+  // (#69).
+  const top = render(literalSchema, { title: 'T', blocks: [] });
+  top.querySelector('[name="title"]').value = 'After';
+  equal(extractFormData(top, literalSchema), { title: 'After', blocks: [] });
+  const form = render(literalSchema, { title: 'T', blocks: [{ type: 'note', heading: 'Before' }] });
+  form.querySelector('[name="blocks[0].heading"]').value = 'After';
+  equal(extractFormData(form, literalSchema), { title: 'T', blocks: [{ type: 'note', heading: 'After', caption: '' }] });
+});
+
+check('control: a required literal missing from the stored entry is still written (an id is never lost)', () => {
+  const schema = { type: 'object', properties: { id: { type: 'string', const: 'home' }, headline: { type: 'string' } }, required: ['id'] };
+  const form = render(schema, { headline: 'Before' });
+  form.querySelector('[name="headline"]').value = 'After';
+  equal(extractFormData(form, schema), { id: 'home', headline: 'After' });
+});
+
 check('block items keep empty-string placeholders even for optional fields (unchanged exemption)', () => {
   const schema = {
     type: 'object',

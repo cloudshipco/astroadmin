@@ -94,6 +94,16 @@ function bodyToWrite(requestBody) {
 }
 
 /**
+ * The fields of a stored entry an editor is sent. Named, never spread: the
+ * store's result also carries the file's absolute server path (`filePath`, and
+ * `deleted` on a delete), which is not the editor's to see.
+ * @param {{type: string, data: *, body: string|null, locale: string|null}} content
+ */
+function entryForEditor(content) {
+  return { locale: content.locale, type: content.type, data: content.data, body: content.body };
+}
+
+/**
  * GET /api/content/:collection/:slug
  * Read a content entry
  * Query params: ?locale=en (optional, uses default locale if i18n enabled)
@@ -109,8 +119,7 @@ router.get('/:collection/:slug', async (req, res) => {
       success: true,
       collection,
       slug,
-      locale,
-      ...content,
+      ...entryForEditor(content),
       // An entry already broken on disk says so as soon as it is opened.
       validation: await validateSavedEntry(collection, slug, locale),
     });
@@ -164,8 +173,7 @@ router.post('/:collection/:slug', async (req, res) => {
       success: true,
       collection,
       slug,
-      locale,
-      ...result,
+      locale: result.locale,
       validation: await validateSavedEntry(collection, slug, locale),
       message: 'Content saved successfully',
     });
@@ -213,8 +221,7 @@ router.put('/:collection/:slug', async (req, res) => {
       success: true,
       collection,
       slug,
-      locale,
-      ...result,
+      locale: result.locale,
       validation: await validateSavedEntry(collection, slug, locale),
       message: 'Content updated successfully',
     });
@@ -245,8 +252,7 @@ router.delete('/:collection/:slug', async (req, res) => {
       success: true,
       collection,
       slug,
-      locale,
-      ...result,
+      locale: result.locale,
       message: 'Content deleted successfully',
     });
   } catch (error) {

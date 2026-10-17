@@ -11,6 +11,11 @@
  * is found by its `name`, or for a block or array list by its container's
  * `data-field`. A path with neither (a whole block, a key the schema does not
  * render) is marked on the nearest ancestor that has one.
+ *
+ * Blocks render collapsed, so a message on a block's field is out of sight:
+ * each block holding a problem is marked in its header with a count, and each
+ * summary line that names a field is a button that opens the block around it
+ * and focuses it.
  */
 
 import { formatLabel } from './form-generator.js';
@@ -19,6 +24,8 @@ import { entryDashboardPath } from './entry-urls.js';
 const SUMMARY_CLASS = 'entry-problems';
 const FIELD_MESSAGE_CLASS = 'field-problem';
 const GROUP_PROBLEM_CLASS = 'has-problem';
+const BLOCK_PROBLEM_CLASS = 'block-has-problem';
+const BLOCK_BADGE_CLASS = 'block-problem-badge';
 
 /**
  * Human-readable location for an issue path ('blocks[1].title' -> 'Blocks › 2 › Title').
@@ -34,8 +41,8 @@ export function describeIssuePath(issuePath) {
 }
 
 /**
- * The input (or block/array container) for an issue path, or for its nearest
- * ancestor that has one.
+ * The input (or block, or array container) for an issue path, or for its
+ * nearest ancestor that has one.
  * @param {HTMLFormElement} form
  * @param {string} issuePath
  * @returns {Element|null}
@@ -46,8 +53,11 @@ export function findFieldForPath(form, issuePath) {
     const escaped = CSS.escape(candidate);
     // Array, block, gallery and reference lists carry data-field on a
     // container inside their .form-group rather than a named input.
+    // A whole block ('blocks[1]', from a block-level refinement) has no
+    // control of its own: it is the block, not the list it sits in.
     const field = form.querySelector(`[name="${escaped}"]`)
-      || form.querySelector(`[data-field="${escaped}"]`);
+      || form.querySelector(`[data-field="${escaped}"]`)
+      || [...form.querySelectorAll('.blocks-list > .block-item')].find((block) => blockPath(block) === candidate);
     if (field) return field;
     // Drop the last segment: 'blocks[1].title' -> 'blocks[1]' -> 'blocks'.
     const shorter = candidate.replace(/(\.[^.[\]]+|\[\d+\])$/, '');
@@ -110,10 +120,63 @@ function optionalAtPath(schema, issuePath) {
   return false;
 }
 
+/**
+ * Open the collapsed block around an element, through the block's own header
+ * (so its icon and the one-open-block rule follow). Blocks do not nest: the
+ * schema parser finds block lists only outside a block (findDiscriminatedUnions
+ * does not descend into a union's options), so there is at most one.
+ * @param {Element} element
+ */
+export function revealField(element) {
+  element.closest('.block-item.collapsed')?.querySelector('.toggle-block-header')?.click();
+}
+
+/**
+ * Open the blocks around a field, scroll to it and focus it. A control with no
+ * box of its own (a hidden input behind an image picker or a list) cannot take
+ * focus, so its group is scrolled to instead.
+ * @param {Element} element - a control, or a block or list container
+ * @returns {Element} the element scrolled to
+ */
+export function goToField(element) {
+  revealField(element);
+  const visible = element.type !== 'hidden';
+  const target = visible ? element : (element.closest('.form-group') || element);
+  target.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+  if (visible && typeof element.focus === 'function') element.focus({ preventScroll: true });
+  return target;
+}
+
+/** The path a block's fields are named under ('blocks[1]'), from its type input. */
+function blockPath(block) {
+  const body = [...block.children].find((child) => child.classList.contains('block-body'));
+  const typeInput = body && [...body.children].find((child) => child.matches('input[type="hidden"][name$=".type"]'));
+  return typeInput ? typeInput.getAttribute('name').slice(0, -'.type'.length) : null;
+}
+
+/** Mark each block holding a problem in its header, with how many it holds. */
+function markBlocks(form, issues) {
+  for (const block of form.querySelectorAll('.block-item')) {
+    const path = blockPath(block);
+    if (!path) continue;
+    const count = issues.filter((issue) => issue.path === path
+      || issue.path.startsWith(`${path}.`) || issue.path.startsWith(`${path}[`)).length;
+    if (count === 0) continue;
+    block.classList.add(BLOCK_PROBLEM_CLASS);
+    const header = [...block.children].find((child) => child.classList.contains('toggle-block-header'));
+    if (!header) continue;
+    const badge = document.createElement('span');
+    badge.className = BLOCK_BADGE_CLASS;
+    badge.textContent = `${count} problem${count === 1 ? '' : 's'}`;
+    header.insertBefore(badge, header.querySelector('.block-expand-icon'));
+  }
+}
+
 /** Remove every mark a previous showEntryProblems call left on the form. */
 export function clearEntryProblems(form) {
-  form.querySelectorAll(`.${SUMMARY_CLASS}, .${FIELD_MESSAGE_CLASS}`).forEach((el) => el.remove());
+  form.querySelectorAll(`.${SUMMARY_CLASS}, .${FIELD_MESSAGE_CLASS}, .${BLOCK_BADGE_CLASS}`).forEach((el) => el.remove());
   form.querySelectorAll(`.${GROUP_PROBLEM_CLASS}`).forEach((el) => el.classList.remove(GROUP_PROBLEM_CLASS));
+  form.querySelectorAll(`.${BLOCK_PROBLEM_CLASS}`).forEach((el) => el.classList.remove(BLOCK_PROBLEM_CLASS));
   form.querySelectorAll('[aria-invalid="true"]').forEach((el) => el.removeAttribute('aria-invalid'));
 }
 
@@ -139,11 +202,33 @@ export function showEntryProblems(form, validation, schema = null) {
   const list = document.createElement('ul');
   for (const issue of issues) {
     const item = document.createElement('li');
-    item.textContent = `${describeIssuePath(issue.path)}: ${issue.message}`;
+    const text = `${describeIssuePath(issue.path)}: ${issue.message}`;
+    const field = findFieldForPath(form, issue.path);
+    if (field) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'entry-problem-link';
+      button.textContent = text;
+      button.addEventListener('click', () => {
+        // The field found when this summary was drawn: a block deleted since
+        // takes it off the page (a moved block keeps it). The next save's
+        // summary replaces this one; until then, say it is gone.
+        if (!field.isConnected) {
+          button.disabled = true;
+          button.title = 'This field is no longer in the form';
+          return;
+        }
+        goToField(field);
+      });
+      item.appendChild(button);
+    } else {
+      item.textContent = text;
+    }
     list.appendChild(item);
   }
   summary.appendChild(list);
   form.prepend(summary);
+  markBlocks(form, issues);
 
   for (const issue of issues) {
     const field = findFieldForPath(form, issue.path);

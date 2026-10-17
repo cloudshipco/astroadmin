@@ -22,8 +22,11 @@ globalThis.CSS = window.CSS;
 globalThis.HTMLElement = window.HTMLElement;
 globalThis.Node = window.Node;
 globalThis.Event = window.Event;
+// Delete Block asks first; the answer here is yes.
+globalThis.confirm = () => true;
+window.confirm = () => true;
 
-const { generateForm, extractFields } = await import('../ui/form-generator.js');
+const { generateForm, extractFields, setupFormHandlers } = await import('../ui/form-generator.js');
 const {
   describeIssuePath,
   findFieldForPath,
@@ -227,6 +230,98 @@ check('an issue on a whole inline array is marked on that field', () => {
   assert.ok(form.querySelector('[data-field="tags"]'), 'control: the array container carries data-field');
   showEntryProblems(form, { status: 'invalid', issues: [{ path: 'tags', message: 'Add at least one' }] });
   assert.equal(form.querySelectorAll('.field-problem').length, 1, 'marked on the field, not just the summary');
+});
+
+// --- Problems inside collapsed blocks -----------------------------------------
+// Blocks render collapsed (the dashboard collapses every block after render),
+// so a message on a block's field is out of sight. The block's header says so,
+// and the summary line takes the editor to the field. The same on a real
+// site's schema and content: tests/block-reveal.test.js.
+
+/** Render with handlers wired and every block collapsed, as the dashboard does. */
+function renderCollapsed(entry) {
+  const form = render(entry);
+  setupFormHandlers(form, () => {});
+  form.querySelectorAll('.block-item').forEach((block) => block.classList.add('collapsed'));
+  return form;
+}
+
+const threeBlocks = { title: 'Home', blocks: [{ type: 'hero', heading: 'A' }, { type: 'hero', heading: '' }, { type: 'hero', heading: 'C' }] };
+
+check('a collapsed block holding a problem is marked in its header, with a count', () => {
+  const form = renderCollapsed(threeBlocks);
+  showEntryProblems(form, {
+    status: 'invalid',
+    issues: [
+      { path: 'blocks[1].heading', message: 'Too short' },
+      { path: 'blocks[1].subtitle', message: 'Required' },
+    ],
+  });
+  const blocks = [...form.querySelectorAll('.block-item')];
+  assert.equal(blocks.length, 3, 'control: three blocks rendered');
+  assert.ok(blocks[1].classList.contains('collapsed'), 'control: still collapsed');
+  assert.ok(blocks[1].classList.contains('block-has-problem'), 'the block is marked');
+  assert.equal(blocks[1].querySelector('.toggle-block-header .block-problem-badge')?.textContent, '2 problems');
+  for (const index of [0, 2]) {
+    assert.ok(!blocks[index].classList.contains('block-has-problem'), `block ${index + 1} is not marked`);
+    assert.equal(blocks[index].querySelector('.block-problem-badge'), null, `block ${index + 1} has no badge`);
+  }
+});
+
+check('one problem reads "1 problem", and a valid result clears the block marks', () => {
+  const form = renderCollapsed(threeBlocks);
+  showEntryProblems(form, { status: 'invalid', issues: [{ path: 'blocks[1].heading', message: 'Too short' }] });
+  assert.equal(form.querySelector('.block-problem-badge')?.textContent, '1 problem');
+  showEntryProblems(form, { status: 'valid', issues: [] });
+  assert.equal(form.querySelectorAll('.block-problem-badge, .block-has-problem').length, 0);
+});
+
+check('a problem on a whole block list marks no single block', () => {
+  const form = renderCollapsed(threeBlocks);
+  showEntryProblems(form, { status: 'invalid', issues: [{ path: 'blocks', message: 'Too many' }] });
+  assert.equal(form.querySelectorAll('.block-problem-badge, .block-has-problem').length, 0);
+});
+
+check('a summary line opens the collapsed block and focuses the field', () => {
+  const form = renderCollapsed(threeBlocks);
+  showEntryProblems(form, { status: 'invalid', issues: [{ path: 'blocks[1].heading', message: 'Too short' }] });
+  const line = form.querySelector('.entry-problems li button');
+  assert.ok(line, 'the summary line is a button');
+  assert.equal(line.textContent, 'Blocks › 2 › Heading: Too short');
+  line.click();
+  const blocks = [...form.querySelectorAll('.block-item')];
+  assert.ok(!blocks[1].classList.contains('collapsed'), 'the block is open');
+  assert.ok(blocks[0].classList.contains('collapsed') && blocks[2].classList.contains('collapsed'), 'the others stay closed');
+  assert.equal(document.activeElement, form.querySelector('[name="blocks[1].heading"]'), 'the field has focus');
+});
+
+check('a summary line with no field to go to is plain text', () => {
+  const form = renderCollapsed(threeBlocks);
+  showEntryProblems(form, { status: 'invalid', issues: [{ path: 'nothing.here', message: 'Required' }] });
+  assert.equal(form.querySelector('.entry-problems li button'), null);
+  assert.equal(form.querySelector('.entry-problems li').textContent, 'Nothing › Here: Required');
+});
+
+check('a problem on a whole block (a block-level refinement) opens that block from the summary', () => {
+  // A superRefine on a block reports at the block's own path, which has no
+  // control of its own: the summary line goes to the block, not the list.
+  const form = renderCollapsed(threeBlocks);
+  showEntryProblems(form, { status: 'invalid', issues: [{ path: 'blocks[1]', message: 'The whole block is invalid' }] });
+  const blocks = [...form.querySelectorAll('.block-item')];
+  assert.equal(blocks[1].querySelector('.block-problem-badge')?.textContent, '1 problem', 'control: the block is badged');
+  form.querySelector('.entry-problem-link').click();
+  assert.ok(!blocks[1].classList.contains('collapsed'), 'the block is open');
+  assert.ok(blocks[0].classList.contains('collapsed') && blocks[2].classList.contains('collapsed'), 'the others stay closed');
+});
+
+check('a whole-block summary line is disabled once that block is deleted', () => {
+  const form = renderCollapsed(threeBlocks);
+  showEntryProblems(form, { status: 'invalid', issues: [{ path: 'blocks[1]', message: 'The whole block is invalid' }] });
+  const line = form.querySelector('.entry-problem-link');
+  form.querySelectorAll('.block-item')[1].querySelector('.remove-block').click();
+  assert.equal(form.querySelectorAll('.block-item').length, 2, 'control: the Delete Block button removed it');
+  line.click();
+  assert.equal(line.disabled, true);
 });
 
 console.log(`\n📊 ${passed} passed, ${failures.length} failed.`);
