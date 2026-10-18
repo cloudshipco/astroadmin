@@ -24,10 +24,18 @@
  *            on a restart or a file event, which `server.hmr: false` turns
  *            off, so a fresh upload is not in it yet); otherwise the error.
  * - Empty: nothing.
+ * - Quality: every generated variant (AVIF, WebP and a JPEG or WebP
+ *   fallback) is encoded at `quality`, default 80. Astro's Sharp service
+ *   passes no quality when none is given, and Sharp's own AVIF default is 50,
+ *   which visibly smooths photo texture; WebP and JPEG already default to 80.
+ *   The default is skipped (Sharp's defaults apply, as before) when the site
+ *   sets a quality in `image.service.config` for any format, so the site's
+ *   setting is not overridden, and when `fallbackFormat` is 'png', because a
+ *   PNG quality below 100 makes Sharp quantise the fallback to a palette.
  * Every other attribute (data-aa-field, loading, fetchpriority, priority,
  * class...) is forwarded to the <img> in every branch.
  */
-import { Picture } from 'astro:assets';
+import { Picture, imageConfig } from 'astro:assets';
 import type { ImageMetadata } from 'astro';
 import { existsSync, statSync } from 'node:fs';
 import { join, normalize, sep } from 'node:path';
@@ -48,6 +56,12 @@ interface Props {
   fallbackFormat?: 'jpg' | 'webp' | 'png';
   /** Largest width the fallback <img> is generated at. */
   fallbackMaxWidth?: number;
+  /**
+   * Encoder quality for every variant: 1-100, or Astro's presets
+   * ('low' 25, 'mid' 50, 'high' 80, 'max' 100). Default 80; see the header
+   * for when no default is applied.
+   */
+  quality?: number | 'low' | 'mid' | 'high' | 'max';
   [attr: string]: unknown;
 }
 
@@ -58,8 +72,18 @@ const {
   widths: candidateWidths = [400, 640, 800, 1024, 1280, 1600, 2048, 2560],
   fallbackFormat = 'jpg',
   fallbackMaxWidth = 1600,
+  quality: qualityProp,
   ...rest
 } = Astro.props;
+
+const DEFAULT_QUALITY = 80;
+/** Sharp encoder options a site may set: `image.service.config.<format>`. */
+const siteEncoderConfig = (imageConfig.service?.config ?? {}) as Record<string, { quality?: unknown } | undefined>;
+const siteSetsQuality = ['avif', 'webp', 'jpeg', 'png'].some(
+  (format) => siteEncoderConfig[format]?.quality !== undefined,
+);
+const quality =
+  qualityProp ?? (siteSetsQuality || fallbackFormat === 'png' ? undefined : DEFAULT_QUALITY);
 
 if (!sizes) {
   throw new Error(`CmsImage: the "sizes" prop is required (image "${src}").`);
@@ -126,6 +150,7 @@ const fallbackHeight = image ? Math.round((image.height * fallbackWidth) / image
       sizes={sizes}
       width={fallbackWidth}
       height={fallbackHeight}
+      {...(quality === undefined ? {} : { quality })}
       {...rest}
     />
   ) : (

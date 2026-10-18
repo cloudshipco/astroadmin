@@ -9,6 +9,12 @@
  *   source of several widths, none wider than the original, and a JPEG
  *   fallback smaller than the original; the attributes the site passes
  *   (class, data-aa-field) land on the <img>;
+ * - every variant is encoded at quality 80 by default (Sharp's own AVIF
+ *   default is 50): each emitted AVIF, WebP and JPEG file is byte-identical
+ *   to the site's sharp encoding the same resize at q80, and differs from
+ *   the q50 encode; `quality={50}` overrides it; a site that sets a quality
+ *   in `image.service.config` keeps it; a PNG fallback gets no quality
+ *   (a PNG quality makes Sharp quantise to a palette);
  * - an upper-case `.JPG` upload in a subfolder is optimised too (the glob
  *   matches extensions in any case);
  * - SVG and external URLs stay plain <img>s with their original src;
@@ -28,6 +34,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
+import { createRequire } from 'module';
 import net from 'net';
 import sharp from 'sharp';
 
@@ -100,6 +107,10 @@ try {
   const WIDE_WIDTH = 3000;
   const wideJpg = await photo(WIDE_WIDTH, 1000, 'jpeg', [90, 160, 60]);
   writeSiteFile('public/images/photo.png', photoPng);
+  const lowPng = await photo(1000, 700, 'png', [120, 180, 90]);
+  const flatPng = await photo(700, 500, 'png', [60, 60, 160]);
+  writeSiteFile('public/images/low.png', lowPng);
+  writeSiteFile('public/images/flat.png', flatPng);
   writeSiteFile('public/images/wide.jpg', wideJpg);
   writeSiteFile('public/images/gallery/Shot.JPG', shotJpg);
   writeSiteFile(
@@ -113,6 +124,8 @@ try {
         '<CmsImage src="/images/photo.png" alt="Photo" sizes="(min-width: 800px) 600px, 100vw" class="photo" data-aa-field="hero" />',
         '<CmsImage src="/images/gallery/Shot.JPG" alt="Shot" sizes="100vw" />',
         '<CmsImage src="/images/wide.jpg" alt="Wide" sizes="100vw" />',
+        '<CmsImage src="/images/low.png" alt="Low" sizes="100vw" quality={50} />',
+        '<CmsImage src="/images/flat.png" alt="Flat" sizes="100vw" fallbackFormat="png" />',
         '<CmsImage src="/images/logo.svg" alt="Logo" sizes="40px" />',
         '<CmsImage src="https://example.com/remote.jpg" alt="Remote" sizes="100vw" />',
         '<CmsImage src="" alt="Empty" sizes="100vw" />',
@@ -145,8 +158,8 @@ try {
   };
 
   console.log('cms-image-packed:');
-  check('three raster images become <picture>s', () => {
-    assert.strictEqual(pictures.length, 3, html);
+  check('five raster images become <picture>s', () => {
+    assert.strictEqual(pictures.length, 5, html);
   });
 
   const photoPicture = pictures.find((picture) => picture.includes('alt="Photo"'));
@@ -174,6 +187,77 @@ try {
     const img = photoPicture.match(/<img[^>]*>/)[0];
     assert.ok(img.includes('data-aa-field="hero"'), img);
     assert.ok(/class="[^"]*\bphoto\b/.test(img), img);
+  });
+
+  // --- quality -------------------------------------------------------------
+  // Method: re-run Astro 7.3.8's Sharp pipeline (sharp.js `transform`: rotate,
+  // resize by width, or width and height for the fallback, then the format's
+  // encoder) with the SITE's sharp on the original upload, at known
+  // qualities, and compare bytes. The encoders are deterministic for one
+  // sharp/libvips build, so the emitted file equals exactly one reference.
+  // Each check also asserts the q50 and q80 references differ, so a match
+  // cannot be a coincidence of quality not mattering on this input.
+  const siteSharp = createRequire(path.join(siteDir, 'package.json'))('sharp');
+  async function reference(original, { width, height }, format, quality) {
+    const pipeline = siteSharp(original, { failOn: 'none', pages: -1 }).rotate();
+    pipeline.resize(height ? { width, height, withoutEnlargement: true } : { width, withoutEnlargement: true });
+    const options = quality === undefined ? undefined : { quality };
+    if (format === 'avif') pipeline.avif(options);
+    else if (format === 'webp') pipeline.webp(options);
+    else if (format === 'png') pipeline.png(options);
+    else pipeline.jpeg(options);
+    return pipeline.toBuffer();
+  }
+  /** The emitted file for one srcset width, e.g. 800. */
+  const variantAt = (picture, type, width) => {
+    const candidate = sourceSrcset(picture, type)
+      .split(',')
+      .map((entry) => entry.trim().split(/\s+/))
+      .find(([, descriptor]) => descriptor === `${width}w`);
+    assert.ok(candidate, `a ${width}w ${type} candidate in ${picture}`);
+    return fs.readFileSync(path.join(siteDir, 'dist', candidate[0]));
+  };
+  const fallbackOf = (picture) => {
+    const src = picture.match(/<img[^>]*>/)[0].match(/ src="([^"]+)"/)[1];
+    return fs.readFileSync(path.join(siteDir, 'dist', src));
+  };
+  /** Which of `qualities` produced `emitted`, or a description of the miss. */
+  async function encodedAt(emitted, original, size, format, qualities) {
+    const references = new Map();
+    for (const quality of qualities) references.set(quality, await reference(original, size, format, quality));
+    const sizes = [...references.values()].map((buffer) => buffer.length);
+    assert.strictEqual(new Set(sizes).size, sizes.length, `${format} references must differ: ${sizes}`);
+    for (const [quality, buffer] of references) if (buffer.equals(emitted)) return quality;
+    return `none (emitted ${emitted.length} B; references ${[...references].map(([quality, buffer]) => `q${quality ?? 'default'} ${buffer.length} B`).join(', ')})`;
+  }
+
+  const photoSize = { width: 800 };
+  const avifQuality = await encodedAt(variantAt(photoPicture, 'avif', 800), photoPng, photoSize, 'avif', [50, 80]);
+  check('the default AVIF is encoded at q80, not Sharp\'s q50', () => {
+    assert.strictEqual(avifQuality, 80);
+  });
+  const webpQuality = await encodedAt(variantAt(photoPicture, 'webp', 800), photoPng, photoSize, 'webp', [50, 80]);
+  check('the default WebP is encoded at q80', () => {
+    assert.strictEqual(webpQuality, 80);
+  });
+  const jpegQuality = await encodedAt(fallbackOf(photoPicture), photoPng, { width: PHOTO_WIDTH, height: 800 }, 'jpeg', [50, 80]);
+  check('the default JPEG fallback is encoded at q80', () => {
+    assert.strictEqual(jpegQuality, 80);
+  });
+  const lowPicture = pictures.find((picture) => picture.includes('alt="Low"'));
+  const lowQualities = [];
+  for (const type of ['avif', 'webp']) lowQualities.push(await encodedAt(variantAt(lowPicture, type, 640), lowPng, { width: 640 }, type, [50, 80]));
+  lowQualities.push(await encodedAt(fallbackOf(lowPicture), lowPng, { width: 1000, height: 700 }, 'jpeg', [50, 80]));
+  check('quality={50} overrides the default for every variant', () => {
+    assert.deepStrictEqual(lowQualities, [50, 50, 50]);
+  });
+  const flatPicture = pictures.find((picture) => picture.includes('alt="Flat"'));
+  const flatQualities = [
+    await encodedAt(fallbackOf(flatPicture), flatPng, { width: 700, height: 500 }, 'png', [undefined, 80]),
+    await encodedAt(variantAt(flatPicture, 'avif', 640), flatPng, { width: 640 }, 'avif', [50, 80]),
+  ];
+  check('a PNG fallback gets no quality (no palette), so its AVIF keeps Sharp\'s default', () => {
+    assert.deepStrictEqual(flatQualities, [undefined, 50]);
   });
 
   check('an upper-case .JPG in a subfolder is optimised', () => {
@@ -212,6 +296,28 @@ try {
       assert.ok(result.output.includes(`CmsImage: "${bad}" names a local image`), result.output);
     });
   }
+  writeSiteFile('src/pages/index.astro', goodPage);
+
+  // --- a site's own encoder quality wins over the default ------------------
+  writeSiteFile(
+    'astro.config.mjs',
+    "import { defineConfig } from 'astro/config';\n" +
+      'export default defineConfig({ image: { service: { config: { avif: { quality: 60 } } } } });\n',
+  );
+  writeSiteFile('src/pages/index.astro', page('<CmsImage src="/images/photo.png" alt="Photo" sizes="100vw" />'));
+  const configured = buildSite();
+  assert.strictEqual(configured.status, 0, configured.output);
+  const configuredHtml = fs.readFileSync(path.join(siteDir, 'dist', 'index.html'), 'utf8');
+  const configuredPicture = configuredHtml.match(/<picture>.*?<\/picture>/s)[0];
+  const configuredQualities = [
+    await encodedAt(variantAt(configuredPicture, 'avif', 800), photoPng, photoSize, 'avif', [60, 80]),
+    await encodedAt(variantAt(configuredPicture, 'webp', 800), photoPng, photoSize, 'webp', [50, 80]),
+  ];
+  check('image.service.config.avif.quality is kept, not overridden by the default', () => {
+    // AVIF at the site's 60; WebP at Sharp's own default, which is 80.
+    assert.deepStrictEqual(configuredQualities, [60, 80]);
+  });
+  writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
   writeSiteFile('src/pages/index.astro', goodPage);
 
   // --- astro dev ---------------------------------------------------------
