@@ -14,7 +14,37 @@
  */
 
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 import path from 'path';
+
+/**
+ * Whether this `astro dev` is the preview AstroAdmin runs for its editor.
+ *
+ * Both ways AstroAdmin starts the preview give it ASTROADMIN_PROJECT_ROOT,
+ * naming the site it serves: `astroadmin dev` sets it before spawning the
+ * site's astro (the child inherits it), and the hosted NixOS preview unit
+ * has it from the instance's common environment. A developer's own
+ * `astro dev` does not, so it is unaffected. The variable must name THIS
+ * site's root, so one left exported for another project changes nothing.
+ *
+ * @param {URL|string} siteRoot - the Astro config's `root`
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {boolean}
+ */
+export function isAstroAdminPreview(siteRoot, env = process.env) {
+  const projectRoot = env.ASTROADMIN_PROJECT_ROOT;
+  if (typeof projectRoot !== 'string' || projectRoot === '') return false;
+  const canonical = (dir) => {
+    const resolved = path.resolve(dir);
+    try {
+      return fs.realpathSync(resolved);
+    } catch {
+      return resolved;
+    }
+  };
+  const rootPath = siteRoot instanceof URL ? fileURLToPath(siteRoot) : String(siteRoot);
+  return canonical(projectRoot) === canonical(rootPath);
+}
 
 /**
  * Script injected into pages during dev mode to handle AstroAdmin postMessages.
@@ -180,15 +210,18 @@ export const adminPreviewScript = `
  *
  * @param {Object} options - Integration options
  * @param {boolean} [options.enabled=true] - Enable the component preview route
+ * @param {boolean} [options.devToolbar=false] - Keep Astro's dev toolbar in
+ *   the preview AstroAdmin runs. Off by default, so editors never see it; a
+ *   developer's own `astro dev` keeps it either way.
  * @returns {import('astro').AstroIntegration}
  */
 export default function astroadminIntegration(options = {}) {
-  const { enabled = true } = options;
+  const { enabled = true, devToolbar = false } = options;
 
   return {
     name: 'astroadmin',
     hooks: {
-      'astro:config:setup': ({ injectRoute, injectScript, command, logger }) => {
+      'astro:config:setup': ({ config, updateConfig, injectRoute, injectScript, command, logger }) => {
         // Only inject in dev mode
         if (command !== 'dev') {
           return;
@@ -197,6 +230,16 @@ export default function astroadminIntegration(options = {}) {
         if (!enabled) {
           logger.info('AstroAdmin integration disabled');
           return;
+        }
+
+        // The editor's preview is for the site's editors, not its developers:
+        // hide Astro's dev toolbar there. Only ever turns it OFF, so a site
+        // that disabled it stays disabled. A hook sees the config with
+        // Astro's defaults applied, so `devToolbar: { enabled: true }` in
+        // astro.config cannot be told from the default; a site that wants
+        // the toolbar in the preview says so with `astroadmin({ devToolbar: true })`.
+        if (!devToolbar && config.devToolbar?.enabled !== false && isAstroAdminPreview(config.root)) {
+          updateConfig({ devToolbar: { enabled: false } });
         }
 
         // Inject block focus script into all pages

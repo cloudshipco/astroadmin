@@ -144,6 +144,11 @@ export default defineConfig({
 });
 ```
 
+In the preview AstroAdmin runs (`astroadmin dev`, or the hosted preview, both
+of which set `ASTROADMIN_PROJECT_ROOT` to the site) it also hides Astro's dev
+toolbar. Your own `astro dev` keeps it, and `astroadmin({ devToolbar: true })`
+keeps it in the preview too.
+
 A collection such as `team` has no URL of its own. If a block lists its
 entries (a `team` block with `teamIds: z.array(z.string())`, or
 `z.array(reference('team'))`), editing a team member previews it inside

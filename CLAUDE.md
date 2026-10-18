@@ -371,6 +371,10 @@ runner aggregating them). Most run server-less and need env vars:
   `preview.url` (warning when it cannot), and stopping it frees that port even when
   Astro 7 detects an agent and would daemonise (`--ignore-lock`). ~15 s; ports 3727,
   3728, 4727, 4729.
+- `bun tests/dev-toolbar.test.js` — the integration hides Astro's dev toolbar in the
+  preview AstroAdmin runs (ASTROADMIN_PROJECT_ROOT naming the site: `astroadmin dev`, the
+  hosted preview unit) and nowhere else (plain `astro dev` is the positive control). Real
+  Astro 7.3.8 from the packed tarball; ~25 s; ports 3741, 4741-4745.
 - `bun tests/doctor-cross-device.test.js` — the doctor's build with TMPDIR on another
   filesystem (an hdiutil disk image; macOS only, says NOT RUN elsewhere): no EXDEV. ~15 s.
 - `bun tests/route-detection.test.js` — auto-detected preview routes are only declared
