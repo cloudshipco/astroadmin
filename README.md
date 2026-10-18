@@ -176,8 +176,8 @@ export default {
 
 The [configuration reference](./docs/configuration.md) covers the rest. Also
 in `docs/`: [getting started](./docs/getting-started.md),
-[requirements](./docs/requirements.md), [blocks](./docs/blocks.md) and
-[doctor](./docs/doctor.md).
+[requirements](./docs/requirements.md), [blocks](./docs/blocks.md),
+[optimised images](./docs/optimised-images.md) and [doctor](./docs/doctor.md).
 
 ## Troubleshooting
 

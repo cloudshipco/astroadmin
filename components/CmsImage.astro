@@ -1,0 +1,116 @@
+---
+/**
+ * CmsImage: renders a CMS image string (a `/images/...` path that a plain
+ * z.string() image field stores) through Astro's image pipeline, so visitors
+ * get resized AVIF/WebP variants instead of the uploaded original.
+ *
+ * Requires Astro >= 7 (Vite 8, for the glob's `caseSensitive` option) and a
+ * `sharp` >= 0.35.4 in the SITE's own dependencies: `astro build` loads the
+ * site's sharp, not Astro's nested one, and earlier versions are open to the
+ * AVIF advisory GHSA-26w7-cxv4-gfx2. See docs/optimised-images.md.
+ *
+ * - `/images/<path>` resolves by exact path to the key `/public/images/<path>`
+ *   of a root-absolute LAZY glob (Vite resolves it against the consuming
+ *   site's root, even from inside node_modules). Only the entries actually
+ *   rendered are imported. Extensions match in any case (`.JPG`).
+ * - Found: <Picture> with AVIF/WebP sources, an explicit fallback format and
+ *   width cap, widths capped at the original's width, and a required `sizes`.
+ * - External URLs, SVG and GIF: a plain <img>.
+ * - A local raster path with no glob entry:
+ *     build: an error naming the content value;
+ *     dev:   if the file exists under public/, a plain <img> of the original,
+ *            marked data-cms-image="dev-original" (Vite re-reads the glob only
+ *            on a restart or a file event, which `server.hmr: false` turns
+ *            off, so a fresh upload is not in it yet); otherwise the error.
+ * - Empty: nothing.
+ * Every other attribute (data-aa-field, loading, fetchpriority, priority,
+ * class...) is forwarded to the <img> in every branch.
+ */
+import { Picture } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+import { existsSync, statSync } from 'node:fs';
+import { join, normalize, sep } from 'node:path';
+
+interface Props {
+  src?: string;
+  alt?: string;
+  /** The slot's real rendered width, e.g. "(min-width: 1024px) 480px, 100vw". Required. */
+  sizes: string;
+  /** Candidate widths; filtered to those below the original's width, which is always added. */
+  widths?: number[];
+  /** Format of the <img> fallback. */
+  fallbackFormat?: 'jpg' | 'webp' | 'png';
+  /** Largest width the fallback <img> is generated at. */
+  fallbackMaxWidth?: number;
+  [attr: string]: unknown;
+}
+
+const {
+  src = '',
+  alt = '',
+  sizes,
+  widths: candidateWidths = [400, 640, 800, 1024, 1280, 1600, 2048, 2560],
+  fallbackFormat = 'jpg',
+  fallbackMaxWidth = 1600,
+  ...rest
+} = Astro.props;
+
+if (!sizes) {
+  throw new Error(`CmsImage: the "sizes" prop is required (image "${src}").`);
+}
+
+const PUBLIC_IMAGES = import.meta.glob<{ default: ImageMetadata }>(
+  '/public/images/**/*.{jpg,jpeg,png,webp,avif}',
+  { caseSensitive: false },
+);
+const OPTIMISABLE = /\.(jpe?g|png|webp|avif)$/i;
+
+/** True when `sitePath` (e.g. /images/x.jpg) is a file under public/. Dev only. */
+function existsInPublic(sitePath: string): boolean {
+  const publicDir = join(process.cwd(), 'public');
+  const file = normalize(join(publicDir, decodeURIComponent(sitePath)));
+  if (!file.startsWith(publicDir + sep)) return false;
+  return existsSync(file) && statSync(file).isFile();
+}
+
+let image: ImageMetadata | undefined;
+let devOriginal = false;
+if (src.startsWith('/images/') && OPTIMISABLE.test(src)) {
+  const key = `/public${src}`;
+  const load = PUBLIC_IMAGES[key];
+  if (load) {
+    image = (await load()).default;
+  } else if (import.meta.env.DEV && existsInPublic(src)) {
+    devOriginal = true;
+  } else {
+    throw new Error(
+      `CmsImage: "${src}" names a local image, but no file matches ${key}. ` +
+        `Check the content value (paths are exact and case-sensitive).`,
+    );
+  }
+}
+
+const widths = image
+  ? [...new Set([...candidateWidths.filter((width) => width < image!.width), image.width])].sort((a, b) => a - b)
+  : [];
+const fallbackWidth = image ? Math.min(image.width, fallbackMaxWidth) : 0;
+const fallbackHeight = image ? Math.round((image.height * fallbackWidth) / image.width) : 0;
+---
+
+{
+  !src ? null : image ? (
+    <Picture
+      src={image}
+      alt={alt}
+      formats={['avif', 'webp']}
+      fallbackFormat={fallbackFormat}
+      widths={widths}
+      sizes={sizes}
+      width={fallbackWidth}
+      height={fallbackHeight}
+      {...rest}
+    />
+  ) : (
+    <img src={src} alt={alt} data-cms-image={devOriginal ? 'dev-original' : undefined} {...rest} />
+  )
+}

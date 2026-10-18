@@ -472,6 +472,12 @@ queue, so the old body is never written back.
 - `bun tests/image-picker-astro.test.js` — the editor half (happy-dom): only an image()
   picker (`data-astro-image`) asks the server for its value, a refusal keeps the old value,
   and entry-relative paths preview from `/assets`.
+- `bun tests/cms-image-packed.test.js` — `components/CmsImage.astro` from the `npm pack`
+  tarball, installed (bun, real copy) into a throwaway Astro 7.3.8 site with its own `sharp`
+  ^0.35.5, then `astro build` (~10 s warm; the first install needs the network): AVIF and
+  WebP sources of several widths capped at the original, a JPEG fallback smaller than the
+  original, `class`/`data-aa-field` on the `<img>`, a `.JPG` in a subfolder optimised,
+  SVG/external URLs plain, and a missing or mis-cased path failing the build by name.
 
 `tests/git-api.test.js` used to be a known red; it passes as of 2026-10-08 (checked at
 `74609bd` in a clean worktree).

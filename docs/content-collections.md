@@ -172,7 +172,10 @@ images; the default does.
 A plain `z.string()` field gets the image picker when its name is, or ends
 with, `image`, `photo`, `logo`, `icon`, `avatar`, `thumbnail`, `banner`,
 `background` or `src`. Its uploads go to `public/images/`, and the field is
-saved as `/images/<file>`, which the site serves from `public/`.
+saved as `/images/<file>`, which the site serves from `public/`. Astro
+serves files in `public/` as they are; render the string through
+[`CmsImage`](./optimised-images.md) to give visitors resized AVIF and WebP
+variants instead of the original upload.
 
 The picker also offers an alt text box, saved next to the image as
 `<field>Alt` (`coverAlt` for `cover`). Declare that field in the schema,

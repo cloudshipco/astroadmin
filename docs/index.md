@@ -9,6 +9,8 @@ and pushing with git.
 - [Requirements](./requirements.md): versions, project layout, startup errors.
 - [Schemas and controls](./content-collections.md): which schema shapes
   become which form controls, images, dates and references.
+- [Optimised images](./optimised-images.md): rendering `/images/...`
+  strings as resized AVIF and WebP with `CmsImage`.
 - [Blocks](./blocks.md): page sections from a discriminated union, and the
   component preview.
 - [Inline editing](./inline-editing.md): moving text out of templates, and
