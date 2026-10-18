@@ -24,6 +24,7 @@ import { maybeAutoImport } from './utils/import-files.js';
 import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
 import { requireSameOrigin } from './utils/same-origin.js';
 import { apiRateLimiters } from './utils/rate-limit.js';
+import { sessionFingerprint } from './utils/session-fingerprint.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -136,7 +137,9 @@ export async function createServer() {
           console.error('[Login] Session save error:', err);
           return res.status(500).json({ success: false, error: 'Session error' });
         }
-        console.log(`[Login] Success, session ID: ${req.sessionID}`);
+        // Never the session ID itself: it is a credential, and this line goes
+        // to the system journal. A short digest still ties log lines together.
+        console.log(`[Login] Success, session ${sessionFingerprint(req.sessionID)}`);
         res.json({ success: true, user: fullConfig.auth.username });
       });
     } else {
