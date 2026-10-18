@@ -182,6 +182,11 @@ exist in `public/` renders as a plain `<img>` of the original, marked
 The next build, or the next dev server restart, optimises it. A path that
 exists nowhere is an error in dev too.
 
+In `astro dev` the `<picture>` has WebP sources only, no AVIF: the dev
+server encodes every variant on request with no cache, and an AVIF variant
+of a large upload took about 20 s against well under a second for WebP. The
+build still emits AVIF and WebP.
+
 Publish runs a build first, and the build has no such fallback, so a path
 that only resolves on a case-insensitive disk is caught there.
 

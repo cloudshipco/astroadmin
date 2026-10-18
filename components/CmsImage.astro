@@ -13,7 +13,8 @@
  *   of a root-absolute LAZY glob (Vite resolves it against the consuming
  *   site's root, even from inside node_modules). Only the entries actually
  *   rendered are imported. Extensions match in any case (`.JPG`).
- * - Found: <Picture> with AVIF/WebP sources, an explicit fallback format and
+ * - Found: <Picture> with AVIF/WebP sources (WebP only in dev; see
+ *   SOURCE_FORMATS), an explicit fallback format and
  *   width cap, widths capped at the original's width (and at the largest
  *   candidate width), and a required `sizes`.
  * - External URLs, SVG and GIF: a plain <img>.
@@ -77,6 +78,13 @@ const {
 } = Astro.props;
 
 const DEFAULT_QUALITY = 80;
+/**
+ * In `astro dev`, Astro's /_image endpoint encodes each variant on request,
+ * with no cache. Measured on a 2-CPU host: one 1280w variant of a 2 MB PNG
+ * took 20.1 s as AVIF (q80), 0.64 s as WebP and 0.22 s as JPEG, so a preview
+ * page took 30+ s. Dev therefore serves WebP only; the build keeps AVIF.
+ */
+const SOURCE_FORMATS: ('avif' | 'webp')[] = import.meta.env.DEV ? ['webp'] : ['avif', 'webp'];
 /** Sharp encoder options a site may set: `image.service.config.<format>`. */
 const siteEncoderConfig = (imageConfig.service?.config ?? {}) as Record<string, { quality?: unknown } | undefined>;
 const siteSetsQuality = ['avif', 'webp', 'jpeg', 'png'].some(
@@ -144,7 +152,7 @@ const fallbackHeight = image ? Math.round((image.height * fallbackWidth) / image
     <Picture
       src={image}
       alt={alt}
-      formats={['avif', 'webp']}
+      formats={SOURCE_FORMATS}
       fallbackFormat={fallbackFormat}
       widths={widths}
       sizes={sizes}

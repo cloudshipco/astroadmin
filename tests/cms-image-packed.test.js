@@ -20,6 +20,8 @@
  * - SVG and external URLs stay plain <img>s with their original src;
  * - a /images/ path with no file, and one that differs only in case, each
  *   fail the build with an error naming the content value;
+ * - in `astro dev`, a <picture> has WebP sources and no AVIF (the build
+ *   keeps AVIF in every <picture>);
  * - in `astro dev`, a file added after start renders as the plain original
  *   (data-cms-image="dev-original"), and a malformed %-escape is the strict
  *   error, not a URIError.
@@ -163,6 +165,9 @@ try {
   });
 
   const photoPicture = pictures.find((picture) => picture.includes('alt="Photo"'));
+  check('build: every <picture> keeps an AVIF source (dev-only WebP must not leak into builds)', () => {
+    for (const picture of pictures) assert.ok(picture.includes('type="image/avif"'), picture);
+  });
   check('the PNG has AVIF and WebP sources of several widths, capped at the original', () => {
     for (const type of ['avif', 'webp']) {
       const srcset = sourceSrcset(photoPicture, type);
@@ -355,7 +360,15 @@ try {
       }
       throw new Error(`astro dev never answered on ${port}:\n${devOutput}`);
     };
-    await devPage('/'); // started, glob read
+    const devIndexHtml = await devPage('/'); // started, glob read
+    check('dev: pictures have WebP sources but no AVIF (AVIF encodes take ~20 s each in dev)', () => {
+      const devPhoto = (devIndexHtml.match(/<picture\b.*?<\/picture>/gs) || []).find((picture) => picture.includes('alt="Photo"'));
+      assert.ok(devPhoto, `a Photo <picture> in dev: ${devIndexHtml.slice(0, 2000)}`);
+      assert.ok(devPhoto.includes('type="image/webp"'), devPhoto);
+      assert.ok(!devIndexHtml.includes('type="image/avif"'), 'an AVIF <source> in dev');
+      const fallback = devPhoto.match(/<img[^>]*>/)[0];
+      assert.ok(/f=jpg|\.jpg/.test(fallback), `the fallback is still a JPEG: ${fallback}`);
+    });
     writeSiteFile('public/images/late.png', await photo(500, 300, 'png', [10, 10, 220]));
     const lateHtml = await devPage('/dev');
     check('dev: an upload newer than the glob renders as the plain original', () => {
