@@ -20,7 +20,8 @@
  * - External URLs, SVG and GIF: a plain <img>.
  * - A local raster path with no glob entry:
  *     build: an error naming the content value;
- *     dev:   if the file exists under public/, a plain <img> of the original,
+ *     dev:   (`astro dev`, by MODE; see IS_ASTRO_DEV) if the file exists
+ *            under public/, a plain <img> of the original,
  *            marked data-cms-image="dev-original" (Vite re-reads the glob only
  *            on a restart or a file event, which `server.hmr: false` turns
  *            off, so a fresh upload is not in it yet); otherwise the error.
@@ -83,8 +84,15 @@ const DEFAULT_QUALITY = 80;
  * with no cache. Measured on a 2-CPU host: one 1280w variant of a 2 MB PNG
  * took 20.1 s as AVIF (q80), 0.64 s as WebP and 0.22 s as JPEG, so a preview
  * page took 30+ s. Dev therefore serves WebP only; the build keeps AVIF.
+ *
+ * Gated on MODE, not DEV: Astro (7.3.8, measured) derives DEV from NODE_ENV,
+ * not from the command. `astro build` under NODE_ENV=test or development
+ * (CI, a developer's shell, `bun test`) has DEV=true with MODE 'production',
+ * and `astro dev` under NODE_ENV=production has DEV=false. MODE is
+ * 'development' in `astro dev` whatever NODE_ENV says.
  */
-const SOURCE_FORMATS: ('avif' | 'webp')[] = import.meta.env.DEV ? ['webp'] : ['avif', 'webp'];
+const IS_ASTRO_DEV = import.meta.env.MODE === 'development';
+const SOURCE_FORMATS: ('avif' | 'webp')[] = IS_ASTRO_DEV ? ['webp'] : ['avif', 'webp'];
 /** Sharp encoder options a site may set: `image.service.config.<format>`. */
 const siteEncoderConfig = (imageConfig.service?.config ?? {}) as Record<string, { quality?: unknown } | undefined>;
 const siteSetsQuality = ['avif', 'webp', 'jpeg', 'png'].some(
@@ -124,7 +132,8 @@ if (src.startsWith('/images/') && OPTIMISABLE.test(src)) {
   const load = PUBLIC_IMAGES[key];
   if (load) {
     image = (await load()).default;
-  } else if (import.meta.env.DEV && existsInPublic(src)) {
+  } else if (IS_ASTRO_DEV && existsInPublic(src)) {
+    // Dev only (MODE, see IS_ASTRO_DEV): a build must keep the strict error.
     devOriginal = true;
   } else {
     throw new Error(

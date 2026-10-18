@@ -20,15 +20,21 @@
  * - SVG and external URLs stay plain <img>s with their original src;
  * - a /images/ path with no file, and one that differs only in case, each
  *   fail the build with an error naming the content value;
+ * - a build with NODE_ENV=test (Astro then sets DEV=true, MODE stays
+ *   'production') still keeps AVIF and still fails on a missing path;
  * - in `astro dev`, a <picture> has WebP sources and no AVIF (the build
  *   keeps AVIF in every <picture>);
  * - in `astro dev`, a file added after start renders as the plain original
  *   (data-cms-image="dev-original"), and a malformed %-escape is the strict
- *   error, not a URIError.
+ *   error, not a URIError;
+ * - both dev checks hold with NODE_ENV=production too (DEV is then false).
  *
  * Needs the network the first time (the site's install), then bun's cache.
  *
  *   bun tests/cms-image-packed.test.js     (~30 s warm)
+ *
+ * `bun test tests/cms-image-packed.test.js` works too; it sets NODE_ENV=test,
+ * which the children inherit unless a check sets its own.
  */
 
 import assert from 'assert';
@@ -51,8 +57,9 @@ function check(name, fn) {
   console.log(`  ok  ${name}`);
 }
 
-function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' } });
+function run(command, args, cwd, envOverrides = {}) {
+  const env = { ...process.env, ASTRO_TELEMETRY_DISABLED: '1', ...envOverrides };
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8', env });
   return { status: result.status, output: `${result.stdout}\n${result.stderr}` };
 }
 
@@ -70,9 +77,15 @@ async function photo(width, height, format, [red, green, blue]) {
   return format === 'png' ? image.png().toBuffer() : image.jpeg({ quality: 95 }).toBuffer();
 }
 
-function buildSite() {
+/**
+ * `astro build`. `envOverrides` sets the child's env, e.g. { NODE_ENV: 'test' }:
+ * Astro derives import.meta.env.DEV from NODE_ENV, not from the command, so a
+ * build under a non-production NODE_ENV (CI, `bun test`) has DEV=true while
+ * MODE stays 'production'.
+ */
+function buildSite(envOverrides = {}) {
   fs.rmSync(path.join(siteDir, 'dist'), { recursive: true, force: true });
-  return run('node', ['node_modules/astro/bin/astro.mjs', 'build'], siteDir);
+  return run('node', ['node_modules/astro/bin/astro.mjs', 'build'], siteDir, envOverrides);
 }
 
 function page(body) {
@@ -113,6 +126,7 @@ try {
   const flatPng = await photo(700, 500, 'png', [60, 60, 160]);
   writeSiteFile('public/images/low.png', lowPng);
   writeSiteFile('public/images/flat.png', flatPng);
+  writeSiteFile('public/images/.hidden.png', flatPng);
   writeSiteFile('public/images/wide.jpg', wideJpg);
   writeSiteFile('public/images/gallery/Shot.JPG', shotJpg);
   writeSiteFile(
@@ -290,18 +304,36 @@ try {
 
   // --- strict errors at build --------------------------------------------
   const goodPage = fs.readFileSync(path.join(siteDir, 'src/pages/index.astro'), 'utf8');
-  for (const [name, bad] of [
-    ['a missing file', '/images/missing.png'],
-    ['a path differing only in case', '/images/Photo.png'],
-  ]) {
-    check(`${name} fails the build, naming the content value`, () => {
-      writeSiteFile('src/pages/index.astro', page(`<CmsImage src="${bad}" alt="" sizes="100vw" />`));
-      const result = buildSite();
-      assert.notStrictEqual(result.status, 0, `the build should fail for ${bad}`);
-      assert.ok(result.output.includes(`CmsImage: "${bad}" names a local image`), result.output);
-    });
+  // Twice: as inherited, and with NODE_ENV=test, which makes Astro's DEV true
+  // in a build. The dev-original fallback must not apply in either (the case
+  // path exists on a case-insensitive disk, so a DEV gate would render it).
+  for (const [envLabel, envOverrides] of [['', {}], [' (NODE_ENV=test)', { NODE_ENV: 'test' }]]) {
+    for (const [name, bad] of [
+      ['a missing file', '/images/missing.png'],
+      ['a path differing only in case', '/images/Photo.png'],
+      // On disk but outside the glob (it skips dotfiles) on any filesystem.
+      ['a dotfile the glob skips', '/images/.hidden.png'],
+    ]) {
+      check(`${name} fails the build, naming the content value${envLabel}`, () => {
+        writeSiteFile('src/pages/index.astro', page(`<CmsImage src="${bad}" alt="" sizes="100vw" />`));
+        const result = buildSite(envOverrides);
+        assert.notStrictEqual(result.status, 0, `the build should fail for ${bad}`);
+        assert.ok(result.output.includes(`CmsImage: "${bad}" names a local image`), result.output);
+      });
+    }
   }
   writeSiteFile('src/pages/index.astro', goodPage);
+
+  // --- a build under a non-production NODE_ENV keeps AVIF -----------------
+  const testEnvBuild = buildSite({ NODE_ENV: 'test' });
+  assert.strictEqual(testEnvBuild.status, 0, testEnvBuild.output);
+  const testEnvHtml = fs.readFileSync(path.join(siteDir, 'dist', 'index.html'), 'utf8');
+  check('build with NODE_ENV=test: every <picture> keeps an AVIF source', () => {
+    const testEnvPictures = testEnvHtml.match(/<picture>.*?<\/picture>/gs) || [];
+    assert.strictEqual(testEnvPictures.length, 5, testEnvHtml);
+    for (const picture of testEnvPictures) assert.ok(picture.includes('type="image/avif"'), picture);
+    assert.ok(!testEnvHtml.includes('data-cms-image'), 'no dev-original marker in a build');
+  });
 
   // --- a site's own encoder quality wins over the default ------------------
   writeSiteFile(
@@ -328,72 +360,84 @@ try {
   // --- astro dev ---------------------------------------------------------
   // A file added after the dev server starts is not in the glob yet: it
   // renders as the plain original. A malformed escape is "missing" (the
-  // strict error), not an unhandled URIError.
-  const port = await new Promise((resolve) => {
-    const probe = net.createServer().listen(0, '127.0.0.1', () => {
-      const { port: freePort } = probe.address();
-      probe.close(() => resolve(freePort));
-    });
-  });
+  // strict error), not an unhandled URIError. Run twice: as inherited, and
+  // with NODE_ENV=production, under which Astro's DEV is false in dev (the
+  // dev-only behaviours must follow the command, i.e. MODE).
+  // `server.hmr: false`, as a proxied hosted preview runs it: without it the
+  // watcher can add the late upload to the glob before the request lands.
   writeSiteFile(
-    'src/pages/dev.astro',
-    page('<CmsImage src="/images/late.png" alt="Late" sizes="100vw" class="late" data-aa-field="late" />'),
+    'astro.config.mjs',
+    "import { defineConfig } from 'astro/config';\nexport default defineConfig({ vite: { server: { hmr: false } } });\n",
   );
-  writeSiteFile('src/pages/malformed.astro', page('<CmsImage src="/images/bad%E0%A4%A.jpg" alt="" sizes="100vw" />'));
-  const dev = spawn('node', ['node_modules/astro/bin/astro.mjs', 'dev', '--port', String(port), '--host', '127.0.0.1', '--ignore-lock'], {
-    cwd: siteDir,
-    env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let devOutput = '';
-  dev.stdout.on('data', (chunk) => (devOutput += chunk));
-  dev.stderr.on('data', (chunk) => (devOutput += chunk));
-  try {
-    const devPage = async (route) => {
-      for (let attempt = 0; attempt < 150; attempt++) {
-        try {
-          const response = await fetch(`http://127.0.0.1:${port}${route}`);
-          return await response.text();
-        } catch {
-          await new Promise((resolve) => setTimeout(resolve, 200));
+  async function devChecks(envLabel, envOverrides, lateName) {
+    const port = await new Promise((resolve) => {
+      const probe = net.createServer().listen(0, '127.0.0.1', () => {
+        const { port: freePort } = probe.address();
+        probe.close(() => resolve(freePort));
+      });
+    });
+    writeSiteFile(
+      'src/pages/dev.astro',
+      page(`<CmsImage src="/images/${lateName}" alt="Late" sizes="100vw" class="late" data-aa-field="late" />`),
+    );
+    writeSiteFile('src/pages/malformed.astro', page('<CmsImage src="/images/bad%E0%A4%A.jpg" alt="" sizes="100vw" />'));
+    const dev = spawn('node', ['node_modules/astro/bin/astro.mjs', 'dev', '--port', String(port), '--host', '127.0.0.1', '--ignore-lock'], {
+      cwd: siteDir,
+      env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1', ...envOverrides },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let devOutput = '';
+    dev.stdout.on('data', (chunk) => (devOutput += chunk));
+    dev.stderr.on('data', (chunk) => (devOutput += chunk));
+    try {
+      const devPage = async (route) => {
+        for (let attempt = 0; attempt < 150; attempt++) {
+          try {
+            const response = await fetch(`http://127.0.0.1:${port}${route}`);
+            return await response.text();
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
         }
+        throw new Error(`astro dev never answered on ${port}:\n${devOutput}`);
+      };
+      const devIndexHtml = await devPage('/'); // started, glob read
+      check(`dev${envLabel}: pictures have WebP sources but no AVIF (AVIF encodes take ~20 s each in dev)`, () => {
+        const devPhoto = (devIndexHtml.match(/<picture\b.*?<\/picture>/gs) || []).find((picture) => picture.includes('alt="Photo"'));
+        assert.ok(devPhoto, `a Photo <picture> in dev: ${devIndexHtml.slice(0, 2000)}`);
+        assert.ok(devPhoto.includes('type="image/webp"'), devPhoto);
+        assert.ok(!devIndexHtml.includes('type="image/avif"'), 'an AVIF <source> in dev');
+        const fallback = devPhoto.match(/<img[^>]*>/)[0];
+        assert.ok(/f=jpg|\.jpg/.test(fallback), `the fallback is still a JPEG: ${fallback}`);
+      });
+      writeSiteFile(`public/images/${lateName}`, await photo(500, 300, 'png', [10, 10, 220]));
+      const lateHtml = await devPage('/dev');
+      check(`dev${envLabel}: an upload newer than the glob renders as the plain original`, () => {
+        const img = lateHtml.match(/<img[^>]*alt="Late"[^>]*>/);
+        assert.ok(img, lateHtml.slice(0, 2000));
+        assert.ok(img[0].includes(`src="/images/${lateName}"`), img[0]);
+        assert.ok(img[0].includes('data-cms-image="dev-original"'), img[0]);
+        assert.ok(img[0].includes('data-aa-field="late"') && img[0].includes('late'), img[0]);
+      });
+      // A render error in dev answers 200 with only the overlay client; the
+      // error itself is in the server log.
+      await devPage('/malformed');
+      for (let attempt = 0; attempt < 50 && !/names a local image|URI malformed/.test(devOutput); attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      throw new Error(`astro dev never answered on ${port}:\n${devOutput}`);
-    };
-    const devIndexHtml = await devPage('/'); // started, glob read
-    check('dev: pictures have WebP sources but no AVIF (AVIF encodes take ~20 s each in dev)', () => {
-      const devPhoto = (devIndexHtml.match(/<picture\b.*?<\/picture>/gs) || []).find((picture) => picture.includes('alt="Photo"'));
-      assert.ok(devPhoto, `a Photo <picture> in dev: ${devIndexHtml.slice(0, 2000)}`);
-      assert.ok(devPhoto.includes('type="image/webp"'), devPhoto);
-      assert.ok(!devIndexHtml.includes('type="image/avif"'), 'an AVIF <source> in dev');
-      const fallback = devPhoto.match(/<img[^>]*>/)[0];
-      assert.ok(/f=jpg|\.jpg/.test(fallback), `the fallback is still a JPEG: ${fallback}`);
-    });
-    writeSiteFile('public/images/late.png', await photo(500, 300, 'png', [10, 10, 220]));
-    const lateHtml = await devPage('/dev');
-    check('dev: an upload newer than the glob renders as the plain original', () => {
-      const img = lateHtml.match(/<img[^>]*alt="Late"[^>]*>/);
-      assert.ok(img, lateHtml.slice(0, 2000));
-      assert.ok(img[0].includes('src="/images/late.png"'), img[0]);
-      assert.ok(img[0].includes('data-cms-image="dev-original"'), img[0]);
-      assert.ok(img[0].includes('data-aa-field="late"') && img[0].includes('late'), img[0]);
-    });
-    // A render error in dev answers 200 with only the overlay client; the
-    // error itself is in the server log.
-    await devPage('/malformed');
-    for (let attempt = 0; attempt < 50 && !/names a local image|URI malformed/.test(devOutput); attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      check(`dev${envLabel}: a malformed %-escape is reported as a missing image, not a URIError`, () => {
+        assert.ok(/CmsImage: \\?"\/images\/bad%E0%A4%A\.jpg\\?" names a local image/.test(devOutput), devOutput.slice(-3000));
+        assert.ok(!/URI malformed/.test(devOutput), 'no URIError');
+      });
+    } finally {
+      // --ignore-lock keeps Astro 7 in the foreground as our child (without it
+      // `astro dev` detaches and outlives the test); stop it either way.
+      dev.kill();
+      spawnSync('node', ['node_modules/astro/bin/astro.mjs', 'dev', 'stop'], { cwd: siteDir, encoding: 'utf8' });
     }
-    check('dev: a malformed %-escape is reported as a missing image, not a URIError', () => {
-      assert.ok(/CmsImage: \\?"\/images\/bad%E0%A4%A\.jpg\\?" names a local image/.test(devOutput), devOutput.slice(-3000));
-      assert.ok(!/URI malformed/.test(devOutput), 'no URIError');
-    });
-  } finally {
-    // --ignore-lock keeps Astro 7 in the foreground as our child (without it
-    // `astro dev` detaches and outlives the test); stop it either way.
-    dev.kill();
-    spawnSync('node', ['node_modules/astro/bin/astro.mjs', 'dev', 'stop'], { cwd: siteDir, encoding: 'utf8' });
   }
+  await devChecks('', {}, 'late.png');
+  await devChecks(' (NODE_ENV=production)', { NODE_ENV: 'production' }, 'late-prod.png');
 
   console.log(`\ncms-image-packed: ${passed} passed`);
 } finally {

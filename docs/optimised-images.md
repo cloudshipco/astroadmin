@@ -187,6 +187,13 @@ server encodes every variant on request with no cache, and an AVIF variant
 of a large upload took about 20 s against well under a second for WebP. The
 build still emits AVIF and WebP.
 
+Both dev-only behaviours follow the command, not `NODE_ENV`: the component
+checks `import.meta.env.MODE === 'development'`, which only `astro dev`
+sets. Astro derives `import.meta.env.DEV` from `NODE_ENV`, so a build run
+with `NODE_ENV=test` or `development` (CI, `bun test`) has `DEV` true, and
+`astro dev` with `NODE_ENV=production` has it false. Gated on `DEV`, such a
+build would drop AVIF and skip the strict missing-file error.
+
 Publish runs a build first, and the build has no such fallback, so a path
 that only resolves on a case-insensitive disk is caught there.
 
