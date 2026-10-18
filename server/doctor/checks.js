@@ -41,11 +41,14 @@ import {
 } from './coverage.js';
 import { bunExecutable, findAstroExecutable, shellQuote } from '../utils/astro-bin.js';
 import {
+  compareVersions,
   findAstroAssetsUse,
+  findCmsImageUse,
   findCommittedLockfile,
   isGitRepository,
   LOCKFILE_NAMES,
   probeSharp,
+  sitePackageVersion,
 } from './project.js';
 
 /** @typedef {'pass'|'warn'|'fail'|'skip'} Severity */
@@ -53,6 +56,16 @@ import {
 export const DOCS_BASE = 'https://github.com/cloudshipco/astroadmin/blob/main/docs/doctor.md';
 // The click-to-edit conventions, linked from the checks that enforce them.
 export const INLINE_EDITING_DOCS = 'https://github.com/cloudshipco/astroadmin/blob/main/docs/inline-editing.md';
+// CmsImage: setup, sizes, and why its prerequisites matter.
+export const OPTIMISED_IMAGES_DOCS = 'https://github.com/cloudshipco/astroadmin/blob/main/docs/optimised-images.md';
+// An original over this size served as-is is worth optimising.
+export const UNOPTIMISED_IMAGE_BYTES = 300 * 1024;
+// The AVIF decoder advisory GHSA-26w7-cxv4-gfx2 is fixed in sharp 0.35.4.
+const MIN_SHARP = '0.35.4';
+// CmsImage's glob needs Vite 8's caseSensitive option.
+const MIN_ASTRO = '7.0.0';
+// The formats CmsImage optimises; a plain <img> of one of them is fixable.
+const OPTIMISABLE_IMAGE = /\.(jpe?g|png|webp|avif)$/i;
 const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
 // Below this share of text fields reachable by a click, coverage warns.
 export const COVERAGE_PASS_SHARE = 0.8;
@@ -92,6 +105,32 @@ export function doctorOutDirParent(projectRoot, tempDir = os.tmpdir()) {
     // no writable node_modules
   }
   return projectRoot;
+}
+
+function formatBytes(bytes) {
+  const kilobytes = bytes / 1024;
+  return kilobytes < 1024 ? `${Math.round(kilobytes)} KB` : `${(kilobytes / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * The file in the site's public/ that a root-relative `/images/...` src
+ * serves, or null (a URL, another folder, a malformed escape, or a path that
+ * leaves public/).
+ * @param {string} projectRoot
+ * @param {string} src
+ */
+function publicImageFile(projectRoot, src) {
+  const pathname = src.split(/[?#]/)[0];
+  if (!pathname.startsWith('/images/') || !OPTIMISABLE_IMAGE.test(pathname)) return null;
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  const publicDir = path.join(projectRoot, 'public');
+  const file = path.normalize(path.join(publicDir, decoded));
+  return file.startsWith(publicDir + path.sep) ? file : null;
 }
 
 /** Built checks have nothing to read when there is no build. */
@@ -206,6 +245,40 @@ export const CHECKS = [
         return { severity: 'fail', message: `The site uses Astro images (${usedIn}) but sharp does not load here, so a build that optimises images fails: ${probe.error}` };
       }
       return { severity: 'pass', message: `sharp loads (the site uses Astro images in ${usedIn}).` };
+    },
+  },
+  {
+    id: 'cms-image-prerequisites',
+    since: '1.8.0',
+    phase: 'static',
+    title: 'CmsImage prerequisites',
+    problemTitle: 'CmsImage prerequisites not met',
+    async run(context) {
+      const usedIn = await findCmsImageUse(context.projectRoot);
+      if (!usedIn) return { severity: 'skip', message: 'The site does not use CmsImage (astroadmin/components/CmsImage.astro).' };
+      const sharp = sitePackageVersion(context.projectRoot, 'sharp');
+      const astro = sitePackageVersion(context.projectRoot, 'astro');
+      const problems = [];
+      if (!sharp) {
+        problems.push(`the site has no sharp of its own (a node_modules/sharp from the site's directory up); \`astro build\` loads the site's sharp, so add sharp >= ${MIN_SHARP} to its dependencies`);
+      } else if (compareVersions(sharp.version, MIN_SHARP) < 0) {
+        problems.push(`the site's sharp is ${sharp.version}; \`astro build\` loads it (not Astro's own copy) to decode every upload, and versions below ${MIN_SHARP} are open to the AVIF decoder advisory GHSA-26w7-cxv4-gfx2`);
+      }
+      if (!astro) problems.push('astro is not installed in the site');
+      else if (compareVersions(astro.version, MIN_ASTRO) < 0) problems.push(`Astro is ${astro.version}; CmsImage needs Astro 7 or later`);
+      const versions = `site sharp ${sharp ? sharp.version : 'none'}, Astro ${astro ? astro.version : 'none'}`;
+      if (problems.length > 0) {
+        return { severity: 'fail', message: `CmsImage is used (${usedIn}), but ${problems.join('; and ')}. See ${OPTIMISED_IMAGES_DOCS}#prerequisites.`, details: [versions] };
+      }
+      const facts = await context.astroConfig();
+      if (facts.cssTarget !== 'set') {
+        return {
+          severity: 'warn',
+          title: 'vite.build.cssTarget not set on Astro 7',
+          message: `${versions}. ${facts.cssTarget === 'unknown' ? 'Could not verify vite.build.cssTarget (not a plain literal); check by hand.' : 'vite.build.cssTarget is not set'}: Astro 7 builds with target esnext, so Vite's CSS minifier strips vendor prefixes such as -webkit-backdrop-filter. See ${OPTIMISED_IMAGES_DOCS}#astro-7-and-vendor-prefixes.`,
+        };
+      }
+      return { severity: 'pass', message: `CmsImage is used (${usedIn}) with ${versions}, and vite.build.cssTarget is set.` };
     },
   },
   {
@@ -374,6 +447,43 @@ export const CHECKS = [
         severity: 'warn',
         message: `${found.length} data-aa-field annotation(s) are on or inside a link. A click on a link follows it and focuses nothing, so these never fire; annotate the text beside the link instead. See ${INLINE_EDITING_DOCS}#links.`,
         details: listSome(found.map((item) => `${item.pagePath}: "${item.name}" ${item.problem}`)),
+      };
+    },
+  },  {
+    id: 'unoptimised-images',
+    since: '1.8.0',
+    phase: 'built',
+    title: 'Images are optimised',
+    problemTitle: 'Unoptimised images',
+    async run(context) {
+      if (!context.distDir) return noBuild(context);
+      const { pages } = await context.built();
+      const found = [];
+      for (const [pagePath, scan] of [...pages.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+        const seen = new Set();
+        for (const image of scan.images || []) {
+          if (image.srcset || seen.has(image.src)) continue;
+          const file = publicImageFile(context.projectRoot, image.src);
+          if (!file) continue;
+          let bytes;
+          try {
+            bytes = fs.statSync(file).size;
+          } catch {
+            continue;
+          }
+          if (bytes <= UNOPTIMISED_IMAGE_BYTES) continue;
+          seen.add(image.src);
+          found.push({ pagePath, src: image.src, bytes });
+        }
+      }
+      if (found.length === 0) {
+        return { severity: 'pass', message: `No page serves an original from /images/ over ${formatBytes(UNOPTIMISED_IMAGE_BYTES)} without a srcset.` };
+      }
+      return {
+        severity: 'warn',
+        message: `${found.length} <img> ${found.length === 1 ? 'serves' : 'serve'} an original from /images/ over ${formatBytes(UNOPTIMISED_IMAGE_BYTES)} with no srcset, so every visitor downloads the full upload. Render them through CmsImage: ${OPTIMISED_IMAGES_DOCS}.`,
+        details: listSome(found.map((item) => `${item.pagePath}: ${item.src} (${formatBytes(item.bytes)})`)),
+        data: { images: found },
       };
     },
   },

@@ -88,7 +88,7 @@ coverage, per-page block indexes for `block-index`).
 
 ## In the editor
 
-The editor runs the built-HTML checks (the last four below) after every
+The editor runs the built-HTML checks (the last five below) after every
 publish whose build check passes. It reads the build that check has just made,
 so it costs no extra build, and it reads the entries, schemas and routes from
 the same commit (the check's worktree), not the live files an autosave may
@@ -208,6 +208,25 @@ to build. Since the publish check runs the build on the editor's host, a sharp
 that cannot load there (a missing system library, a wrong platform binary)
 stops every publish. The check loads sharp from the site, in the same runtime
 as the publish check (Bun), and makes a 1x1 image.
+
+### cms-image-prerequisites
+
+*Since 1.8.0. Fails when a prerequisite is missing; warns about the CSS
+target; skipped when the site does not use CmsImage.*
+
+A site whose source imports `astroadmin/components/CmsImage.astro` needs:
+
+- **its own `sharp` 0.35.4 or later.** `astro build` loads the sharp that a
+  bare import finds from the site's root (the first `node_modules/sharp` in
+  the site's directory or above), not the copy nested in Astro's own folder,
+  so the check reads that one. Every editor upload is decoded by it, and
+  earlier versions are open to the AVIF decoder advisory GHSA-26w7-cxv4-gfx2.
+- **Astro 7 or later**, for the case-insensitive image glob.
+
+On Astro 7 it also warns when `vite.build.cssTarget` is not set: Astro builds
+with target `esnext`, so Vite's CSS minifier strips vendor prefixes such as
+`-webkit-backdrop-filter`. See
+[Optimised images](./optimised-images.md#prerequisites).
 
 ### build-runs
 
@@ -353,6 +372,18 @@ field. A Markdown body with links in it, or a hero section with a button, can
 be annotated as a whole.
 
 See [Links](./inline-editing.md#links) in the click-to-edit conventions.
+
+### unoptimised-images
+
+*Since 1.8.0. Warns.*
+
+Lists every `<img>` in the built pages whose `src` is a JPEG, PNG, WebP or
+AVIF under `/images/`, with no `srcset`, whose original in `public/` is over
+300 KB: the page, the file and its size. Each one sends the full upload to
+every visitor. It reads what the build serves, so it finds templates that
+print an image string directly, Markdown images, and sites that have not
+adopted [CmsImage](./optimised-images.md) yet. Logos and other small files,
+SVGs and GIFs, external URLs and images with a `srcset` are not listed.
 
 ## Adding a check
 

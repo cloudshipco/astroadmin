@@ -486,15 +486,17 @@ queue, so the old body is never written back.
 `tests/git-api.test.js` used to be a known red; it passes as of 2026-10-08 (checked at
 `74609bd` in a clean worktree).
 
-`astroadmin doctor` (`server/doctor/`, docs/doctor.md) has five test files:
+`astroadmin doctor` (`server/doctor/`, docs/doctor.md) has six test files:
 `doctor-coverage` (built-HTML checks on a fixture page, each shown red on a mutated copy),
 `doctor-static` (config, lockfile, submodule, workspace and sharp checks on throwaway repos),
 `doctor-cli` (exit codes, `--json`, `--build`, the site's installed astro and never a fetched
 one; ~10 s), `doctor-publish` (the editor scans the publish check's own build in a child
 process rooted at the check's worktree, so it reads the commit's entries; a scan stuck in a
 synchronous loop is killed at its cap; an error is "unavailable" with a fixed reason and the
-error in the server log, never a failed publish; ~15 s) and
-`doctor-notice` (the editor notice, happy-dom). Run each with `bun tests/doctor-<name>.test.js`.
+error in the server log, never a failed publish; ~15 s),
+`doctor-notice` (the editor notice, happy-dom) and `doctor-images` (unoptimised `/images/`
+originals in built HTML; CmsImage's prerequisites: the SITE's sharp, found by walking up
+`node_modules` from the site root, never Astro's nested copy, Astro >= 7, `cssTarget`). Run each with `bun tests/doctor-<name>.test.js`.
 
 **The doctor and the publish check use synchronous fs, never `fs/promises`.** Under Bun 1.3.4
 on macOS an `fs/promises` call made while child processes start and exit can lose its completion

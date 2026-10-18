@@ -183,7 +183,7 @@ function listCalls(listNode, localNames, resolve, depth = 0) {
  * @returns {Promise<AstroConfigFacts>}
  */
 export async function readAstroConfigFacts(projectRoot) {
-  const facts = { file: null, parseError: null, integrationImported: false, integrationCalled: 'no', allowedHosts: 'unknown', hmr: 'unknown', outDir: null };
+  const facts = { file: null, parseError: null, integrationImported: false, integrationCalled: 'no', allowedHosts: 'unknown', hmr: 'unknown', outDir: null, cssTarget: 'unknown' };
   let source = null;
   for (const name of ASTRO_CONFIG_NAMES) {
     try {
@@ -241,6 +241,12 @@ export async function readAstroConfigFacts(projectRoot) {
     } else if (hmrValue?.type === 'ObjectExpression') {
       facts.hmr = 'enabled';
     }
+    // vite.build.cssTarget: 'set', 'missing' (no key on readable objects), or
+    // 'unknown' (a spread or computed value the doctor cannot read).
+    const viteBuild = getProperty(getProperty(configObject, 'vite', resolve), 'build', resolve);
+    const cssTarget = getProperty(viteBuild, 'cssTarget', resolve);
+    if (cssTarget === undefined) facts.cssTarget = viteBuild === UNKNOWN ? 'unknown' : 'missing';
+    else if (cssTarget !== UNKNOWN) facts.cssTarget = 'set';
     const outDir = getProperty(configObject, 'outDir', resolve);
     const outDirValue = outDir === undefined || outDir === UNKNOWN ? null : resolve(outDir);
     if (outDirValue?.type === 'StringLiteral') facts.outDir = outDirValue.value;
@@ -315,6 +321,60 @@ export async function findAstroAssetsUse(projectRoot) {
     }
   }
   return null;
+}
+
+/**
+ * Does the site's source use AstroAdmin's CmsImage component?
+ * @param {string} projectRoot
+ * @returns {Promise<string|null>} the first file that does, relative to the site
+ */
+export async function findCmsImageUse(projectRoot) {
+  for await (const file of sourceFiles(path.join(projectRoot, 'src'))) {
+    if (fs.readFileSync(file, 'utf-8').includes('astroadmin/components/CmsImage.astro')) {
+      return path.relative(projectRoot, file);
+    }
+  }
+  return null;
+}
+
+/**
+ * The version of a package as a bare import FROM THE SITE ROOT finds it: the
+ * first node_modules/<name> in the site's directory or above. This is how
+ * `astro build` finds sharp (its bundled image service leaves sharp external,
+ * so it resolves from the site), so a newer copy nested inside Astro's own
+ * folder is not it. Reads package.json directly, which a package's `exports`
+ * may not expose to require.resolve.
+ * @param {string} projectRoot
+ * @param {string} name
+ * @returns {{version: string, file: string}|null}
+ */
+export function sitePackageVersion(projectRoot, name) {
+  let directory = path.resolve(projectRoot);
+  for (;;) {
+    const file = path.join(directory, 'node_modules', name, 'package.json');
+    try {
+      const { version } = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      if (typeof version === 'string') return { version, file };
+    } catch {
+      // not here: look further up
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+/**
+ * Compare two `major.minor.patch` versions (prerelease suffixes ignored).
+ * @returns {number} negative, zero or positive
+ */
+export function compareVersions(left, right) {
+  const parts = (version) => String(version).split(/[-+]/)[0].split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const [a, b] = [parts(left), parts(right)];
+  for (let index = 0; index < 3; index += 1) {
+    if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) - (b[index] || 0);
+  }
+  return 0;
 }
 
 // Loads sharp the way Astro does (resolved from the site) and makes a 1x1 PNG,

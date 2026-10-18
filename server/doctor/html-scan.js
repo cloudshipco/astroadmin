@@ -70,6 +70,8 @@ import path from 'path';
  *   a space at each end, for matching a short value as whole words
  * @property {string} linkText - visible text inside links, as comparableText()
  * @property {string} bodyText - all visible body text, as comparableText()
+ * @property {Array<{src: string, srcset: boolean}>} images - every rendered
+ *   <img>: its src attribute as written, and whether it has a srcset
  */
 
 // Elements the HTML parser only ever puts in (or treats as) head content,
@@ -119,6 +121,7 @@ export async function scanHtml(html) {
   const blockIndexes = [];
   const blockNested = [];
   let entryCards = 0;
+  const images = [];
   // Inside a rendered card marked as another entry's.
   let cardDepth = 0;
   const textChunks = [];
@@ -201,6 +204,12 @@ export async function scanHtml(html) {
         fields.push({ name: element.getAttribute('data-aa-field') || '', tag: element.tagName.toLowerCase(), link, card });
       },
     })
+    .on('img', {
+      element(element) {
+        if (!isRendered(element)) return;
+        images.push({ src: element.getAttribute('src') || '', srcset: Boolean((element.getAttribute('srcset') || '').trim()) });
+      },
+    })
     .on('[hidden]', { element(element) { trackDepth(element, (delta) => { hiddenDepth += delta; }); } })
     .on('svg, title', { element(element) { trackDepth(element, (delta) => { nonTextDepth += delta; }); } })
     .on('a[href]', { element(element) { trackDepth(element, (delta) => { linkDepth += delta; }); } })
@@ -235,6 +244,7 @@ export async function scanHtml(html) {
     clickableWords: ` ${comparableWords(visibleText)} `,
     linkText: comparableText(linkChunks.join('')),
     bodyText: comparableText(bodyChunks.join('')),
+    images,
   };
 }
 
