@@ -37,11 +37,13 @@ const PHASES = ['static', 'build', 'built'];
  * @param {string|null} [options.distDir] - an existing build to read instead of building
  * @param {boolean} [options.build=true] - build into a temp dir when no distDir is given
  * @param {string[]} [options.phases] - which phases to run (default: all)
+ * @param {boolean} [options.editor=false] - the editor's post-publish scan:
+ *   leave out the checks marked commandLineOnly
  * @param {() => Promise<{entries: Array}>} [options.loadEntries] - entries with page paths
  *   (default: the editor's store, via ./entries.js)
  * @returns {Promise<{version: string, projectRoot: string, ok: boolean, counts: Object, results: DoctorResult[]}>}
  */
-export async function runDoctor({ projectRoot, distDir = null, build = true, phases = PHASES, loadEntries = null }) {
+export async function runDoctor({ projectRoot, distDir = null, build = true, phases = PHASES, loadEntries = null, editor = false }) {
   const memo = new Map();
   const remember = (key, compute) => {
     if (!memo.has(key)) memo.set(key, compute());
@@ -72,6 +74,7 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
   try {
     for (const definition of DOCTOR_CHECKS) {
       if (!phases.includes(definition.phase)) continue;
+      if (editor && definition.commandLineOnly) continue;
       let outcome;
       try {
         outcome = await definition.run(context);

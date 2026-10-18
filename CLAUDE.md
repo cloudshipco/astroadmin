@@ -493,7 +493,8 @@ queue, so the old body is never written back.
 one; ~10 s), `doctor-publish` (the editor scans the publish check's own build in a child
 process rooted at the check's worktree, so it reads the commit's entries; a scan stuck in a
 synchronous loop is killed at its cap; an error is "unavailable" with a fixed reason and the
-error in the server log, never a failed publish; ~15 s),
+error in the server log, never a failed publish; `unoptimised-images` is command-line
+only, absent from the editor scan but reported by `runDoctor`; ~15 s),
 `doctor-notice` (the editor notice, happy-dom) and `doctor-images` (unoptimised `/images/`
 originals in built HTML; CmsImage's prerequisites: the SITE's sharp, found by walking up
 `node_modules` from the site root, never Astro's nested copy, Astro >= 7, `cssTarget`). Run each with `bun tests/doctor-<name>.test.js`.

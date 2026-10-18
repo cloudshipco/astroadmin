@@ -77,8 +77,12 @@ const home = await getEntry('pages', 'home');
 <html><head><title>{home.data.title}</title></head><body>
 <h1 data-aa-field="headline">{home.data.headline}</h1>
 <p>{home.data.blurb}</p>
+<img src="/images/large.png" alt="">
 </body></html>
 `);
+// A large original served as-is: the command-line doctor lists it
+// (unoptimised-images); the editor's scan must not.
+writeFile(projectRoot, 'public/images/large.png', Buffer.alloc(400 * 1024, 7));
 
 git(projectRoot, 'init', '-q', '-b', 'main');
 git(projectRoot, 'config', 'user.name', 'Test');
@@ -252,6 +256,25 @@ process.stdout.write('\\nASTROADMIN_DOCTOR_RESULT ' + JSON.stringify({ ok: { cov
     assert.ok(logged.join('\n').includes(siteDir), 'positive control: the text, directory and all, is in the server log');
     assert.deepEqual(result.results[0].details, ['/home/about: "title" is inside a link'], 'a page path is not mistaken for a server path');
     assert.ok(!JSON.stringify(result).includes(tempRoot), JSON.stringify(result));
+  });
+
+  await check('the editor scan leaves out unoptimised-images; the command-line doctor reports it', async () => {
+    resetLatestDoctorResult();
+    writeFile(projectRoot, 'src/content/pages/home.md', '---\ntitle: Example home\nheadline: Welcome to the example site\nblurb: An example, published to check which checks the editor runs.\n---\n');
+    const res = createJsonResponse();
+    await publishHandler({ body: { message: 'Content update' } }, res);
+    assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+    const result = getLatestDoctorResult();
+    assert.equal(result?.status, 'ok', JSON.stringify(result));
+    const ids = result.results.map((item) => item.id);
+    assert.ok(ids.includes('click-to-edit-coverage'), `the editor ran the built checks: ${ids}`);
+    assert.ok(!ids.includes('unoptimised-images'), `the editor scan has no unoptimised-images result: ${ids}`);
+
+    const { runDoctor } = await import('../server/doctor/index.js');
+    const cli = await runDoctor({ projectRoot, phases: ['build', 'built'], loadEntries: async () => ({ entries: [] }) });
+    const images = cli.results.find((item) => item.id === 'unoptimised-images');
+    assert.equal(images?.severity, 'warn', JSON.stringify(images));
+    assert.ok(images.details.join('\n').includes('/: /images/large.png (400 KB)'), images.details.join('\n'));
   });
 
   await check('the scan reads the commit it built, not an edit made since (an autosave mid-publish)', async () => {

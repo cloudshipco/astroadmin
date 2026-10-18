@@ -15,6 +15,9 @@
  * reported as (the editor's notice lists failing checks by title alone, so a
  * title like "names match a field" read as a pass there). A run may return its
  * own `title` when the problem it found is a different one.
+ *
+ * `commandLineOnly: true` keeps a check out of the editor's post-publish scan
+ * (./editor-scan.js): it runs only from `astroadmin doctor`.
  */
 
 // Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
@@ -453,6 +456,8 @@ export const CHECKS = [
     id: 'unoptimised-images',
     since: '1.8.0',
     phase: 'built',
+    // A site-owner's rollout list, not something an editor can act on.
+    commandLineOnly: true,
     title: 'Images are optimised',
     problemTitle: 'Unoptimised images',
     async run(context) {

@@ -65,7 +65,7 @@ async function scan({ siteDir, command }) {
   // Entries are loaded up front so a store or schema error makes the result
   // unavailable, rather than a report of checks that could not run.
   const loaded = await collectEntries();
-  const report = await runDoctor({ projectRoot: siteDir, distDir, build: false, phases: ['built'], loadEntries: async () => loaded });
+  const report = await runDoctor({ projectRoot: siteDir, distDir, build: false, phases: ['built'], loadEntries: async () => loaded, editor: true });
   return summarise(report);
 }
 

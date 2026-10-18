@@ -88,7 +88,8 @@ coverage, per-page block indexes for `block-index`).
 
 ## In the editor
 
-The editor runs the built-HTML checks (the last five below) after every
+The editor runs the built-HTML checks (the last five below, except
+`unoptimised-images`, which is command-line only) after every
 publish whose build check passes. It reads the build that check has just made,
 so it costs no extra build, and it reads the entries, schemas and routes from
 the same commit (the check's worktree), not the live files an autosave may
@@ -375,7 +376,9 @@ See [Links](./inline-editing.md#links) in the click-to-edit conventions.
 
 ### unoptimised-images
 
-*Since 1.8.0. Warns.*
+*Since 1.8.0. Warns. Command line only: the editor's post-publish scan does
+not run it, since it is a list for the site's owner, not something an editor
+can fix.*
 
 Lists every `<img>` in the built pages whose `src` is a JPEG, PNG, WebP or
 AVIF under `/images/`, with no `srcset`, whose original in `public/` is over
@@ -396,6 +399,7 @@ Checks live in `server/doctor/checks.js`, one entry each:
   phase: 'built',            // 'static', 'build' or 'built'
   title: 'My feature',             // shown on a pass or skip
   problemTitle: 'My feature is not set up', // shown on a warn or fail
+  // commandLineOnly: true,  // leave it out of the editor's post-publish scan
   async run(context) {
     // context.projectRoot, context.distDir, context.astroConfig(), context.built()
     return { severity: 'warn', message: '...', details: ['...'] };
