@@ -14,7 +14,8 @@
  *   site's root, even from inside node_modules). Only the entries actually
  *   rendered are imported. Extensions match in any case (`.JPG`).
  * - Found: <Picture> with AVIF/WebP sources, an explicit fallback format and
- *   width cap, widths capped at the original's width, and a required `sizes`.
+ *   width cap, widths capped at the original's width (and at the largest
+ *   candidate width), and a required `sizes`.
  * - External URLs, SVG and GIF: a plain <img>.
  * - A local raster path with no glob entry:
  *     build: an error naming the content value;
@@ -36,7 +37,12 @@ interface Props {
   alt?: string;
   /** The slot's real rendered width, e.g. "(min-width: 1024px) 480px, 100vw". Required. */
   sizes: string;
-  /** Candidate widths; filtered to those below the original's width, which is always added. */
+  /**
+   * Candidate widths. Those at or above the original's width are dropped; the
+   * original's width is added when it is no wider than the largest candidate,
+   * so a huge upload stops at the largest candidate instead of shipping
+   * variants at its full width.
+   */
   widths?: number[];
   /** Format of the <img> fallback. */
   fallbackFormat?: 'jpg' | 'webp' | 'png';
@@ -68,7 +74,13 @@ const OPTIMISABLE = /\.(jpe?g|png|webp|avif)$/i;
 /** True when `sitePath` (e.g. /images/x.jpg) is a file under public/. Dev only. */
 function existsInPublic(sitePath: string): boolean {
   const publicDir = join(process.cwd(), 'public');
-  const file = normalize(join(publicDir, decodeURIComponent(sitePath)));
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(sitePath);
+  } catch {
+    return false; // a malformed escape (URIError): treat as missing
+  }
+  const file = normalize(join(publicDir, decoded));
   if (!file.startsWith(publicDir + sep)) return false;
   return existsSync(file) && statSync(file).isFile();
 }
@@ -90,8 +102,14 @@ if (src.startsWith('/images/') && OPTIMISABLE.test(src)) {
   }
 }
 
+const largestCandidate = Math.max(...candidateWidths);
 const widths = image
-  ? [...new Set([...candidateWidths.filter((width) => width < image!.width), image.width])].sort((a, b) => a - b)
+  ? [
+      ...new Set([
+        ...candidateWidths.filter((width) => width < image!.width),
+        ...(image.width <= largestCandidate ? [image.width] : []),
+      ]),
+    ].sort((a, b) => a - b)
   : [];
 const fallbackWidth = image ? Math.min(image.width, fallbackMaxWidth) : 0;
 const fallbackHeight = image ? Math.round((image.height * fallbackWidth) / image.width) : 0;

@@ -13,7 +13,10 @@
  *   matches extensions in any case);
  * - SVG and external URLs stay plain <img>s with their original src;
  * - a /images/ path with no file, and one that differs only in case, each
- *   fail the build with an error naming the content value.
+ *   fail the build with an error naming the content value;
+ * - in `astro dev`, a file added after start renders as the plain original
+ *   (data-cms-image="dev-original"), and a malformed %-escape is the strict
+ *   error, not a URIError.
  *
  * Needs the network the first time (the site's install), then bun's cache.
  *
@@ -24,7 +27,8 @@ import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
+import net from 'net';
 import sharp from 'sharp';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
@@ -91,7 +95,12 @@ try {
   const PHOTO_WIDTH = 1200;
   const photoPng = await photo(PHOTO_WIDTH, 800, 'png', [200, 60, 40]);
   const shotJpg = await photo(900, 600, 'jpeg', [40, 90, 200]);
+  // Wider than the largest candidate width (2560): its own width must not
+  // become a srcset candidate, or a 6000px upload ships 6000w variants.
+  const WIDE_WIDTH = 3000;
+  const wideJpg = await photo(WIDE_WIDTH, 1000, 'jpeg', [90, 160, 60]);
   writeSiteFile('public/images/photo.png', photoPng);
+  writeSiteFile('public/images/wide.jpg', wideJpg);
   writeSiteFile('public/images/gallery/Shot.JPG', shotJpg);
   writeSiteFile(
     'public/images/logo.svg',
@@ -103,6 +112,7 @@ try {
       [
         '<CmsImage src="/images/photo.png" alt="Photo" sizes="(min-width: 800px) 600px, 100vw" class="photo" data-aa-field="hero" />',
         '<CmsImage src="/images/gallery/Shot.JPG" alt="Shot" sizes="100vw" />',
+        '<CmsImage src="/images/wide.jpg" alt="Wide" sizes="100vw" />',
         '<CmsImage src="/images/logo.svg" alt="Logo" sizes="40px" />',
         '<CmsImage src="https://example.com/remote.jpg" alt="Remote" sizes="100vw" />',
         '<CmsImage src="" alt="Empty" sizes="100vw" />',
@@ -135,8 +145,8 @@ try {
   };
 
   console.log('cms-image-packed:');
-  check('two raster images become <picture>s', () => {
-    assert.strictEqual(pictures.length, 2, html);
+  check('three raster images become <picture>s', () => {
+    assert.strictEqual(pictures.length, 3, html);
   });
 
   const photoPicture = pictures.find((picture) => picture.includes('alt="Photo"'));
@@ -173,6 +183,15 @@ try {
     assert.ok(widths.length >= 2 && Math.max(...widths) === 900, `widths ${widths}`);
   });
 
+  check('an original wider than every candidate stops at the largest candidate', () => {
+    const widePicture = pictures.find((picture) => picture.includes('alt="Wide"'));
+    for (const type of ['avif', 'webp']) {
+      const widths = widthsOf(sourceSrcset(widePicture, type));
+      assert.ok(!widths.includes(WIDE_WIDTH), `${type}: no ${WIDE_WIDTH}w candidate, got ${widths}`);
+      assert.strictEqual(Math.max(...widths), 2560, `${type}: the largest is 2560, got ${widths}`);
+    }
+  });
+
   check('SVG and external URLs stay plain <img>s; empty renders nothing', () => {
     assert.ok(/<img src="\/images\/logo.svg" alt="Logo"/.test(html), html);
     assert.ok(/<img src="https:\/\/example.com\/remote.jpg" alt="Remote"/.test(html), html);
@@ -194,6 +213,68 @@ try {
     });
   }
   writeSiteFile('src/pages/index.astro', goodPage);
+
+  // --- astro dev ---------------------------------------------------------
+  // A file added after the dev server starts is not in the glob yet: it
+  // renders as the plain original. A malformed escape is "missing" (the
+  // strict error), not an unhandled URIError.
+  const port = await new Promise((resolve) => {
+    const probe = net.createServer().listen(0, '127.0.0.1', () => {
+      const { port: freePort } = probe.address();
+      probe.close(() => resolve(freePort));
+    });
+  });
+  writeSiteFile(
+    'src/pages/dev.astro',
+    page('<CmsImage src="/images/late.png" alt="Late" sizes="100vw" class="late" data-aa-field="late" />'),
+  );
+  writeSiteFile('src/pages/malformed.astro', page('<CmsImage src="/images/bad%E0%A4%A.jpg" alt="" sizes="100vw" />'));
+  const dev = spawn('node', ['node_modules/astro/bin/astro.mjs', 'dev', '--port', String(port), '--host', '127.0.0.1', '--ignore-lock'], {
+    cwd: siteDir,
+    env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let devOutput = '';
+  dev.stdout.on('data', (chunk) => (devOutput += chunk));
+  dev.stderr.on('data', (chunk) => (devOutput += chunk));
+  try {
+    const devPage = async (route) => {
+      for (let attempt = 0; attempt < 150; attempt++) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}${route}`);
+          return await response.text();
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+      throw new Error(`astro dev never answered on ${port}:\n${devOutput}`);
+    };
+    await devPage('/'); // started, glob read
+    writeSiteFile('public/images/late.png', await photo(500, 300, 'png', [10, 10, 220]));
+    const lateHtml = await devPage('/dev');
+    check('dev: an upload newer than the glob renders as the plain original', () => {
+      const img = lateHtml.match(/<img[^>]*alt="Late"[^>]*>/);
+      assert.ok(img, lateHtml.slice(0, 2000));
+      assert.ok(img[0].includes('src="/images/late.png"'), img[0]);
+      assert.ok(img[0].includes('data-cms-image="dev-original"'), img[0]);
+      assert.ok(img[0].includes('data-aa-field="late"') && img[0].includes('late'), img[0]);
+    });
+    // A render error in dev answers 200 with only the overlay client; the
+    // error itself is in the server log.
+    await devPage('/malformed');
+    for (let attempt = 0; attempt < 50 && !/names a local image|URI malformed/.test(devOutput); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    check('dev: a malformed %-escape is reported as a missing image, not a URIError', () => {
+      assert.ok(/CmsImage: \\?"\/images\/bad%E0%A4%A\.jpg\\?" names a local image/.test(devOutput), devOutput.slice(-3000));
+      assert.ok(!/URI malformed/.test(devOutput), 'no URIError');
+    });
+  } finally {
+    // --ignore-lock keeps Astro 7 in the foreground as our child (without it
+    // `astro dev` detaches and outlives the test); stop it either way.
+    dev.kill();
+    spawnSync('node', ['node_modules/astro/bin/astro.mjs', 'dev', 'stop'], { cwd: siteDir, encoding: 'utf8' });
+  }
 
   console.log(`\ncms-image-packed: ${passed} passed`);
 } finally {

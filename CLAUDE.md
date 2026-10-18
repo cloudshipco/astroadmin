@@ -477,7 +477,11 @@ queue, so the old body is never written back.
   ^0.35.5, then `astro build` (~10 s warm; the first install needs the network): AVIF and
   WebP sources of several widths capped at the original, a JPEG fallback smaller than the
   original, `class`/`data-aa-field` on the `<img>`, a `.JPG` in a subfolder optimised,
-  SVG/external URLs plain, and a missing or mis-cased path failing the build by name.
+  SVG/external URLs plain, a missing or mis-cased path failing the build by name, and an
+  original wider than 2560 stopping at 2560w. Then `astro dev --ignore-lock` (without the
+  flag Astro 7 detaches and outlives the test): a file added after start renders as the
+  plain original (`data-cms-image="dev-original"`), and a malformed `%`-escape gives the
+  strict error, not a URIError (~15 s).
 
 `tests/git-api.test.js` used to be a known red; it passes as of 2026-10-08 (checked at
 `74609bd` in a clean worktree).

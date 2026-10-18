@@ -79,7 +79,7 @@ Props:
 | `src` | `''` | The stored string. Empty renders nothing. |
 | `alt` | `''` | Alt text. |
 | `sizes` | required | The slot's rendered width (see below). |
-| `widths` | `[400, 640, 800, 1024, 1280, 1600, 2048, 2560]` | Candidate widths. Those at or above the original's width are dropped and the original's width is added. |
+| `widths` | `[400, 640, 800, 1024, 1280, 1600, 2048, 2560]` | Candidate widths. Those at or above the original's width are dropped. The original's width is added when it is no wider than the largest candidate, so a 6000px upload stops at 2560. |
 | `fallbackFormat` | `'jpg'` | Format of the `<img>` fallback (`'jpg'`, `'webp'` or `'png'`). |
 | `fallbackMaxWidth` | `1600` | Widest the fallback is generated. |
 
@@ -102,7 +102,9 @@ What it renders:
 - `/images/<path>` naming a JPEG, PNG, WebP or AVIF file in
   `public/images/`: a `<picture>` with AVIF and WebP sources and a JPEG
   fallback. Paths are matched exactly, including case; only the extension
-  matches in any case.
+  matches in any case. They are also matched literally, so a URL-encoded
+  value (`/images/my%20photo.jpg` for `my photo.jpg`) does not match.
+  AstroAdmin's uploads never store one.
 - An external URL, an SVG or a GIF: a plain `<img>` with the original `src`.
 - A `/images/` raster path with no file: **the build fails**, naming the
   content value, so a broken path cannot reach production. A path that
