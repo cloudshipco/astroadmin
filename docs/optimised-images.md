@@ -82,6 +82,18 @@ Props:
 | `widths` | `[400, 640, 800, 1024, 1280, 1600, 2048, 2560]` | Candidate widths. Those at or above the original's width are dropped. The original's width is added when it is no wider than the largest candidate, so a 6000px upload stops at 2560. |
 | `fallbackFormat` | `'jpg'` | Format of the `<img>` fallback (`'jpg'`, `'webp'` or `'png'`). |
 | `fallbackMaxWidth` | `1600` | Widest the fallback is generated. |
+| `quality` | `80` | Encoder quality for every variant (AVIF, WebP and the fallback): `1`-`100`, or Astro's presets `'low'` (25), `'mid'` (50), `'high'` (80), `'max'` (100). See below for when no default is applied. |
+
+AVIF needs an explicit quality. Astro's Sharp service passes none when
+`<Picture>` is given none, and Sharp then encodes AVIF at 50 while WebP and
+JPEG get 80. On a real photograph, AVIF at 50 visibly smoothed fabric and
+sand texture; at 80 it did not, for roughly two and a half times the bytes
+(still well under the JPEG). So CmsImage passes 80 to every format. It
+passes nothing, leaving Sharp's defaults as before, in two cases: when the
+site sets a `quality` for any format in `image.service.config` in
+`astro.config.mjs` (the site's setting wins), and when `fallbackFormat` is
+`'png'`, because a PNG quality below 100 makes Sharp reduce the fallback to
+a 256-colour palette. Pass `quality` yourself in either case if you want it.
 
 Every other attribute (`class`, `loading`, `fetchpriority`, Astro's
 `priority`, `data-aa-field`...) is passed to the `<img>`, which is the

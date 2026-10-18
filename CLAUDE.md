@@ -478,7 +478,11 @@ queue, so the old body is never written back.
   WebP sources of several widths capped at the original, a JPEG fallback smaller than the
   original, `class`/`data-aa-field` on the `<img>`, a `.JPG` in a subfolder optimised,
   SVG/external URLs plain, a missing or mis-cased path failing the build by name, and an
-  original wider than 2560 stopping at 2560w. Then `astro dev --ignore-lock` (without the
+  original wider than 2560 stopping at 2560w. Quality: each emitted AVIF/WebP/JPEG is
+  byte-compared with the site's sharp re-running Astro's pipeline (rotate, resize, encode)
+  at q50 and q80 (deterministic per sharp build): default 80 everywhere, `quality={50}`
+  overrides, a PNG fallback gets none, and a site's `image.service.config.avif.quality`
+  wins (a second build). Then `astro dev --ignore-lock` (without the
   flag Astro 7 detaches and outlives the test): a file added after start renders as the
   plain original (`data-cms-image="dev-original"`), and a malformed `%`-escape gives the
   strict error, not a URIError (~15 s).
