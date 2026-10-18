@@ -418,6 +418,16 @@ let
     # live preview reflects saves. Polling is a stat() loop, so it works
     # regardless of runtime; the interval trades latency for CPU.
     environment = (instanceEnv name inst) // {
+      # `astro dev` is a dev server and must run in development mode, so this
+      # overrides instanceEnv's production. Under NODE_ENV=production Vite
+      # sets import.meta.env.DEV to false even in dev, so Astro's dev image
+      # endpoint refuses every optimised image ("The dev image endpoint can
+      # only be used in dev mode", a 500 from astro/dist/assets/endpoint/dev.js)
+      # and CmsImage's dev-only fallback for a fresh upload never fires.
+      # Production mode also forced Vite HMR off; hosted sites turn it off
+      # themselves (`vite.server.hmr: false`, the doctor's
+      # hosted-preview-config check).
+      NODE_ENV = "development";
       CHOKIDAR_USEPOLLING = "1";
       CHOKIDAR_INTERVAL = "300";
     };
