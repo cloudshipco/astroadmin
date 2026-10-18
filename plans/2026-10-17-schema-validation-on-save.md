@@ -7,7 +7,8 @@ summary links on blocks (with the whole-block fix), the const binding, and two
 cleanups. Every block-cleanup change was reverted, so saved output is
 byte-identical to 9ef8871 (pinned by tests/blank-optional-round-trip.test.js).
 Follow-ups: #68 (git routes' paths), #69 (top-level ""), #70 ("Leave this
-out"). Review round 3 was not run.
+out"). Review round 3 was not run. Released in 1.7.0 (2026-10-17, commit
+d7b98da); every hosted editor runs it.
 
 ## The report
 
