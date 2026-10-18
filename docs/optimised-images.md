@@ -88,7 +88,14 @@ Every other attribute (`class`, `loading`, `fetchpriority`, Astro's
 element a click lands on, so [click-to-edit](./inline-editing.md) keeps
 working. `<Picture>` wraps that `<img>` in a `<picture>` element, so a CSS
 rule that targets the image by a parent's child selector (`.card > img`) may
-need adjusting.
+need adjusting, and in a grid or flex container the `<picture>`, not the
+`<img>`, becomes the item. To keep the `<img>` as the item, pass
+`pictureAttributes={{ class: '...' }}` with `display: contents` on the
+`<picture>` **and** `display: none` on its `<source>` elements (in Tailwind,
+`contents [&>source]:hidden`). With `display: contents` alone, the empty
+`<source>` elements become grid or flex items too and can push the image
+into another row. Hiding a `<source>` does not change which one the browser
+chooses.
 
 What it renders:
 
