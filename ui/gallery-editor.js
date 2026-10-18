@@ -6,6 +6,7 @@
 import { openImageLibrary } from './image-library.js';
 
 import { escapeHtml } from './escape-html.js';
+import { readJson } from './api-response.js';
 
 let currentCallback = null;
 let currentImages = []; // Array of { src, alt } objects
@@ -65,7 +66,7 @@ export function closeGalleryEditor() {
 async function loadImageMetadata() {
   try {
     const response = await fetch('/api/images');
-    const data = await response.json();
+    const data = await readJson(response);
     if (data.success) {
       // Build lookup by URL
       allImageMetadata = {};

@@ -8,6 +8,8 @@
  * until a later publish produces a different result.
  */
 
+import { readJson } from './api-response.js';
+
 const DOCS_URL = 'https://github.com/cloudshipco/astroadmin/blob/main/docs/doctor.md';
 const DISMISS_KEY = 'astroadmin.doctorNotice.dismissed';
 const NOTICE_CLASS = 'aa-doctor-notice';
@@ -113,7 +115,7 @@ export async function refreshDoctorNotice() {
   try {
     const response = await fetch('/api/doctor/latest');
     if (!response.ok) return;
-    result = (await response.json()).result;
+    result = (await readJson(response)).result;
   } catch {
     return; // quiet: the notice is optional
   }

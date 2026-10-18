@@ -371,6 +371,12 @@ runner aggregating them). Most run server-less and need env vars:
   `preview.url` (warning when it cannot), and stopping it frees that port even when
   Astro 7 detects an agent and would daemonise (`--ignore-lock`). ~15 s; ports 3727,
   3728, 4727, 4729.
+- `bun tests/rate-limit.test.js` — production-mode /api limits (server/utils/rate-limit.js):
+  a signed-in session's burst of 150 passes (own budget, `sessionMax`, keyed by a session
+  digest); not signed in and every login attempt keep 100 per address; a 429 is JSON with
+  Retry-After. `bun tests/api-response.test.js` — the dashboard's `readJson`
+  (ui/api-response.js) turns any 429 or non-JSON body into a readable error, and no ui/
+  file calls `.json()` itself.
 - `bun tests/dev-toolbar.test.js` — the integration hides Astro's dev toolbar in the
   preview AstroAdmin runs (ASTROADMIN_PROJECT_ROOT naming the site: `astroadmin dev`, the
   hosted preview unit) and nowhere else (plain `astro dev` is the positive control). Real

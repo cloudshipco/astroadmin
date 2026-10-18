@@ -15,6 +15,10 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Window } from 'happy-dom';
+import { readJson } from '../ui/api-response.js';
+
+/** A real JSON Response: the dashboard reads bodies through readJson (ui/api-response.js). */
+const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 const window = new Window({ url: 'http://localhost/' });
 globalThis.window = window;
@@ -36,7 +40,7 @@ const routes = new Map();
 globalThis.fetch = async (url) => {
   const key = String(url).split('?')[0];
   if (!routes.has(key)) throw new Error(`unstubbed fetch ${url}`);
-  return { ok: true, status: 200, json: async () => routes.get(key) };
+  return jsonResponse(routes.get(key));
 };
 
 let passed = 0;
@@ -175,12 +179,12 @@ await check('dashboard: the markdown body textarea holds the file body byte for 
   // editor shows (textarea.value) is what the next save writes back.
   const fnSrc = dashboardSrc.match(/async function renderEditor\(entryData, ctx\) \{[\s\S]*?\n\}/)?.[0];
   assert.ok(fnSrc, 'renderEditor not found');
-  const schemaResponse = { json: async () => ({ collection: { schema: { type: 'object', properties: { title: { type: 'string' } } } } }) };
+  const schemaResponse = () => jsonResponse({ collection: { schema: { type: 'object', properties: { title: { type: 'string' } } } } });
   const render = new Function('document', 'fetch', 'collectionApiPath', 'generateForm', 'installSaver', 'showEntryProblems',
-    'collapseAllBlocks', 'setupBlockFocus', 'loadSeq', 'bindOriginalValues',
+    'collapseAllBlocks', 'setupBlockFocus', 'loadSeq', 'bindOriginalValues', 'readJson',
     `${escapeSrc}\n${fnSrc}\nreturn renderEditor;`)(
-    document, async () => schemaResponse, (name) => `/api/collections/${name}`, () => '<input name="title">',
-    () => {}, () => {}, () => {}, () => {}, 1, () => {},
+    document, async () => schemaResponse(), (name) => `/api/collections/${name}`, () => '<input name="title">',
+    () => {}, () => {}, () => {}, () => {}, 1, () => {}, readJson,
   );
   const bodies = [
     'Literal &lt;b&gt; in prose, and &amp; an ampersand entity.\n\n</textarea><script>alert(1)</script>\n\nAfter the close tag.\n',

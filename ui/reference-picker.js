@@ -5,6 +5,7 @@
 
 import { escapeHtml } from './escape-html.js';
 import { collectionApiPath } from './entry-urls.js';
+import { readJson, failureText } from './api-response.js';
 
 let currentCallback = null;
 let currentCollection = null;
@@ -155,7 +156,7 @@ async function loadEntries(excludeIds = []) {
 
   try {
     const response = await fetch(collectionApiPath(currentCollection, '/entries?preview=true'));
-    const data = await response.json();
+    const data = await readJson(response);
 
     loading.classList.add('hidden');
 
@@ -172,7 +173,7 @@ async function loadEntries(excludeIds = []) {
   } catch (error) {
     console.error('Error loading entries:', error);
     loading.classList.add('hidden');
-    list.innerHTML = '<p class="text-red-500">Error loading items</p>';
+    list.innerHTML = `<p class="text-red-500">${escapeHtml(failureText('Error loading items', error))}</p>`;
   }
 }
 

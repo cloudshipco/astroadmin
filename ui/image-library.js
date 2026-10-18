@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml } from './escape-html.js';
+import { readJson, failureText } from './api-response.js';
 
 let currentCallback = null;
 let currentImages = [];
@@ -223,7 +224,7 @@ async function loadImages() {
 
   try {
     const response = await fetch('/api/images');
-    const data = await response.json();
+    const data = await readJson(response);
 
     if (data.success) {
       currentImages = forAstroImage
@@ -236,7 +237,7 @@ async function loadImages() {
     }
   } catch (error) {
     console.error('Error loading images:', error);
-    grid.innerHTML = '<p class="text-red-500">Error loading images</p>';
+    grid.innerHTML = `<p class="text-red-500">${escapeHtml(failureText('Error loading images', error))}</p>`;
   }
 }
 
@@ -317,7 +318,7 @@ async function saveAltText() {
       body: JSON.stringify({ alt: newAlt }),
     });
 
-    const data = await response.json();
+    const data = await readJson(response);
 
     if (data.success) {
       // Update local cache
@@ -363,7 +364,7 @@ async function uploadImage(file) {
       body: formData,
     });
 
-    const data = await response.json();
+    const data = await readJson(response);
 
     if (data.success) {
       // Reload images and auto-select the new one
@@ -391,7 +392,7 @@ async function deleteImage(filename) {
       method: 'DELETE',
     });
 
-    const data = await response.json();
+    const data = await readJson(response);
 
     if (data.success) {
       // If deleted image was selected, clear selection
@@ -440,7 +441,7 @@ export async function uploadNewImage(onUpload, { astroImage = false } = {}) {
         body: formData,
       });
 
-      const data = await response.json();
+      const data = await readJson(response);
 
       if (data.success) {
         onUpload(data.image.url, data.image);

@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Window } from 'happy-dom';
+import { readJson } from '../ui/api-response.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-save-body-')));
@@ -193,12 +194,12 @@ function extract(signature, params, args) {
 }
 
 await check('editor: a markdown entry whose schema has blocks shows its body', async () => {
-  const schemaResponse = { json: async () => ({ collection: { schema: BLOCKS_SCHEMA } }) };
+  const schemaResponse = () => new Response(JSON.stringify({ collection: { schema: BLOCKS_SCHEMA } }), { headers: { 'Content-Type': 'application/json' } });
   const render = extract('async function renderEditor(entryData, ctx)',
     ['document', 'fetch', 'collectionApiPath', 'generateForm', 'installSaver', 'showEntryProblems',
-      'collapseAllBlocks', 'setupBlockFocus', 'loadSeq', 'bindOriginalValues'],
-    [document, async () => schemaResponse, (name) => `/api/collections/${name}`, () => '<input name="title">',
-      () => {}, () => {}, () => {}, () => {}, 1, () => {}]);
+      'collapseAllBlocks', 'setupBlockFocus', 'loadSeq', 'bindOriginalValues', 'readJson'],
+    [document, async () => schemaResponse(), (name) => `/api/collections/${name}`, () => '<input name="title">',
+      () => {}, () => {}, () => {}, () => {}, 1, () => {}, readJson]);
   document.body.innerHTML = '<div id="editorForm"></div>';
   await render({ type: 'content', data: { title: 'About' }, body: BODY }, { collection: 'pages', slug: 'about', locale: null, myLoad: 1 });
   const textarea = document.getElementById('markdown-body');

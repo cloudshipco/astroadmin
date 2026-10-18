@@ -12,6 +12,9 @@
 import assert from 'node:assert';
 import { Window } from 'happy-dom';
 
+/** A real JSON Response: the dashboard reads bodies through readJson (ui/api-response.js). */
+const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
 const window = new Window({ url: 'http://localhost/' });
 globalThis.window = window;
 globalThis.document = window.document;
@@ -58,7 +61,7 @@ function stubFetch(status, body) {
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url, init });
-    return { ok: status >= 200 && status < 300, status, json: async () => body };
+    return jsonResponse(body, status);
   };
   return calls;
 }

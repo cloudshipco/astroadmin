@@ -172,11 +172,18 @@ const defaultConfig = {
     credentials: true,
   },
 
-  // Rate limiting (production only)
+  // Rate limiting (production only; server/utils/rate-limit.js)
   rateLimit: {
     enabled: IS_PROD,
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: IS_DEV ? 1000 : 100, // Loose in dev, strict in prod
+    // Per IP address: anyone not signed in, and every login attempt.
+    max: IS_DEV ? 1000 : 100,
+    // Per signed-in session. Measured in the dashboard: an autosave is 2
+    // requests (the POST, then git status), a page load 7 to 9, idle 0. An
+    // editor saving every 1.5 s for the whole window makes 1,200; a publish
+    // adds about 60 (live-status polls every 5 s for up to 5 minutes). 3,000
+    // is 2.5 times the continuous-autosave figure.
+    sessionMax: 3000,
   },
 
   // Deployment configuration

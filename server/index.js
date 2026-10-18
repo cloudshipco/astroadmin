@@ -6,7 +6,6 @@
 import express from 'express';
 import session from 'express-session';
 import cors from 'cors';
-import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync } from 'fs';
@@ -24,6 +23,7 @@ import { clearSchemaCache, loadSchemas, watchSchemaConfig } from './utils/collec
 import { maybeAutoImport } from './utils/import-files.js';
 import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
 import { requireSameOrigin } from './utils/same-origin.js';
+import { apiRateLimiters } from './utils/rate-limit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,16 +50,6 @@ export async function createServer() {
   // session cookie from a sibling origin on the same site, such as the hosted
   // preview subdomain. See server/utils/same-origin.js.
   app.use('/api', requireSameOrigin(fullConfig.cors.origin));
-
-  // Rate limiting (production only)
-  if (fullConfig.rateLimit.enabled) {
-    const limiter = rateLimit({
-      windowMs: fullConfig.rateLimit.windowMs,
-      max: fullConfig.rateLimit.max,
-      message: 'Too many requests, please try again later.',
-    });
-    app.use('/api/', limiter);
-  }
 
   // Session management with SQLite store (when running under Bun)
   const sessionConfig = {
@@ -90,6 +80,13 @@ export async function createServer() {
   }
 
   app.use(session(sessionConfig));
+
+  // Rate limiting (production only). After the session middleware: a
+  // signed-in session gets its own budget, everyone else and every login
+  // attempt share the strict per-address one (server/utils/rate-limit.js).
+  if (fullConfig.rateLimit.enabled) {
+    app.use('/api/', ...apiRateLimiters(fullConfig.rateLimit));
+  }
 
   // Health check
   app.get('/api/health', (req, res) => {

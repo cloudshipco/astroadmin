@@ -33,6 +33,7 @@ import { escapeHtml } from './escape-html.js';
 import { savePayload } from './save-payload.js';
 import { liveSiteHref } from './live-url.js';
 import { showEntryProblems, renderPublishProblems, localeToOpen, goToField } from './content-problems.js';
+import { readJson, failureText, ApiResponseError } from './api-response.js';
 
 // Reference fields can appear anywhere a field can — including inside the array item
 // modal — so hand their wiring to the shared field layer rather than binding it to
@@ -88,13 +89,18 @@ let entryLocales = []; // Which locales exist for current entry
 async function checkAuth() {
   try {
     const response = await fetch('/api/session');
-    const data = await response.json();
+    const data = await readJson(response);
 
     if (!data.authenticated) {
       window.location.href = '/login';
     }
   } catch (error) {
     console.error('Auth check failed:', error);
+    // A rate limit is not a logged-out session: say so, and stay.
+    if (error instanceof ApiResponseError && error.rateLimited) {
+      showNotification(error.message, 'error');
+      return;
+    }
     window.location.href = '/login';
   }
 }
@@ -103,7 +109,7 @@ async function checkAuth() {
 async function loadConfig() {
   try {
     const response = await fetch('/api/config');
-    const data = await response.json();
+    const data = await readJson(response);
     previewUrl = data.previewUrl;
     publicUrl = data.publicUrl || '';
     gitEnabled = data.gitEnabled !== false;
@@ -134,7 +140,7 @@ async function loadConfig() {
 async function loadPages() {
   try {
     const response = await fetch('/api/collections');
-    const data = await response.json();
+    const data = await readJson(response);
 
     if (data.success) {
       allCollections = data.collections; // Store for new entry creation
@@ -295,7 +301,7 @@ async function loadEntryLocales(collection, slug) {
 
   try {
     const response = await fetch(collectionApiPath(collection, '/entries-with-locales'));
-    const data = await response.json();
+    const data = await readJson(response);
     if (data.success) {
       const entry = data.entries.find(e => e.slug === slug);
       return entry?.locales || [];
@@ -316,7 +322,7 @@ async function createTranslation(collection, slug, ctx) {
 
   try {
     const schemaResponse = await fetch(collectionApiPath(collection));
-    const schemaData = await schemaResponse.json();
+    const schemaData = await readJson(schemaResponse);
     if (ctx && ctx.myLoad !== loadSeq) return; // superseded during the schema fetch
 
     if (!schemaData.success) {
@@ -585,7 +591,7 @@ async function createNewEntry(collection, slug) {
   try {
     // Get schema for this collection
     const schemaResponse = await fetch(collectionApiPath(collection));
-    const schemaData = await schemaResponse.json();
+    const schemaData = await readJson(schemaResponse);
 
     if (!schemaData.success) {
       throw new Error('Failed to load collection schema');
@@ -731,7 +737,7 @@ async function loadEntry(collection, slug, updateUrl = true) {
     }
 
     const response = await fetch(apiUrl);
-    const data = await response.json();
+    const data = await readJson(response);
 
     // A newer load started while this request was in flight — drop this result
     // rather than render entry A's data under entry B's identity.
@@ -969,7 +975,7 @@ async function renderEditor(entryData, ctx) {
   // Get schema for this collection (from the load's collection, not a global
   // that a newer navigation may already have changed).
   const schemaResponse = await fetch(collectionApiPath(ctx.collection));
-  const schemaData = await schemaResponse.json();
+  const schemaData = await readJson(schemaResponse);
   if (ctx.myLoad !== loadSeq) return; // superseded during the schema fetch
 
   // Generate form from schema (title/description will be in an SEO block)
@@ -1170,7 +1176,7 @@ async function loadReferenceFieldPreviews(field) {
 
   try {
     const response = await fetch(collectionApiPath(collectionName, '/entries?preview=true'));
-    const data = await response.json();
+    const data = await readJson(response);
 
     if (data.success && data.entries) {
       // Create a lookup map
@@ -1463,7 +1469,7 @@ function makeSaver(target) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const result = await response.json();
+      const result = await readJson(response);
 
       if (!result.success) {
         if (isTargetCurrent()) {
@@ -1525,7 +1531,9 @@ function makeSaver(target) {
       console.error('Save failed:', error);
       if (isTargetCurrent()) {
         updateSaveStatus('Error');
-        if (!silent) showNotification('Failed to save changes', 'error');
+        // An autosave is silent, but a rate limit is worth knowing about.
+        const rateLimited = error instanceof ApiResponseError && error.rateLimited;
+        if (!silent || rateLimited) showNotification(failureText('Failed to save changes', error), 'error');
       }
     }
   };
@@ -1996,7 +2004,7 @@ document.getElementById('deleteEntryBtn').addEventListener('click', async () => 
     }
 
     const response = await fetch(apiUrl, { method: 'DELETE' });
-    const result = await response.json();
+    const result = await readJson(response);
 
     if (result.success) {
       showNotification(`Deleted "${target.slug}"${localeLabel}`, 'success');
@@ -2031,7 +2039,7 @@ document.getElementById('deleteEntryBtn').addEventListener('click', async () => 
     }
   } catch (error) {
     console.error('Delete failed:', error);
-    showNotification('Failed to delete entry', 'error');
+    showNotification(failureText('Failed to delete entry', error), 'error');
     if (loadSeq === delGen) loadEntry(target.collection, target.slug, false);
   } finally {
     deleteInProgress = false;
@@ -2179,7 +2187,7 @@ function showPublishStatus(message) {
 async function fetchLiveHash(pagePath) {
   try {
     const res = await fetch(`/api/publish/live-status?path=${encodeURIComponent(pagePath)}`);
-    const data = await res.json();
+    const data = await readJson(res);
     if (data.configured && data.reachable && data.hash) return data.hash;
   } catch { /* mid-deploy the site may be briefly unreachable */ }
   return null;
@@ -2225,7 +2233,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
       body: JSON.stringify({ message: message || undefined }),
     });
 
-    const result = await response.json();
+    const result = await readJson(response);
     // A passing publish check also refreshed the click-to-edit scan (ui/doctor-notice.js).
     window.dispatchEvent(new CustomEvent('astroadmin:published'));
 
@@ -2254,7 +2262,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     }
   } catch (error) {
     console.error('Publish failed:', error);
-    showNotification('Failed to publish', 'error');
+    showNotification(failureText('Failed to publish', error), 'error');
   } finally {
     publishBtn.textContent = originalText;
     publishBtn.disabled = false;

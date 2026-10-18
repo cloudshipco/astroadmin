@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml } from './escape-html.js';
+import { readJson, failureText } from './api-response.js';
 
 let panelOpen = false;
 let currentStatus = null;
@@ -127,8 +128,8 @@ async function loadStatus() {
       fetch('/api/git/log?limit=5')
     ]);
 
-    const statusData = await statusRes.json();
-    const logData = await logRes.json();
+    const statusData = await readJson(statusRes);
+    const logData = await readJson(logRes);
 
     if (statusData.success) {
       currentStatus = statusData.status;
@@ -146,7 +147,7 @@ async function loadStatus() {
     }
   } catch (error) {
     console.error('Error loading status:', error);
-    changesList.innerHTML = '<div class="changes-error">Failed to load changes</div>';
+    changesList.innerHTML = `<div class="changes-error">${escapeHtml(failureText('Failed to load changes', error))}</div>`;
   }
 }
 
@@ -201,7 +202,7 @@ function renderCommits(container, commits) {
 async function showDiff(file) {
   try {
     const res = await fetch(`/api/git/diff?file=${encodeURIComponent(file)}`);
-    const data = await res.json();
+    const data = await readJson(res);
 
     if (!data.success) {
       alert('Failed to load diff: ' + data.error);
@@ -247,7 +248,7 @@ async function showDiff(file) {
     });
   } catch (error) {
     console.error('Error loading diff:', error);
-    alert('Failed to load diff');
+    alert(failureText('Failed to load diff', error));
   }
 }
 
@@ -272,7 +273,7 @@ async function revertFile(file) {
       body: JSON.stringify({ file })
     });
 
-    const data = await res.json();
+    const data = await readJson(res);
 
     if (data.success) {
       closeDiffModal();
@@ -285,7 +286,7 @@ async function revertFile(file) {
     }
   } catch (error) {
     console.error('Error reverting file:', error);
-    alert('Failed to revert file');
+    alert(failureText('Failed to revert file', error));
   }
 }
 
@@ -408,7 +409,7 @@ async function performCommit(message) {
       })
     });
 
-    const data = await res.json();
+    const data = await readJson(res);
 
     if (data.success) {
       await loadStatus();
@@ -426,7 +427,7 @@ async function performCommit(message) {
     }
   } catch (error) {
     console.error('Error committing:', error);
-    alert('Failed to commit changes');
+    alert(failureText('Failed to commit changes', error));
   }
 }
 
@@ -535,7 +536,7 @@ function truncate(str, len) {
 export async function getChangesCount() {
   try {
     const res = await fetch('/api/git/status');
-    const data = await res.json();
+    const data = await readJson(res);
 
     if (data.success) {
       return data.status.modified.length +

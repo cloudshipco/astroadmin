@@ -16,6 +16,9 @@ import assert from 'node:assert';
 import { Window } from 'happy-dom';
 import { z } from 'zod';
 
+/** A real JSON Response: the dashboard reads bodies through readJson (ui/api-response.js). */
+const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
 const window = new Window({ url: 'http://localhost/' });
 globalThis.window = window;
 globalThis.document = window.document;
@@ -27,10 +30,7 @@ globalThis.Event = window.Event;
 globalThis.CustomEvent = window.CustomEvent;
 globalThis.MutationObserver = window.MutationObserver;
 globalThis.confirm = () => true;
-globalThis.fetch = async () => ({
-  ok: true,
-  json: async () => ({ success: true, images: [{ url: '/images/a.png', filename: 'a.png', source: 'uploads' }] }),
-});
+globalThis.fetch = async () => jsonResponse({ success: true, images: [{ url: '/images/a.png', filename: 'a.png', source: 'uploads' }] });
 
 const { generateForm, extractFormData, setupFormHandlers, bindOriginalValues } = await import('../ui/form-generator.js');
 

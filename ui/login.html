@@ -8,6 +8,10 @@
   <link rel="stylesheet" href="/styles.css">
   <script type="module">
     import Alpine from 'https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/module.esm.js';
+    import { readJson } from '/api-response.js';
+    // For the inline x-data below: a 429 (the app's, or nginx's login limit)
+    // becomes a readable error rather than a JSON parse failure.
+    window.aaReadJson = readJson;
     window.Alpine = Alpine;
     Alpine.start();
   </script>
@@ -24,7 +28,7 @@
       async checkSession() {
         try {
           const res = await fetch('/api/session');
-          const data = await res.json();
+          const data = await window.aaReadJson(res);
           if (data.authenticated) window.location.href = '/dashboard';
         } catch (e) {}
       },
@@ -43,7 +47,7 @@
             })
           });
 
-          const data = await res.json();
+          const data = await window.aaReadJson(res);
 
           if (data.success) {
             window.location.href = '/dashboard';
@@ -51,7 +55,7 @@
             this.error = data.error || 'Invalid username or password';
           }
         } catch (e) {
-          this.error = 'Failed to connect to server';
+          this.error = e && e.rateLimited ? e.message : 'Failed to connect to server';
         } finally {
           this.loading = false;
         }

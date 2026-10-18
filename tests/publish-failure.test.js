@@ -19,6 +19,7 @@ import { execFileSync } from 'child_process';
 import simpleGit from 'simple-git';
 import { buildResultForEditor, publishFailureMessage } from '../server/api/publish.js';
 import { runProductionBuildIn } from '../server/utils/build.js';
+import { readJson, failureText } from '../ui/api-response.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-publish-failure-')));
@@ -110,7 +111,7 @@ await check('the editor shows the server\'s message, not just the error label', 
     CustomEvent: class { constructor(type) { this.type = type; } },
     fetch: async (url, options) => {
       requests.push({ url, options });
-      return { status: 500, json: async () => body };
+      return new Response(JSON.stringify(body), { status: 500, headers: { 'Content-Type': 'application/json' } });
     },
     showPublishDialog: async () => 'Content update',
     getCurrentPagePath: () => null,
@@ -123,6 +124,8 @@ await check('the editor shows the server\'s message, not just the error label', 
     friendlyPublishMessage: () => 'published',
     showPublishProblems: () => notifications.push({ text: 'problems panel', type: 'panel' }),
     showNotification: (text, type) => notifications.push({ text, type }),
+    readJson,
+    failureText,
     console: { log() {}, warn() {}, error() {} },
   };
   new Function(...Object.keys(stubs), handler)(...Object.values(stubs));

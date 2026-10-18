@@ -13,6 +13,7 @@ import { openGalleryEditor } from './gallery-editor.js';
 import { enhanceMarkdownEditor } from './markdown-toolbar.js';
 
 import { escapeHtml } from './escape-html.js';
+import { readJson } from './api-response.js';
 
 /**
  * Reference fields need to navigate the dashboard to open the entry they point at,
@@ -68,7 +69,7 @@ export async function applyPickedImage(picker, url, image = null) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection: entry.collection, slug: entry.slug, source: image?.source }),
     });
-    const result = await response.json();
+    const result = await readJson(response);
     if (!response.ok || !result.success) throw new Error(result.error || `HTTP ${response.status}`);
     updateImagePicker(picker, result.value, result.previewUrl);
     return true;

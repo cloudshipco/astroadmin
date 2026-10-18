@@ -104,6 +104,10 @@ Run a public instance with `NODE_ENV=production`. That turns on secure
 (HTTPS-only) session cookies, sessions stored in SQLite at
 `SESSION_DB_PATH` (default `/data/sessions.db`) and rate limiting on the API.
 In development, sessions are kept in memory and there is no rate limit.
+The limit is per 15 minutes: 100 requests per address for anyone not signed
+in and for every login attempt, and 3,000 per signed-in session, which
+continuous autosaving stays well under. A refused request gets a JSON 429
+with `Retry-After`, and the editor says when to try again.
 
 Every request that changes something (saves, uploads, git actions, publish,
 login, logout) must come from the editor's own origin; others get a 403.

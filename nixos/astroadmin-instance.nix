@@ -493,7 +493,8 @@ let
       proxyWebsockets = true;     # admin live-reload / ws
     };
     # Brute-force guard on the only credential-accepting endpoint. The app's
-    # own limiter is a shared 100/15min budget across all of /api/*, so a
+    # own limiter gives each address 100 requests per 15 minutes for logins
+    # and everything not signed in (server/utils/rate-limit.js), so a
     # login-specific ceiling belongs here. The zone is declared once in
     # appendHttpConfig below. 429 (not the 503 default) so the client sees a
     # retryable rate-limit, matching the app limiter's semantics.
