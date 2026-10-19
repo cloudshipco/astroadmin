@@ -131,6 +131,21 @@ over-redaction in every version of "show the output with server paths removed or
 Tests are standalone scripts under `tests/`, run individually (there is no test
 runner aggregating them). Most run server-less and need env vars:
 
+- **Run them as `bun tests/<file>.js`, never `bun test <file>`.** `bun test`
+  sets `NODE_ENV=test`, which every spawned `astro build` inherits, so
+  `import.meta.env.DEV` turns true in a build. The 1.8.3 release run failed
+  this way.
+- **Dev-only component behaviour gates on `import.meta.env.MODE ===
+  'development'`, never `DEV`.** `MODE` follows the command (`dev` or
+  `build`); `DEV` follows `NODE_ENV`. Measured on Astro 7.3.8: a build with
+  `NODE_ENV=test` has `DEV=true`, and `astro dev` under `NODE_ENV=production`
+  has `DEV=false`, which broke the hosted preview's image endpoint until the
+  module set `NODE_ENV=development`.
+- **In a fresh checkout or worktree, install with `npm ci`, not `bun install`.**
+  The repo's lockfile is `package-lock.json`. bun resolves a different tree
+  (e.g. a top-level `cookie@0.7.1`) and the site-building tests fail with
+  `Export named 'stringifySetCookie' not found`.
+
 - `bun tests/content-files.test.js` — files store. Self-contained (builds its own
   temp root; deliberately overrides any `ASTROADMIN_PROJECT_ROOT` in the env).
 - `bun tests/content-store.test.js` — SQLite store. Self-pins `ASTROADMIN_CONTENT_STORE=db`;
