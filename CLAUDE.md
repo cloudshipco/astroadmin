@@ -513,6 +513,38 @@ queue, so the old body is never written back.
   plain original (`data-cms-image="dev-original"`), and a malformed `%`-escape gives the
   strict error, not a URIError (~15 s).
 
+- `bun tests/video-upload.test.js` — videos through the real upload route: MP4 and WebM
+  (real ffmpeg fixtures in `tests/fixtures/video`, commands in the test header) install
+  into `public/images` with `kind: 'video'` and are served with Range support; a `.mov`,
+  a QuickTime file renamed `.mp4` (`ftyp` brand `qt  `), an AVIF still and an M4A renamed
+  `.mp4` (ISO base media too: a compatible brand must be an MP4 one and the MAJOR brand
+  must not be a still, audio or QuickTime one; an Apple M4V lists `M4A ` and is accepted), a
+  Matroska `.mkv` renamed `.webm` (EBML DocType), a text file, and a video over 20MB are
+  refused with our message and leave nothing; a picker's `?kind=` takes only its kind;
+  an image keeps its 10MB cap (multer's limit is the video cap, so images are checked
+  after); `?for=image-field`, `entry-value` and `entry-file` refuse videos. Caps and
+  messages live in `ui/media-kinds.js`, shared with the editor. ~1 s.
+- `bun tests/video-picker-browser.test.js` — the video picker in the real dashboard
+  (Playwright, an existing headless shell; `CHROMIUM_PATH` overrides): a `heroVideo` field's
+  library lists only videos and an image field's only images (the modal is SHARED, so a
+  reopening must not show the last kind's items, even before its list arrives), picking
+  and uploading autosave `/images/<file>`, reopening selects the field's current file, an
+  oversized or wrong-kind file is refused before any request (`accept` is only a hint), an
+  untouched entry is never rewritten, a wrong-kind file DROPPED on the library says why,
+  and video thumbnails load only once in view (`preload="none"` until then). The video
+  picker's value box is a visible text input, so the widget never depends on the stored
+  value (a `youtubeVideo` holding an id is still typeable); `.url()` and `image()`
+  fields ending in `video` are not video pickers, nor is anything but a string by name
+  (a union holding an object crashed the entry; form-generator.test.js). A typed clear
+  in a new entry saves null (untouched-structure). ~10 s.
+- `bun tests/cms-video-packed.test.js` — `components/CmsVideo.astro` from the packed
+  tarball in a throwaway Astro 7.3.8 site: markup (muted/loop/playsinline, no `autoplay`
+  attribute, the button), the poster optimised to WebP at `posterWidth`, missing video or
+  poster failing the build; then in Chromium: it plays by itself, the button pauses and
+  resumes it, and under reduced motion it never starts until Play; with `base: '/blog'`
+  local paths are served under it; a value that is not an .mp4/.webm path or URL (a typed
+  bare name, a YouTube page) fails the build by name. ~20 s.
+
 `tests/git-api.test.js` used to be a known red; it passes as of 2026-10-08 (checked at
 `74609bd` in a clean worktree).
 

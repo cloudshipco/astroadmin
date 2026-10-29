@@ -83,6 +83,8 @@ const posts = defineCollection({
     at: z.date(),
     stamp: z.string().datetime({ offset: true }),
     image: z.string().nullable(),
+    heroVideo: z.string().nullable(),
+    backgroundVideo: z.string(),
     cover: image().nullable().optional(),
     accentColor: z.string().nullable(),
     author: reference('team'),
@@ -148,6 +150,8 @@ when: 2026-07-01
 at: 2026-07-01T12:30:00.100+05:00
 stamp: '2026-07-01T12:30:00.100123+05:00'
 image: null
+heroVideo: null
+backgroundVideo: /images/loop.mp4
 cover: null
 accentColor: null
 author:
@@ -397,7 +401,7 @@ try {
     originalText: POST_TEXT,
     titleLine: 1,
     lossyKeys: [
-      'summary', 'label', 'count', 'rank', 'flag', 'featured' /* absent */, 'kind', 'stamp', 'image', 'cover',
+      'summary', 'label', 'count', 'rank', 'flag', 'featured' /* absent */, 'kind', 'stamp', 'image', 'heroVideo', 'cover',
       'accentColor', 'author', 'reviewer', 'coauthors', 'teamIds', 'photos', 'seo', 'meta', 'sponsors',
       'points', 'blocks', 'when',
     ],
@@ -417,6 +421,8 @@ try {
     has('input[type="datetime-local"][name="at"]', 'datetime');
     has('input[type="datetime-local"][name="stamp"]', 'datetime string');
     has('.image-picker[data-field="image"] input[name="image"]', 'image');
+    has('.image-picker[data-video][data-field="heroVideo"] input[name="heroVideo"]', 'video (nullable)');
+    has('.image-picker[data-video][data-field="backgroundVideo"] input[name="backgroundVideo"]', 'video');
     has('.image-picker[data-field="cover"][data-astro-image]', 'image()');
     has('input.color-picker-text[name="accentColor"]', 'colour');
     has('.reference-field[data-reference-single][data-field="author"]', 'single reference');
@@ -470,14 +476,14 @@ try {
     assert.equal(result.validation?.status, 'valid', JSON.stringify(result.validation));
   });
 
-  await check('a cleared nullable control saves null (number, string, image, colour, single reference)', () => {
-    const data = { ...clone(post.data), count: 4, label: 'x', image: '/images/a.png', accentColor: '#fff', reviewer: 'grace' };
+  await check('a cleared nullable control saves null (number, string, image, video, colour, single reference)', () => {
+    const data = { ...clone(post.data), count: 4, label: 'x', image: '/images/a.png', heroVideo: '/images/a.mp4', accentColor: '#fff', reviewer: 'grace' };
     const form = renderEntry(postSchema, data);
-    for (const name of ['count', 'label', 'image', 'accentColor']) form.querySelector(`[name="${name}"]`).value = '';
+    for (const name of ['count', 'label', 'image', 'heroVideo', 'accentColor']) form.querySelector(`[name="${name}"]`).value = '';
     setReferenceInputValue(form.querySelector('[data-reference-value][name="reviewer"]'), '');
     const payload = extractFormData(form, postSchema);
     form.remove();
-    for (const name of ['count', 'label', 'image', 'accentColor', 'reviewer']) assert.strictEqual(payload[name], null, name);
+    for (const name of ['count', 'label', 'image', 'heroVideo', 'accentColor', 'reviewer']) assert.strictEqual(payload[name], null, name);
   });
 
   await check('an edited reference saves the chosen id; its untouched neighbours keep their shape', () => {

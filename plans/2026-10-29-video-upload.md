@@ -1,6 +1,20 @@
 # Video upload: a video field, a picker and a CmsVideo component
 
-Status: PLANNED (2026-10-29). Not started.
+Status: BUILT on main (2026-10-29), unreleased; next: a minor release.
+
+Proxy check (2026-10-29): there is no standing test instance on the hosted
+box, so the upload was driven through a local nginx 1.27 in Docker with the
+editor vhost's `client_max_body_size 25m` and default request buffering, in
+front of a throwaway admin. 19MB and exactly 20MB installed; 20MB+1 and 24MB
+got our "Videos must be under 20MB" refusal; 26MB got nginx's own 413 page,
+which the editor never reaches because it refuses files over 20MB before
+sending. Not yet repeated on the box itself.
+
+Three review rounds (9, 10, 10 findings). Deferred: CmsVideo copies
+CmsImage's dev-only `existsInPublic` (with its `process.cwd()` root) instead
+of sharing it; a library video opened directly in a tab is blocked by the
+`/images` CSP (no `media-src`); CmsImage itself ignores `base` for the files
+it leaves unoptimised (SVG, external, dev original).
 
 ## The request
 
@@ -56,6 +70,15 @@ file, and AstroAdmin has no way to upload one.
   before building.
 - Keep the shared filename/param guard: extend the allowed list rather than
   adding a second guard.
+
+**Decision (2026-10-29): videos live in `public/images` beside uploaded
+images**, with the same metadata file. Library listing, delete, rename and the
+`:filename` guard work unchanged; each listed file carries `kind: 'image' |
+'video'` and each picker filters on it. Videos are public files only: an
+`image()` upload (`?for=image-field`), the `entry-value` route and the
+`entry-file` preview refuse them, since Astro's `image()` cannot import a
+video. A QuickTime file renamed `.mp4` (`ftyp` brand `qt  `) is refused by the
+sniff.
 
 ### 2. A video field in the editor
 

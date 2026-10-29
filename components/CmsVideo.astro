@@ -1,0 +1,204 @@
+---
+/**
+ * CmsVideo: renders a CMS video string (a `/images/...` .mp4 or .webm path
+ * that a video field stores) as a muted, looping background video, the
+ * counterpart to CmsImage. See docs/videos.md.
+ *
+ * - `<video muted loop playsinline preload="metadata">`: `muted` and
+ *   `playsinline` are both needed for iOS to play it inline without a tap.
+ * - Playback is started by the component's script, not the `autoplay`
+ *   attribute, so that under `prefers-reduced-motion: reduce` nothing moves:
+ *   the poster shows alone until the visitor presses Play. Without script the
+ *   poster shows and the browser's own controls stay off.
+ * - A pause/play button is part of the component (WCAG 2.2.2: motion longer
+ *   than five seconds must be pausable), hidden until the script wires it.
+ *   Its styles are `:where()` rules (zero specificity), so any site rule
+ *   overrides them; restyle it through `.cms-video-toggle`.
+ * - `poster`: a `/images/...` raster path is optimised through Astro's image
+ *   pipeline (one WebP at up to `posterWidth`), as CmsImage optimises its
+ *   images; an external URL or SVG is used as is.
+ * - A local `/images/` video or poster with no file under public/ fails the
+ *   build with an error naming the content value. In `astro dev` (MODE, as
+ *   CmsImage) a file uploaded after start is used as the original.
+ * - A local path (`/images/...`) is served under the site's `base`
+ *   (`/blog/images/...` with `base: '/blog'`); the stored value is not.
+ * - `class` and every other attribute (data-aa-field...) go on the <video>;
+ *   `wrapperClass` goes on the wrapping element, which positions the button.
+ * - Empty `src`: nothing. A value that is not a root-relative path or http(s)
+ *   URL of an .mp4/.webm file (a bare name, a YouTube page) fails the build.
+ *
+ * A site that sets a Content-Security-Policy needs `media-src 'self'` (or
+ * wherever its videos are served from).
+ */
+import { getImage } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+import { existsSync, statSync } from 'node:fs';
+import { join, normalize, sep } from 'node:path';
+
+interface Props {
+  src?: string;
+  /** A still shown before the video plays, and instead of it under reduced motion. */
+  poster?: string;
+  /** Largest width the poster is generated at. */
+  posterWidth?: number;
+  /** What the video shows, for the button's label: "Pause <label>". */
+  label?: string;
+  /** Class on the wrapping element (the button is positioned inside it). */
+  wrapperClass?: string;
+  [attr: string]: unknown;
+}
+
+const {
+  src = '',
+  poster = '',
+  posterWidth = 1920,
+  label = 'background video',
+  wrapperClass,
+  ...rest
+} = Astro.props;
+
+const IS_ASTRO_DEV = import.meta.env.MODE === 'development';
+
+// Lazy globs, read only for their keys (a video is never imported; a poster
+// only when it is rendered). Vite resolves them against the site's root.
+const PUBLIC_VIDEOS = import.meta.glob('/public/images/**/*.{mp4,webm}', { caseSensitive: false });
+const PUBLIC_IMAGES = import.meta.glob<{ default: ImageMetadata }>(
+  '/public/images/**/*.{jpg,jpeg,png,webp,avif}',
+  { caseSensitive: false },
+);
+const OPTIMISABLE = /\.(jpe?g|png|webp|avif)$/i;
+
+/** True when `sitePath` (e.g. /images/x.mp4) is a file under public/. Dev only. */
+function existsInPublic(sitePath: string): boolean {
+  const publicDir = join(process.cwd(), 'public');
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(sitePath);
+  } catch {
+    return false;
+  }
+  const file = normalize(join(publicDir, decoded));
+  if (!file.startsWith(publicDir + sep)) return false;
+  return existsSync(file) && statSync(file).isFile();
+}
+
+function missing(kind: string, value: string): Error {
+  return new Error(
+    `CmsVideo: ${kind} "${value}" names a local file, but no file matches /public${value}. ` +
+      `Check the content value (paths are exact and case-sensitive).`,
+  );
+}
+
+// What the editor's video box can hold besides a library path: a typed bare
+// name (served relative to each page, so broken on nested ones) or a link to
+// a page (a YouTube watch URL) that no <video> can play. Either is a content
+// error the build reports, as it does a missing file.
+const VIDEO_FILE = /^(?:\/(?!\/)|https?:\/\/)[^?#]*\.(?:mp4|webm)(?:[?#]|$)/i;
+if (src && !VIDEO_FILE.test(src)) {
+  throw new Error(
+    `CmsVideo: "${src}" is not an MP4 or WebM file. ` +
+      `Choose a video from the library (a /images/... path) or give the URL of an .mp4 or .webm file.`,
+  );
+}
+
+if (src.startsWith('/images/') && !PUBLIC_VIDEOS[`/public${src}`] && !(IS_ASTRO_DEV && existsInPublic(src))) {
+  throw missing('video', src);
+}
+
+let posterUrl = poster;
+if (poster.startsWith('/images/') && OPTIMISABLE.test(poster)) {
+  const load = PUBLIC_IMAGES[`/public${poster}`];
+  if (load) {
+    const image = (await load()).default;
+    const still = await getImage({ src: image, width: Math.min(image.width, posterWidth), format: 'webp', quality: 80 });
+    posterUrl = still.src; // Astro's own URL, base included
+  } else if (!(IS_ASTRO_DEV && existsInPublic(poster))) {
+    throw missing('poster', poster);
+  } else {
+    posterUrl = withBase(poster);
+  }
+} else {
+  posterUrl = withBase(poster);
+}
+
+/** A root-relative path under the site's `base`; anything else as it is. */
+function withBase(sitePath: string): string {
+  if (!sitePath.startsWith('/') || sitePath.startsWith('//')) return sitePath;
+  return import.meta.env.BASE_URL.replace(/\/$/, '') + sitePath;
+}
+
+const srcPath = src.split(/[?#]/)[0];
+const type = /\.webm$/i.test(srcPath) ? 'video/webm' : /\.mp4$/i.test(srcPath) ? 'video/mp4' : undefined;
+---
+
+{
+  src && (
+    <div class:list={['cms-video', wrapperClass]} data-cms-video>
+      <video muted loop playsinline preload="metadata" poster={posterUrl || undefined} {...rest}>
+        <source src={withBase(src)} type={type} />
+      </video>
+      <button type="button" class="cms-video-toggle" data-cms-video-toggle data-label={label} aria-label={`Play ${label}`} hidden>
+        <span aria-hidden="true" data-cms-video-icon>▶</span>
+      </button>
+    </div>
+  )
+}
+
+<style is:global>
+  :where(.cms-video) {
+    position: relative;
+  }
+  :where(.cms-video > video) {
+    display: block;
+    width: 100%;
+  }
+  :where(.cms-video-toggle) {
+    position: absolute;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    border: 0;
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.6);
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
+  }
+  :where(.cms-video-toggle:focus-visible) {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+  }
+</style>
+
+<script>
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  for (const wrapper of document.querySelectorAll<HTMLElement>('[data-cms-video]')) {
+    const video = wrapper.querySelector('video');
+    const toggle = wrapper.querySelector<HTMLButtonElement>('[data-cms-video-toggle]');
+    const icon = toggle?.querySelector('[data-cms-video-icon]');
+    if (!video || !toggle || !icon) continue;
+    const label = toggle.dataset.label || 'video';
+
+    const show = () => {
+      const playing = !video.paused;
+      toggle.setAttribute('aria-label', `${playing ? 'Pause' : 'Play'} ${label}`);
+      icon.textContent = playing ? '❚❚' : '▶';
+    };
+    video.addEventListener('play', show);
+    video.addEventListener('pause', show);
+    toggle.addEventListener('click', () => {
+      if (video.paused) video.play().catch(show);
+      else video.pause();
+      // `paused` changes at once; its event only on a later task.
+      show();
+    });
+    toggle.hidden = false;
+    show();
+
+    // A refused play (iOS Low Power Mode, a browser's autoplay policy) leaves
+    // the poster and a Play button.
+    if (!reducedMotion.matches) video.play().catch(show);
+  }
+</script>

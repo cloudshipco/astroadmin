@@ -80,6 +80,7 @@ const pages = defineCollection({
     points: z.array(z.number().nullable()),
     flags: z.array(z.boolean().nullable()),
     image: z.string().nullable(),
+    heroVideo: z.string().nullable().optional(),
     reviewer: reference('team').nullable(),
   }),
 });
@@ -425,6 +426,19 @@ try {
     form.remove();
     assert.strictEqual(payload.image, null, 'image');
     assert.strictEqual(payload.reviewer, null, 'reviewer');
+  });
+
+  await check('a new entry: a video chosen then cleared by typing in its box saves null', () => {
+    const form = renderEntry(pageSchema, {}, { bound: false });
+    const picker = form.querySelector('.image-picker[data-video][data-field="heroVideo"]');
+    updateImagePicker(picker, '/images/a.mp4');
+    const box = picker.querySelector('input[name="heroVideo"]');
+    assert.equal(box.type, 'text', 'the video value box is typed into');
+    box.value = '';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    const payload = extractFormData(form, pageSchema);
+    form.remove();
+    assert.strictEqual(payload.heroVideo, null);
   });
 
   await check('control: a new entry\'s image never touched stays empty (no clear, no null)', () => {

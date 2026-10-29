@@ -8,7 +8,7 @@
  * widget added here shows up on all three.
  */
 
-import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, setWidgetValue, CLEARED_ATTRIBUTE } from './field-widgets.js';
+import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, isPreviewableVideo, setWidgetValue, CLEARED_ATTRIBUTE } from './field-widgets.js';
 
 import { escapeHtml } from './escape-html.js';
 
@@ -406,6 +406,14 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
         </select>
       </div>
     `;
+  }
+
+  // A video before a colour: `backgroundVideo` would otherwise be a colour
+  // field (any name containing `background`). Only a name ENDING in video is
+  // one, so `videoImage` and `videoSrc` stay images. No alt input: a
+  // background video is decorative, and anything it says belongs in text.
+  if (isVideoField(name, schema)) {
+    return generateImageField(name, schema, value, fullPath, id, '', true, pickerVariant, nullableAttributes, 'video');
   }
 
   // Check if this is an image field
@@ -954,6 +962,24 @@ export function isAstroImageField(schema) {
 }
 
 /**
+ * Whether a string field gets the video picker: `format`/`widget: 'video'`,
+ * or a name ending in `video` (`heroVideo`, `backgroundVideo`). By name alone,
+ * a `.url()` field stays a URL input, and an Astro image() or a field marked
+ * as an image stays an image picker (a video cannot be an image() value).
+ * The picker's value box is a visible text input, so a field that holds a
+ * link or an embed id (`youtubeVideo`) can still be typed into whatever the
+ * widget; the choice never depends on the stored value.
+ */
+export function isVideoField(name, schema) {
+  if (schema.format === 'video' || schema.widget === 'video') return true;
+  // A string only: a union or z.any() (no `type`) may hold an object.
+  if (schema.type !== 'string') return false;
+  if (schema.format === 'uri' || schema.format === 'url') return false;
+  if (schema.format === 'image' || schema.widget === 'image' || isAstroImageField(schema)) return false;
+  return name.toLowerCase().endsWith('video');
+}
+
+/**
  * Get friendly label and help text for known image fields
  */
 function getImageFieldInfo(name) {
@@ -969,19 +995,31 @@ function getImageFieldInfo(name) {
   return {};
 }
 
+/** What differs between an image picker and a video picker. */
+const PICKER_KINDS = {
+  image: { icon: '📷', noun: 'image' },
+  video: { icon: '🎬', noun: 'video' },
+};
+
 /**
- * Generate an image picker field
+ * Generate an image (or video) picker field
  * @param {string} [variant] - Size variant: 'thumb', 'compact', or '' for full size.
  *   The picker owns its own sizes; a container never reaches in to override them.
+ * @param {'image'|'video'} [kind] - a video picker is marked `data-video`
+ *   (field-widgets.js opens a library of videos) and previewed by a muted
+ *   <video> showing its first frame
  */
-function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false, variant = '', nullableAttributes = '') {
+function generateImageField(name, schema, value, fullPath, id, altValue = '', hideBuiltinAlt = false, variant = '', nullableAttributes = '', kind = 'image') {
+  const { icon, noun } = PICKER_KINDS[kind];
   // Only show the image preview for a value that is actually an image path.
   // A non-path value (e.g. a `placeholder:banner` marker a site uses to render
   // an outline) would otherwise load as a broken <img>. The value is still kept
   // in the hidden input, so it round-trips on save; the field just shows the
   // clean "No image selected" state instead of a broken thumbnail.
-  const trimmed = (value || '').trim();
-  const isRealImage = isPreviewableImage(trimmed);
+  // displayText: a value of an unexpected type (an object in a field marked
+  // as an image or a video) renders as the empty state instead of throwing.
+  const trimmed = displayText(value).trim();
+  const isRealImage = kind === 'video' ? isPreviewableVideo(trimmed) : isPreviewableImage(trimmed);
   const previewClass = isRealImage ? '' : 'hidden';
   const placeholderClass = isRealImage ? 'hidden' : '';
 
@@ -1010,14 +1048,16 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
     <div class="form-group">
       <label for="${id}" class="form-label">${label} ${schema.required ? '<span class="text-red-500">*</span>' : ''}</label>
       ${helpHtml}
-      <div class="image-picker${variant ? ` image-picker--${variant}` : ''}" data-field="${fullPath}"${isAstroImageField(schema) ? ' data-astro-image' : ''}>
+      <div class="image-picker${variant ? ` image-picker--${variant}` : ''}" data-field="${fullPath}"${kind === 'video' ? ' data-video' : ''}${isAstroImageField(schema) ? ' data-astro-image' : ''}>
         <div class="image-picker-preview ${previewClass}" data-preview>
-          <img src="${escapeHtml(previewSrc)}" alt="Preview" class="image-picker-img" data-preview-img>
-          <button type="button" class="image-picker-clear" data-clear title="Clear image">&times;</button>
+          ${kind === 'video'
+            ? `<video src="${escapeHtml(previewSrc)}" class="image-picker-img" muted playsinline preload="metadata" data-preview-img></video>`
+            : `<img src="${escapeHtml(previewSrc)}" alt="Preview" class="image-picker-img" data-preview-img>`}
+          <button type="button" class="image-picker-clear" data-clear title="Clear ${noun}">&times;</button>
         </div>
         <div class="image-picker-placeholder ${placeholderClass}" data-placeholder>
-          <span class="image-picker-icon">📷</span>
-          <span>No image selected</span>
+          <span class="image-picker-icon">${icon}</span>
+          <span>No ${noun} selected</span>
         </div>
         <div class="image-picker-actions">
           <button type="button" class="btn btn-sm btn-secondary image-picker-browse" data-browse>
@@ -1028,11 +1068,12 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
           </button>
         </div>
         <input
-          type="hidden"
+          type="${kind === 'video' ? 'text' : 'hidden'}"
           name="${fullPath}"
           id="${id}"
           value="${escapeHtml(value || '')}"
-          class="image-picker-input"
+          class="image-picker-input${kind === 'video' ? ' form-input image-picker-url' : ''}"
+          ${kind === 'video' ? 'placeholder="Choose a video, or paste a path or link"' : ''}
           ${nullableAttributes}
           ${schema.required ? 'required' : ''}
         >${altFieldHtml}

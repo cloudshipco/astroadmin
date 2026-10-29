@@ -647,6 +647,105 @@ check('a date value with a time of day gets a datetime input, so editing it keep
   assert.ok(/type="date"/.test(midnight) && /value="2026-01-15"/.test(midnight), midnight);
 });
 
+// --- Video fields ------------------------------------------------------------
+// A video field is the image picker marked data-video, previewed by a <video>.
+// `backgroundVideo` contains `background`, which makes a colour field, so the
+// video check must come first; `heroVideo` must not become an image picker.
+
+/** The picker div for a field, or undefined. */
+function pickerFor(html, fullPath) {
+  return html.match(new RegExp(`<div class="image-picker[^"]*" data-field="${fullPath.replace(/[[\].]/g, '\\$&')}"[^>]*>`))?.[0];
+}
+
+check('heroVideo, backgroundVideo and format: video get the video picker, in the main form', () => {
+  const html = generateForm(
+    { type: 'object', properties: { heroVideo: { type: 'string' }, backgroundVideo: { type: 'string' }, loop: { type: 'string', format: 'video' } } },
+    { heroVideo: '/images/hero.mp4', backgroundVideo: '', loop: '/images/loop.webm' },
+  );
+  for (const name of ['heroVideo', 'backgroundVideo', 'loop']) {
+    const picker = pickerFor(html, name);
+    assert.ok(picker && /data-video/.test(picker), `${name}: ${picker || 'no picker'}`);
+  }
+  assert.ok(!/color-picker/.test(html), 'backgroundVideo must not be a colour field');
+  assert.ok(/<video src="\/images\/hero\.mp4"[^>]*muted[^>]*data-preview-img/.test(html), 'previewed by a muted <video>');
+  assert.ok(!/<img[^>]*data-preview-img/.test(html), 'no <img> preview for a video');
+  assert.ok(!/data-alt-input/.test(html), 'a video has no built-in alt input');
+  assert.ok(/<input\s+type="text"\s+name="heroVideo"[^>]*value="\/images\/hero\.mp4"/s.test(html), 'value in a visible text input');
+});
+
+check('a video field in a block body and in the item modal is the video picker too', () => {
+  const blockHtml = generateForm(
+    { type: 'object', properties: { blocks: { type: 'array', blockTypes: {
+      hero: { type: 'object', properties: { type: { type: 'string', const: 'hero' }, heroVideo: { type: 'string' } } },
+    } } } },
+    { blocks: [{ type: 'hero', heroVideo: '/images/a.mp4' }] },
+  );
+  assert.ok(/data-video/.test(pickerFor(blockHtml, 'blocks[0].heroVideo') || ''), 'block body');
+
+  const modalHtml = generateFields({ title: { type: 'string' }, video: { type: 'string' } }, { title: 'A', video: '/images/b.webm' }, { idPrefix: 'modal-', pickerVariant: 'compact' });
+  assert.ok(/data-video/.test(pickerFor(modalHtml, 'video') || ''), 'item modal');
+});
+
+check('names that only contain "video" stay what they were (control)', () => {
+  const html = generateForm(
+    { type: 'object', properties: { heroVideoImage: { type: 'string' }, heroImage: { type: 'string' }, background: { type: 'string' }, videoCount: { type: 'number' } } },
+    {},
+  );
+  assert.ok(!/data-video/.test(html), html);
+  assert.ok(pickerFor(html, 'heroVideoImage') && pickerFor(html, 'heroImage'), 'the image pickers are still image pickers');
+  assert.ok(/type="number"[^>]*name="videoCount"|name="videoCount"[^>]*type="number"/s.test(html), 'a number stays a number');
+});
+
+check('a field that holds a link or an id can always be typed into, whatever its name', () => {
+  const html = generateForm(
+    { type: 'object', properties: {
+      video: { type: 'string', format: 'uri' },
+      introVideo: { type: 'string', format: 'url' },
+      youtubeVideo: { type: 'string' },
+      vimeoVideo: { type: 'string' },
+      eventPoster: { type: 'string' },
+    } },
+    // vimeoVideo is empty, as in a new entry: the widget never depends on the value.
+    { youtubeVideo: 'dQw4w9WgXcQ', video: 'https://vimeo.com/1' },
+  );
+  for (const name of ['video', 'introVideo', 'youtubeVideo', 'vimeoVideo', 'eventPoster']) {
+    assert.ok(new RegExp(`name="${name}"`).test(html), `${name} has a control`);
+    assert.ok(!new RegExp(`type="hidden"\\s+name="${name}"`).test(html), `${name} is typed into, not a hidden input`);
+  }
+  assert.ok(!pickerFor(html, 'video') && !pickerFor(html, 'introVideo'), 'a .url() field stays a URL input');
+  // youtubeVideo is the picker by name; its id is in a visible box and no
+  // <video> tries to play it.
+  assert.ok(/<input\s+type="text"\s+name="youtubeVideo"[^>]*value="dQw4w9WgXcQ"/s.test(html), 'the id is editable');
+  assert.ok(/class="image-picker-preview hidden"[^>]*>\s*<video src=""/.test(html), 'no preview for an id');
+});
+
+check('an image() or image-marked field whose name ends in video stays an image picker', () => {
+  const html = generateForm(
+    { type: 'object', properties: {
+      posterVideo: { type: 'string', 'x-astroadmin-image': true },
+      stillVideo: { type: 'string', widget: 'image' },
+    } },
+    {},
+  );
+  for (const name of ['posterVideo', 'stillVideo']) {
+    const picker = pickerFor(html, name);
+    assert.ok(picker && !/data-video/.test(picker), `${name}: ${picker}`);
+  }
+  assert.ok(/data-astro-image/.test(pickerFor(html, 'posterVideo')));
+});
+
+check('a union or untyped field ending in video is not a picker, and a picker given an object renders', () => {
+  const union = { anyOf: [{ type: 'string' }, { type: 'object', properties: { provider: { type: 'string' }, id: { type: 'string' } } }] };
+  const html = generateForm({ type: 'object', properties: { heroVideo: union, introVideo: {} } }, { heroVideo: { provider: 'youtube', id: 'abc' } });
+  assert.ok(!/data-video/.test(html), 'by name, only a string is a video picker');
+  // format: 'video' (or 'image') opts in whatever is stored: still no throw.
+  for (const format of ['video', 'image']) {
+    const marked = generateForm({ type: 'object', properties: { clip: { type: 'string', format } } }, { clip: { provider: 'youtube' } });
+    assert.ok(/class="image-picker[ "]/.test(marked), `${format}: renders its picker`);
+    if (format === 'video') assert.ok(/class="image-picker-preview hidden"/.test(marked), 'no <video> of an object');
+  }
+});
+
 console.log('\n========================================\n');
 console.log(`📊 ${passed} checks passed, ${failures.length} failed.`);
 if (failures.length > 0) process.exit(1);

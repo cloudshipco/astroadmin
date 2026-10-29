@@ -8,7 +8,8 @@
     ".": "./server/index.js",
     "./integration": "./integration/index.js",
     "./loader": "./loader/index.js",
-    "./components/CmsImage.astro": "./components/CmsImage.astro"
+    "./components/CmsImage.astro": "./components/CmsImage.astro",
+    "./components/CmsVideo.astro": "./components/CmsVideo.astro"
   },
   "bin": {
     "astroadmin": "./bin/cli.js"
@@ -91,6 +92,7 @@
     "integration/index.js",
     "integration/preview-route.astro",
     "components/CmsImage.astro",
+    "components/CmsVideo.astro",
     "README.md",
     "LICENSE"
   ]

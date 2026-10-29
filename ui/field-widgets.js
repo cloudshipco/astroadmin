@@ -14,6 +14,7 @@ import { enhanceMarkdownEditor } from './markdown-toolbar.js';
 
 import { escapeHtml } from './escape-html.js';
 import { readJson } from './api-response.js';
+import { mediaKindOf } from './media-kinds.js';
 
 /**
  * Reference fields need to navigate the dashboard to open the entry they point at,
@@ -96,9 +97,30 @@ export function setupFieldWidgets(container, onChange) {
 }
 
 /**
- * Image picker + gallery buttons
+ * What a picker holds: a video picker (generateImageField's `kind: 'video'`)
+ * is an image picker marked `data-video`, sharing its buttons and preview; its
+ * value box is a visible text input.
+ * @returns {'image'|'video'}
+ */
+function pickerKind(picker) {
+  return picker.hasAttribute('data-video') ? 'video' : 'image';
+}
+
+/**
+ * Image and video pickers + gallery buttons
  */
 function setupImagePickers(container, onChange) {
+  // A video picker's value can be typed (a path, or a link the site embeds):
+  // its preview follows, shown only for a library video, and emptying the box
+  // is a clear like the × button's (a text input's defaultValue does not
+  // follow a value the library set, so nothing else would record it).
+  container.addEventListener('input', (e) => {
+    const picker = e.target.closest('.image-picker[data-video]');
+    if (!picker || !e.target.matches('.image-picker-input')) return;
+    e.target.toggleAttribute(CLEARED_ATTRIBUTE, e.target.value === '');
+    showPickerPreview(picker, e.target.value);
+  });
+
   container.addEventListener('click', (e) => {
     // Browse library
     if (e.target.closest('[data-browse]')) {
@@ -108,7 +130,7 @@ function setupImagePickers(container, onChange) {
       const astroImage = picker.hasAttribute('data-astro-image');
       openImageLibrary(async (url, image) => {
         if ((await applyPickedImage(picker, url, image)) && onChange) onChange();
-      }, hiddenInput.value, { astroImage });
+      }, hiddenInput.value, { astroImage, kind: pickerKind(picker) });
       return;
     }
 
@@ -119,7 +141,7 @@ function setupImagePickers(container, onChange) {
       const astroImage = picker.hasAttribute('data-astro-image');
       uploadNewImage(async (url, image) => {
         if ((await applyPickedImage(picker, url, image)) && onChange) onChange();
-      }, { astroImage });
+      }, { astroImage, kind: pickerKind(picker) });
       return;
     }
 
@@ -194,6 +216,19 @@ export function resolveImageUrl(imagePath) {
 }
 
 /**
+ * Whether a video picker's value previews as a <video>: a root-relative path
+ * (`/images/x.mp4`) to an MP4 or WebM file. A link (a YouTube page,
+ * `//host/x`), an embed id, a bare name or an entry-relative `./x.mp4` is not
+ * a file the admin serves (videos are never entry-relative), so it shows the
+ * empty state rather than a broken player.
+ */
+export function isPreviewableVideo(value) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return false;
+  return mediaKindOf(trimmed.split(/[?#]/)[0]) === 'video';
+}
+
+/**
  * Whether a stored value should show a thumbnail rather than the "No image
  * selected" state. Anything non-empty is a real image EXCEPT a `placeholder:`
  * marker (which a site renders as an outline) — resolveImageUrl already turns a
@@ -241,15 +276,19 @@ export function setWidgetValue(input, value) {
  * server gave for this exact file (applyPickedImage) wins over that guess.
  */
 export function updateImagePicker(picker, url, previewUrl = '') {
-  const hiddenInput = picker.querySelector('.image-picker-input');
+  setWidgetValue(picker.querySelector('.image-picker-input'), url);
+  showPickerPreview(picker, url, previewUrl);
+}
+
+/** Show a picker's preview for this value, or its empty state. */
+function showPickerPreview(picker, url, previewUrl = '') {
   const altInput = picker.querySelector('[data-alt-input]');
   const preview = picker.querySelector('[data-preview]');
   const previewImg = picker.querySelector('[data-preview-img]');
   const placeholder = picker.querySelector('[data-placeholder]');
+  const previewable = pickerKind(picker) === 'video' ? isPreviewableVideo(url) : isPreviewableImage(url);
 
-  setWidgetValue(hiddenInput, url);
-
-  if (isPreviewableImage(url)) {
+  if (previewable) {
     previewImg.src = previewUrl || resolveImageUrl(url);
     preview.classList.remove('hidden');
     placeholder.classList.add('hidden');

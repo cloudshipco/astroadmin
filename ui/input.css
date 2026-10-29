@@ -887,7 +887,8 @@
     @apply border-primary-500 ring-2 ring-primary-200;
   }
 
-  .image-library-item img {
+  .image-library-item img,
+  .image-library-item video {
     @apply w-full h-full object-cover;
   }
 

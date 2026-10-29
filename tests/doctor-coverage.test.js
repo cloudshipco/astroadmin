@@ -159,6 +159,15 @@ await check('text fields leave out ids, links, images, alt, metadata, enums and 
   ]);
 });
 
+await check('a video field is not visitor text, whatever it holds (a path, a bare name, an embed id)', () => {
+  const video = { type: 'string' };
+  const { textFields } = describeEntryFields({
+    data: { title: 'Home', heroVideo: 'clip.mp4', youtubeVideo: 'dQw4w9WgXcQ', loop: 'a-loop' },
+    schema: { type: 'object', properties: { title: { type: 'string' }, heroVideo: video, youtubeVideo: video, loop: { type: 'string', format: 'video' } } },
+  });
+  assert.deepEqual(textFields, ['title']);
+});
+
 await check('a Markdown body counts as the "body" field', () => {
   const { textFields } = describeEntryFields({ data: { title: 'A post' }, body: 'Some words.\n' });
   assert.deepEqual(textFields, ['title', 'body']);

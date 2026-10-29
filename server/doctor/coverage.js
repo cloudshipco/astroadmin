@@ -20,7 +20,7 @@
  * not support; see findEntryCards) are left out of coverage and names.
  */
 
-import { generateForm, isImageField } from '../../ui/form-generator.js';
+import { generateForm, isImageField, isVideoField } from '../../ui/form-generator.js';
 import { comparableText, comparableWords } from './html-scan.js';
 
 // How much of a value's start is looked for in the page (in comparable
@@ -88,7 +88,7 @@ function isTextField(key, schemaNode, value) {
   if (schemaNode && (schemaNode.enum || schemaNode.const !== undefined)) return false;
   if (schemaNode && NON_TEXT_FORMATS.has(schemaNode.format)) return false;
   if (NON_TEXT_EXACT.has(key.toLowerCase()) || NON_TEXT_SUFFIX.test(key) || METADATA_NAME.test(key)) return false;
-  if (isImageField(key, schemaNode || {})) return false;
+  if (isImageField(key, schemaNode || {}) || isVideoField(key, schemaNode || {})) return false;
   if (LINK_LIKE_VALUE.test(value.trim())) return false;
   return true;
 }

@@ -21,6 +21,17 @@ import {
   sanitizePath,
   toPosixPath,
 } from '../utils/glob-files.js';
+import {
+  IMAGE_EXTENSIONS,
+  IMAGE_TOO_LARGE,
+  MAX_IMAGE_SIZE,
+  MAX_VIDEO_SIZE,
+  VIDEO_EXTENSIONS,
+  VIDEO_TOO_LARGE,
+  WRONG_KIND,
+  mediaKindOf,
+  mediaRefusal,
+} from '../../ui/media-kinds.js';
 
 const router = express.Router();
 
@@ -120,9 +131,65 @@ async function assertImageInside(directory, filePath) {
   }
 }
 
-// Allowed image extensions
-const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif'];
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+// The library holds images and short videos, both in the same folders, with
+// the extensions, caps and refusals shared with the editor (ui/media-kinds.js).
+// Videos are public files only (never an Astro image() value).
+const ALLOWED_EXTENSIONS = [...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS];
+
+// ISO base media brands (`ftyp` major or compatible) of an MP4 that browsers
+// play. Many other files are ISO base media too: HEIC and AVIF stills, M4A
+// audio, QuickTime. Those are told apart by their MAJOR brand, which says what
+// the file is: an M4A lists `isom` and `mp42` among its compatible brands, and
+// an Apple M4V video lists `M4A `, so only the major brand can refuse a file.
+const MP4_BRANDS = new Set(['isom', 'iso2', 'iso3', 'iso4', 'iso5', 'iso6', 'mp41', 'mp42', 'avc1', 'dash', 'M4V ']);
+const NOT_MP4_VIDEO_BRANDS = new Set(['qt  ', 'mif1', 'msf1', 'heic', 'heix', 'hevc', 'avif', 'avis', 'M4A ', 'M4B ', 'M4P ', 'F4A ']);
+
+/** The brands of an `ftyp` box at the start of `header`, or null. */
+function ftypBrands(header, bytesRead) {
+  if (bytesRead < 16 || header.toString('latin1', 4, 8) !== 'ftyp') return null;
+  const boxEnd = Math.min(header.readUInt32BE(0), bytesRead);
+  const brands = [header.toString('latin1', 8, 12)];
+  for (let offset = 16; offset + 4 <= boxEnd; offset += 4) brands.push(header.toString('latin1', offset, offset + 4));
+  return brands;
+}
+
+/**
+ * The EBML header's DocType ('webm', 'matroska'), or null. The header is the
+ * EBML magic, then its own elements; DocType is element 0x4282 with a one-byte
+ * size (ample for the names in use).
+ */
+function ebmlDocType(header, bytesRead) {
+  if (bytesRead < 4 || !header.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return null;
+  for (let offset = 4; offset + 3 <= bytesRead; offset++) {
+    if (header[offset] !== 0x42 || header[offset + 1] !== 0x82 || !(header[offset + 2] & 0x80)) continue;
+    const length = header[offset + 2] & 0x7f;
+    return header.toString('latin1', offset + 3, Math.min(offset + 3 + length, bytesRead));
+  }
+  return null;
+}
+
+/**
+ * Whether a file's first bytes are the container its video extension claims:
+ * an `ftyp` box with an MP4 brand (and no still-image, audio or QuickTime
+ * brand) for .mp4, an EBML header whose DocType is `webm` for .webm. A renamed
+ * file of anything else is refused, a Matroska .mkv renamed .webm included.
+ * @param {string} filePath
+ * @param {string} extension - '.mp4' or '.webm'
+ */
+async function isVideoContainer(filePath, extension) {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const header = Buffer.alloc(128);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (extension === '.webm') return ebmlDocType(header, bytesRead) === 'webm';
+    const brands = ftypBrands(header, bytesRead);
+    return Boolean(brands)
+      && !NOT_MP4_VIDEO_BRANDS.has(brands[0])
+      && brands.some((brand) => MP4_BRANDS.has(brand));
+  } finally {
+    await handle.close();
+  }
+}
 
 /**
  * The :filename route parameter as an image filename, or null. It must be a
@@ -213,30 +280,63 @@ const storage = multer.diskStorage({
   },
 });
 
-// File filter to only allow images
+// Only images and videos; a video never goes into an image() field, and a
+// picker's upload (`?kind=image|video`) takes only its own kind. The kind is
+// kept on the request so a size refusal can name the right limit.
 const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
 
-  if (ALLOWED_EXTENSIONS.includes(ext)) {
-    cb(null, true);
-  } else {
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
     const refusal = new Error(`File type not allowed. Allowed types: ${ALLOWED_EXTENSIONS.join(', ')}`);
     refusal.status = 400;
-    cb(refusal, false);
+    return cb(refusal, false);
   }
+  req.uploadKind = mediaKindOf(file.originalname);
+  const expectedKind = expectedUploadKind(req);
+  if (expectedKind && req.uploadKind !== expectedKind) {
+    const refusal = new Error(WRONG_KIND[expectedKind]);
+    refusal.status = 400;
+    return cb(refusal, false);
+  }
+  cb(null, true);
 };
 
 function isImageFieldUpload(req) {
   return req.query?.for === 'image-field';
 }
 
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: {
-    fileSize: MAX_FILE_SIZE,
-  },
-});
+/**
+ * The kind a picker's upload must be (an image() field's, or `?kind=`), or
+ * null when the caller did not say.
+ * @returns {'image'|'video'|null}
+ */
+function expectedUploadKind(req) {
+  if (isImageFieldUpload(req)) return 'image';
+  const kind = req.query?.kind;
+  return kind === 'image' || kind === 'video' ? kind : null;
+}
+
+// multer has one size limit per instance, so an upload that must be an image
+// is streamed under the image cap and stopped there; one that may be either
+// gets the video cap, and an image in it is held to its own cap afterwards
+// (refuseUpload).
+const imageUpload = multer({ storage, fileFilter, limits: { fileSize: MAX_IMAGE_SIZE } }).single('image');
+const mediaUpload = multer({ storage, fileFilter, limits: { fileSize: MAX_VIDEO_SIZE } }).single('image');
+function upload(req, res, next) {
+  return (expectedUploadKind(req) === 'image' ? imageUpload : mediaUpload)(req, res, next);
+}
+
+/**
+ * Why a complete upload is refused, or null: an image over the image cap, or
+ * a "video" whose bytes are not the container its extension names.
+ * @returns {Promise<string|null>}
+ */
+async function refuseUpload(file) {
+  const refusal = mediaRefusal(file.filename, file.size);
+  if (refusal || mediaKindOf(file.filename) !== 'video') return refusal;
+  const isVideo = await isVideoContainer(file.path, path.extname(file.filename).toLowerCase());
+  return isVideo ? null : 'That file is not an MP4 or WebM video';
+}
 
 /**
  * GET /api/images
@@ -276,6 +376,7 @@ router.get('/', async (req, res) => {
               sizeFormatted: formatFileSize(stats.size),
               modified: stats.mtime.toISOString(),
               extension: ext.slice(1),
+              kind: mediaKindOf(file),
               source, // 'source': src/assets/images, 'uploads': public/images, 'assets': image() files
               alt: imageMeta.alt || '',
               focalPoint: imageMeta.focalPoint || null,
@@ -335,7 +436,7 @@ async function installUpload(uploadedPath, directory, filename) {
   });
 }
 
-router.post('/', upload.single('image'), async (req, res, next) => {
+router.post('/', upload, async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -343,6 +444,9 @@ router.post('/', upload.single('image'), async (req, res, next) => {
         error: 'No image file provided',
       });
     }
+
+    const refusal = await refuseUpload(req.file);
+    if (refusal) return res.status(400).json({ success: false, error: refusal });
 
     try {
       await installUpload(req.file.path, await uploadDirectory(req), req.file.filename);
@@ -363,6 +467,7 @@ router.post('/', upload.single('image'), async (req, res, next) => {
         filename: req.file.filename,
         url: imageUrl,
         source: imageField ? 'assets' : 'uploads',
+        kind: mediaKindOf(req.file.filename),
         size: req.file.size,
         sizeFormatted: formatFileSize(req.file.size),
         mimetype: req.file.mimetype,
@@ -482,7 +587,7 @@ router.get('/entry-file', async (req, res) => {
       return res.status(400).json({ success: false, error: 'collection, slug and path are required' });
     }
     if (!/^\.\.?\//.test(value) || /[\u0000-\u001f\\]/.test(value)
-      || !ALLOWED_EXTENSIONS.includes(path.extname(value).toLowerCase())) {
+      || !IMAGE_EXTENSIONS.includes(path.extname(value).toLowerCase())) {
       return res.status(400).json({ success: false, error: 'Not an entry-relative image path' });
     }
     const directory = await entryDirectory(collection, slug);
@@ -531,6 +636,9 @@ router.post('/:filename/entry-value', express.json(), async (req, res) => {
   try {
     const filename = imageFilenameFromParam(req.params.filename);
     if (!filename) return invalidFilename(res);
+    if (mediaKindOf(filename) === 'video') {
+      return res.status(400).json({ success: false, error: WRONG_KIND.image });
+    }
     const { collection, slug, source } = req.body || {};
     if (typeof collection !== 'string' || typeof slug !== 'string') {
       return res.status(400).json({ success: false, error: 'collection and slug are required' });
@@ -702,7 +810,7 @@ router.use((err, req, res, next) => {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
-        error: `File too large. Maximum size is ${MAX_FILE_SIZE / (1024 * 1024)}MB`,
+        error: req.uploadKind === 'video' ? VIDEO_TOO_LARGE : IMAGE_TOO_LARGE,
       });
     }
     // multer's own fixed text ("Unexpected field"), naming no path.

@@ -91,6 +91,7 @@ export const collections = { posts, testimonials };
 | `publishDate: z.date()` | Date picker (see [dates](#dates)) |
 | `cover: image()` | Image picker that saves a path Astro can import (see [images](#images)) |
 | `heroImage: z.string()` | Image picker that saves a `/images/...` path |
+| `heroVideo: z.string()` | Video picker that saves a `/images/...` path (see [videos](#videos)) |
 | `tags: z.array(z.string())` | A list of text inputs that can be added to, removed and reordered |
 | `links: z.array(z.object({...}))` | A list of cards; each opens a form for the item |
 | `seo: z.object({...})` | The nested fields, grouped under a heading |
@@ -184,6 +185,16 @@ the picker's own alt box is hidden and the declared field is shown instead.
 
 A list of objects that each have a `src` (`z.array(z.object({ src, alt }))`)
 is edited as a gallery.
+
+### Videos
+
+A `z.string()` field whose name ends with `video` (`heroVideo`,
+`backgroundVideo`), or that sets `format` or `widget` to `'video'`, gets a
+video picker, unless it is a `.url()` field or an `image()`. Its value stays
+in a visible text box, so a link or an embed id can still be typed. It works like the image picker but offers only the library's
+videos: MP4 or WebM, at most 20MB each. The file goes to `public/images/` and
+the field is saved as `/images/<file>.mp4`. Render it with
+[`CmsVideo`](./videos.md).
 
 ### References
 
