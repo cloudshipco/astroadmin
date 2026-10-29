@@ -197,7 +197,7 @@ server.close();
 const window = new Window({ url: 'http://localhost/' });
 const document = window.document;
 const dashboardSrc = fs.readFileSync(path.join(repoRoot, 'ui/dashboard.js'), 'utf8');
-const escapeSrc = fs.readFileSync(path.join(repoRoot, 'ui/escape-html.js'), 'utf8').replace('export function', 'function');
+const escapeSrc = fs.readFileSync(path.join(repoRoot, 'ui/escape-html.js'), 'utf8').replace(/export function/g, 'function');
 const BLOCKS_SCHEMA = {
   type: 'object',
   properties: {
