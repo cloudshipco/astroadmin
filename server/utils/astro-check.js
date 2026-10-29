@@ -68,17 +68,71 @@ async function exists(target) {
 }
 
 /**
+ * The directories under `dir` (itself included) that hold an .astro file
+ * somewhere below them. Symbolic links are not followed.
+ * @param {string} dir
+ * @param {Set<string>} [found]
+ * @returns {Set<string>}
+ */
+function directoriesHoldingAstroFiles(dir, found = new Set()) {
+  let holds = false;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (directoriesHoldingAstroFiles(entryPath, found).has(entryPath)) holds = true;
+    } else if (entry.isFile() && entry.name.endsWith('.astro')) {
+      holds = true;
+    }
+  }
+  if (holds) found.add(dir);
+  return found;
+}
+
+/**
+ * Link `source` at `target`, except along the way to an .astro file, which is
+ * copied into real directories (whose other entries are links again).
+ * @param {string} source
+ * @param {string} target
+ * @param {Set<string>} astroDirectories - from directoriesHoldingAstroFiles
+ */
+function linkOrMirror(source, target, astroDirectories) {
+  if (astroDirectories.has(source)) {
+    fs.mkdirSync(target);
+    for (const entry of fs.readdirSync(source)) {
+      linkOrMirror(path.join(source, entry), path.join(target, entry), astroDirectories);
+    }
+  } else if (source.endsWith('.astro') && fs.lstatSync(source).isFile()) {
+    fs.copyFileSync(source, target);
+  } else {
+    fs.symlinkSync(source, target);
+  }
+}
+
+/**
  * Give one worktree directory a node_modules that links each package to the
  * live checkout's, so nothing is installed. Dot-directories other than .bin are
  * left out: Astro writes its data store to node_modules/.astro (its default
  * cacheDir) and Vite its caches beside it, and sharing them would let the check
  * overwrite the running preview's.
+ *
+ * A package's .astro files are COPIED (with real directories down to them, and
+ * links for everything else in those directories), so they sit inside the
+ * worktree (#89). Vite names a linked module by its real path, which would be
+ * in the live checkout, outside the check's root. Astro keys a component's
+ * compile metadata by that name but looks it up for the component's <style>
+ * and <script> sub-modules through normalizeFilename, which joins an absolute
+ * path sharing no directory with the root onto the root as if it were
+ * root-relative; the lookup misses and the build fails ("No cached compile
+ * metadata found"). Only .astro files are copied: the JavaScript stays linked,
+ * so every package still has one instance.
  */
 async function linkNodeModules(sourceDir, targetDir) {
   fs.mkdirSync(targetDir, { recursive: true });
   for (const entry of fs.readdirSync(sourceDir)) {
     if (entry.startsWith('.') && entry !== '.bin') continue;
-    fs.symlinkSync(path.join(sourceDir, entry), path.join(targetDir, entry));
+    const source = path.join(sourceDir, entry);
+    const astroDirectories = fs.lstatSync(source).isDirectory() ? directoriesHoldingAstroFiles(source) : new Set();
+    linkOrMirror(source, path.join(targetDir, entry), astroDirectories);
   }
 }
 

@@ -383,14 +383,18 @@ await check("the check runs in its own worktree, at HEAD, without the site's Ast
   const fullConfig = await getConfig();
   const result = await checkHeadWithAstro({
     ...fullConfig,
-    build: { check: 'pwd; git rev-parse HEAD; test -L node_modules/astro && test ! -e node_modules/.astro && echo isolated' },
+    // Packages are links; one that ships .astro files is a real directory
+    // holding copies of them and links for the rest (#89).
+    build: { check: 'pwd; git rev-parse HEAD; test -L node_modules/zod && test -L node_modules/astro/dist'
+      + ' && test -f node_modules/astro/components/Code.astro && test ! -L node_modules/astro/components/Code.astro'
+      + ' && test ! -e node_modules/.astro && echo isolated' },
   });
   assert.equal(result.success, true, result.rawOutput);
   const [workingDirectory, checkedCommit, marker] = result.rawOutput.trim().split('\n');
   assert.equal(path.basename(workingDirectory), 'worktree', 'ran in the check worktree');
   assert.ok(workingDirectory.includes('astroadmin-check-'), workingDirectory);
   assert.equal(checkedCommit, localHead());
-  assert.equal(marker, 'isolated', 'packages linked, cache directory left out');
+  assert.equal(marker, 'isolated', 'packages linked, .astro files copied, cache directory left out');
   assert.equal(git(projectRoot, 'worktree', 'list').split('\n').length, 1, 'the worktree was removed');
 });
 
