@@ -81,6 +81,39 @@ check('an entry with no data keeps a frontmatter-like body as body', () => {
   assert.equal(back.body, FRONTMATTER_LIKE_BODY, out);
 });
 
+// --- An empty body ----------------------------------------------------------------
+
+// A frontmatter-only file ends at its closing fence. Its stored body is '',
+// which used to be written as a newline, so every save added a blank line
+// after the `---` (#71).
+
+check('a bodyless file stays bodyless when a key changes', () => {
+  const original = '---\ntitle: A\n---\n';
+  assert.equal(readBack(original).body, '', 'control: the stored body is empty');
+  const out = serializeMarkdown(readBack(original).body, { title: 'B' }, original);
+  assert.equal(out, '---\ntitle: B\n---\n');
+});
+
+check('a bodyless file whose frontmatter the candidate cannot follow stays bodyless', () => {
+  const original = '---\ntitle: A\nlist: {a: 1}\n---\n';
+  const out = serializeMarkdown('', { title: 'B', list: { a: 1 } }, original);
+  assert.deepEqual(readBack(out), { data: { title: 'B', list: { a: 1 } }, body: '' }, out);
+  assert.ok(out.endsWith('---\n'), `no blank line after the fence:\n${JSON.stringify(out)}`);
+});
+
+check('a bodyless CRLF file and a new bodyless entry end at the fence', () => {
+  assert.equal(serializeMarkdown('', { title: 'B' }, '---\r\ntitle: A\r\n---\r\n'), '---\ntitle: B\n---\n');
+  assert.equal(serializeMarkdown('', { title: 'B' }, null), '---\ntitle: B\n---\n');
+});
+
+check('a file with one blank line after the fence keeps it', () => {
+  const original = '---\ntitle: A\n---\n\n';
+  assert.equal(readBack(original).body, '\n', 'control: the stored body is one newline');
+  const out = serializeMarkdown(readBack(original).body, { title: 'B' }, original);
+  assert.equal(out, '---\ntitle: B\n---\n\n');
+  assert.equal(readBack(out).body, '\n');
+});
+
 // --- Keep-chomp scalars --------------------------------------------------------
 
 // gray-matter ends the frontmatter at "\n---", so this value is 'line\n\n'. The

@@ -458,9 +458,13 @@ export function serializeMarkdown(body, data, originalRaw = null, { dateFields =
   return firstFaithful([...preservingDocuments(original, originalRaw, intended, text), ...plainDocuments(intended, text)], intended, text);
 }
 
-/** `---`, the YAML, `---`, then the body verbatim. */
+/**
+ * `---`, the YAML, `---`, then the body verbatim. An empty body is nothing
+ * after the closing fence: a frontmatter-only file reads back as body '', and
+ * writing that as a newline added a blank line on every save (#71).
+ */
 function frontmatterDocument(yamlText, body) {
-  return `---\n${yamlText}\n---\n${withNewline(body)}`;
+  return `---\n${yamlText}\n---\n${body === '' ? '' : withNewline(body)}`;
 }
 
 /**

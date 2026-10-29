@@ -501,8 +501,11 @@ runner aggregating them). Most run server-less and need env vars:
   and every fallback, parses back to the data and body it was given: a body that starts
   with a `---` block stays body (`matter.stringify` reparsed it, so a CRLF file moved its
   keys into the frontmatter, and invalid YAML there threw), a final keep-chomp (`|+`)
-  scalar keeps its trailing newlines, and an own `__proto__` key survives `orderLike`,
-  `restoreDates` and both serialisers. A markdown entry no rendering can hold is refused.
+  scalar keeps its trailing newlines, an empty body is nothing after the closing fence
+  (a frontmatter-only file gained a blank line per save, #71; one blank line already
+  there is kept), and an own `__proto__` key survives `orderLike`, `restoreDates` and
+  both serialisers. A markdown entry no rendering can hold is refused. `save-body`
+  checks the bodyless case byte for byte over HTTP.
 
 `extract-fields` also pins nullable fields: a null stays null until edited, clearing a
 nullable control saves null (a nullable boolean is a Not set / Yes / No select), and an

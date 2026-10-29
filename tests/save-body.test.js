@@ -152,6 +152,28 @@ await check('API: a no-body save racing a body save never restores the old body'
   assert.deepEqual(lost, [], `the new body was overwritten with the old one in ${lost.length} of ${attempts} attempts`);
 });
 
+// A frontmatter-only entry ends at its closing fence; a one-field edit must
+// change that field's line and nothing else, whether the editor sends its
+// (empty) body textarea or no body at all (#71).
+const BODYLESS = '---\ntitle: Settings\nblocks: []\n---\n';
+const BLANK_LINE_AFTER = '---\ntitle: Settings\nblocks: []\n---\n\n';
+for (const [label, payloadBody] of [['the empty body the editor shows', { body: '' }], ['no body key', {}]]) {
+  await check(`API: a bodyless entry saved with ${label} gains no blank line`, async () => {
+    fs.writeFileSync(pagePath, BODYLESS);
+    const response = await save('PUT', { data: { title: 'Edited', blocks: [] }, ...payloadBody, type: 'content' });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(fs.readFileSync(pagePath, 'utf8'), BODYLESS.replace('title: Settings', 'title: Edited'));
+  });
+}
+for (const [label, payloadBody] of [['its body as the editor shows it', { body: '\n' }], ['no body key', {}]]) {
+  await check(`API: an entry with a blank line after the fence keeps it, saved with ${label}`, async () => {
+    fs.writeFileSync(pagePath, BLANK_LINE_AFTER);
+    const response = await save('PUT', { data: { title: 'Edited', blocks: [] }, ...payloadBody, type: 'content' });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(fs.readFileSync(pagePath, 'utf8'), BLANK_LINE_AFTER.replace('title: Settings', 'title: Edited'));
+  });
+}
+
 const { writeContent: storeWrite } = await import('../server/utils/content.js');
 
 await check('store: keepStoredBody is resolved inside the write queue, in either order', async () => {
