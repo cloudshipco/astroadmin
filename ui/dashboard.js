@@ -2042,26 +2042,36 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 });
 
 /**
- * Turn the publish API result into a friendly, non-technical message for CMS
- * users. The server's own message ("committed and pushed") is accurate for the
- * API but too technical for the editor. A synchronous deploy adapter (e.g.
- * rsync) is live immediately; a git push to a build-on-push host (Netlify,
- * Cloudflare Pages, etc.) takes a short while to build, so we say so.
+ * Turn a publish API result that cannot be checked against the live page into
+ * a friendly, non-technical message for CMS users, with the toast type that
+ * matches what we know. The server's own message ("committed and pushed") is
+ * accurate for the API but too technical for the editor. A synchronous deploy
+ * adapter (e.g. rsync) is live immediately. A git push to a build-on-push host
+ * (Netlify, Cloudflare Pages, etc.) is only SENT: the host's build can fail,
+ * and with no page to poll (no publicUrl, or no page for this entry) nothing
+ * shows it went live, so it is a warning, like pollUntilLive giving up (#54).
+ * @returns {{text: string, type: 'success'|'warning'|'info'}}
  */
 function friendlyPublishMessage(result) {
   // A deploy adapter uploads the built site directly, so it's live right away.
   if (result.deploy) {
-    return '✅ Published! Your changes are now live on your site.';
+    return { text: '✅ Published! Your changes are now live on your site.', type: 'success' };
   }
-  // Git push → the host builds and deploys, which takes a minute or two.
   if (result.pushed) {
-    return '✅ Published! Your changes will appear on your live site in a minute or two.';
+    return {
+      text: "Your changes have been sent to your site, but we can't confirm from here when they are live. "
+        + "Check your site in a few minutes. If they don't appear, check your hosting dashboard.",
+      type: 'warning',
+    };
   }
   // Committed, but this site has nowhere to push to: nothing went live.
   if (result.committed) {
-    return 'Your changes are committed. This site has no remote set up, so nothing was sent to the live site.';
+    return {
+      text: 'Your changes are committed. This site has no remote set up, so nothing was sent to the live site.',
+      type: 'info',
+    };
   }
-  return 'Nothing new to publish — your work is already saved.';
+  return { text: 'Nothing new to publish — your work is already saved.', type: 'info' };
 }
 
 /**
@@ -2193,6 +2203,34 @@ async function pollUntilLive(pagePath, preHash, status, liveUrl) {
   );
 }
 
+/**
+ * Tell the editor what a successful publish response means for the live site.
+ * `preHash` is the live page's hash taken before publishing (null when there
+ * is no publicUrl or no page for this entry, so nothing can be polled).
+ */
+function showPublishOutcome(result, { pagePath, preHash, liveUrl }) {
+  // Only a push or a deploy reaches the live site; a local commit does not.
+  const didPublish = result.pushed || result.deploy;
+
+  if (didPublish && result.deploy) {
+    // Synchronous deploy adapter — already live.
+    showPublishStatus('').update('✅ Published! Your changes are now live on your site.',
+      { type: 'success', link: liveUrl, autoDismissMs: 8000 });
+  } else if (didPublish && preHash) {
+    // Build-on-push host — poll until the change appears on the live site.
+    const status = showPublishStatus('✅ Published! Waiting for your changes to go live…');
+    pollUntilLive(pagePath, preHash, status, liveUrl);
+  } else {
+    // No live-check available: say what we know, and no more.
+    const { text, type } = friendlyPublishMessage(result);
+    if (type === 'warning') {
+      showPublishStatus('').update(text, { type, link: liveUrl, autoDismissMs: 30000 });
+    } else {
+      showNotification(text, type);
+    }
+  }
+}
+
 // Publish changes
 document.getElementById('publishBtn').addEventListener('click', async () => {
   const message = await showPublishDialog();
@@ -2224,21 +2262,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     if (result.success) {
       document.querySelector('.publish-problems-panel')?.remove();
       updateChangesBadge();
-      // Only a push or a deploy reaches the live site; a local commit does not.
-      const didPublish = result.pushed || result.deploy;
-
-      if (didPublish && result.deploy) {
-        // Synchronous deploy adapter — already live.
-        showPublishStatus('').update('✅ Published! Your changes are now live on your site.',
-          { type: 'success', link: liveUrl, autoDismissMs: 8000 });
-      } else if (didPublish && preHash) {
-        // Build-on-push host — poll until the change appears on the live site.
-        const status = showPublishStatus('✅ Published! Waiting for your changes to go live…');
-        pollUntilLive(pagePath, preHash, status, liveUrl);
-      } else {
-        // No live-check available — fall back to the plain friendly message.
-        showNotification(friendlyPublishMessage(result), 'success');
-      }
+      showPublishOutcome(result, { pagePath, preHash, liveUrl });
     } else if (result.check) {
       showPublishProblems(result);
     } else {

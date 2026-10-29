@@ -8,6 +8,10 @@
  * get the same green "✅ Published" success as a confirmed one. The changes
  * were pushed, but nothing showed they were live.
  *
+ * The same holds when there is nothing to poll (no publicUrl, or no page for
+ * this entry): a push is sent but unverified, a warning, never "✅ Published!
+ * ... in a minute or two" (showPublishOutcome / friendlyPublishMessage).
+ *
  * The real functions are extracted from ui/dashboard.js (it boots on import)
  * and run in a happy-dom document with fetch stubbed and a fake clock.
  *
@@ -133,6 +137,70 @@ await check('a live site that stays unreachable is not reported as a success eit
   const result = await runPoll(() => null);
   assert.ok(result.polls > 10, `polling ran until it gave up (${result.polls} polls)`);
   assert.doesNotMatch(result.text, /✅|live shortly|now live/i, result.text);
+  assert.notEqual(result.type, SUCCESS, result.type);
+});
+
+/**
+ * Run the dashboard's showPublishOutcome for a successful publish response,
+ * with nothing to poll unless `preHash` is given. Returns the toast's text,
+ * type and link (the last toast on the page).
+ */
+async function runOutcome(result, { preHash = null, liveUrl = null } = {}) {
+  const window = new Window();
+  const document = window.document;
+  const timers = [];
+  const stubs = {
+    document,
+    fetch: async () => { throw new Error('no request expected'); },
+    readJson,
+    setTimeout: (callback, ms) => { timers.push({ callback, ms }); return timers.length; },
+    Date,
+  };
+  const outcomeSource = ['showNotification', 'showPublishStatus', 'fetchLiveHash', 'pollUntilLive',
+    'friendlyPublishMessage', 'showPublishOutcome'].map(extractFunction).join('\n\n');
+  const api = new Function(...Object.keys(stubs), `${outcomeSource}\nreturn { showPublishOutcome };`)(...Object.values(stubs));
+  api.showPublishOutcome(result, { pagePath: preHash ? '/about' : null, preHash, liveUrl });
+  const toasts = document.querySelectorAll('.notification');
+  assert.ok(toasts.length > 0, 'a toast is on the page');
+  const toast = toasts[toasts.length - 1];
+  const link = toast.querySelector('a');
+  return {
+    text: toast.textContent,
+    type: [...toast.classList].find((name) => name.startsWith('notification-')),
+    link: link ? link.getAttribute('href') : null,
+    dismissAfterMs: timers.length ? Math.max(...timers.map((timer) => timer.ms)) : null,
+  };
+}
+
+await check('positive control: a deploy adapter publish is reported live, in green', async () => {
+  const result = await runOutcome({ success: true, committed: true, pushed: false, deploy: { success: true } });
+  assert.match(result.text, /now live/, result.text);
+  assert.equal(result.type, SUCCESS, result.type);
+});
+
+await check('positive control: a push with a page to poll starts polling (the info toast)', async () => {
+  const result = await runOutcome({ success: true, committed: true, pushed: true, deploy: null },
+    { preHash: 'before', liveUrl: 'https://example.com/about' });
+  assert.match(result.text, /Waiting for your changes to go live/, result.text);
+});
+
+for (const [label, liveUrl] of [['no publicUrl', null], ['a publicUrl but no page for this entry', 'https://example.com/']]) {
+  await check(`a push with nothing to poll (${label}) is sent but unverified, not a success`, async () => {
+    const result = await runOutcome({ success: true, committed: true, pushed: true, deploy: null }, { liveUrl });
+    assert.doesNotMatch(result.text, /✅/, `no success tick: ${result.text}`);
+    assert.doesNotMatch(result.text, /will appear|now live|live shortly/i, `no claim that it goes live: ${result.text}`);
+    assert.match(result.text, /sent/i, result.text);
+    assert.match(result.text, /can.t confirm|cannot confirm|couldn.t confirm|could not confirm/i, result.text);
+    assert.match(result.text, /hosting/i, result.text);
+    assert.equal(result.type, 'notification-warning', result.type);
+    assert.equal(result.link, liveUrl, 'the editor can open the live site when there is one');
+    assert.ok(result.dismissAfterMs >= 15000, `long enough to read (${result.dismissAfterMs} ms)`);
+  });
+}
+
+await check('a commit with nowhere to push is not shown as a success', async () => {
+  const result = await runOutcome({ success: true, committed: true, pushed: false, deploy: null });
+  assert.match(result.text, /no remote/i, result.text);
   assert.notEqual(result.type, SUCCESS, result.type);
 });
 
