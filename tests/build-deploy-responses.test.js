@@ -6,12 +6,12 @@
  * successful deploy returned the adapter's whole result, whose rsync output
  * names the destination ("created directory /srv/..."). Now:
  *
- * - POST /api/build/production and GET /api/build/status describe the build
- *   ("the site's production build"), never the configured command;
- * - a build's response has no output; a failed one carries a fixed error
- *   and the problems its output names as error codes (build-failure.js);
+ * - there are no /api/build routes (#3: nothing in the editor called them,
+ *   and they were a second production build runner beside Publish's);
  * - POST /api/publish with a deploy adapter returns chosen deploy status
- *   fields (success, adapter, dryRun), the adapter's output going to the log.
+ *   fields (success, adapter, dryRun), the adapter's output going to the log;
+ * - a failed build in Publish carries the problems its output names as error
+ *   codes (build-failure.js), never the output.
  *
  * Real server (createServer), real shell build script, real local rsync.
  * Each check has a positive control: the path really was in the command or
@@ -48,7 +48,7 @@ fs.chmodSync(buildScript, 0o755);
 const configuredCommand = `'${buildScript.replace(/'/g, `'\\''`)}'`;
 fs.writeFileSync(path.join(projectRoot, 'astroadmin.config.js'), `export default ${JSON.stringify({
   git: { enabled: false },
-  build: { production: configuredCommand, staging: configuredCommand },
+  build: { production: configuredCommand },
   deploy: { adapter: 'rsync', rsync: { path: `${destination}/` } },
 })};\n`);
 
@@ -116,36 +116,18 @@ try {
 
   report('\n🧪 build and deploy responses: status, not output\n' + '='.repeat(40));
 
-  await check('GET /api/build/status: a description of each build, not the configured command', async () => {
-    const response = await request('/api/build/status');
-    assert.equal(response.status, 200, response.body);
-    assert.equal(response.json.production.command, "the site's production build");
-    assert.equal(response.json.staging.command, "the site's staging build");
-    assertNoServerPath('the status', response.body);
-  });
-
-  await check('POST /api/build/production that succeeds: no output, no command', async () => {
+  await check('there are no /api/build routes: each answers as an unknown route does, and builds nothing', async () => {
+    const unknownGet = await fetch(`${base}/api/no-such-route`, { headers: { cookie } });
+    const unknownPost = await fetch(`${base}/api/no-such-route`, { method: 'POST', headers: { cookie, Origin: base } });
+    assert.equal(unknownGet.status, 404, 'control: an unknown route is a 404');
+    assert.equal(unknownPost.status, 404, 'control: an unknown route is a 404');
     const mark = serverLog.length;
-    const response = await request('/api/build/production', { method: 'POST' });
-    assert.equal(response.json.success, true, response.body);
-    assertLogged(mark, `building in ${projectRoot}`, buildScript);
-    assert.deepEqual(Object.keys(response.json).sort(), ['command', 'duration', 'message', 'success']);
-    assertNoServerPath('the build response', response.body);
-  });
-
-  await check('POST /api/build/production that fails: a fixed error and the code sentence', async () => {
-    fs.writeFileSync(failFlag, '');
-    const mark = serverLog.length;
-    try {
-      const response = await request('/api/build/production', { method: 'POST' });
-      assert.equal(response.json.success, false, response.body);
-      assertLogged(mark, `building in ${projectRoot}`, '/srv/client-b/x.png');
-      assert.equal(response.json.error, 'The build failed; its output is in the server log.');
-      assert.deepEqual(response.json.problems, [{ code: 'ImageNotFound', message: 'An image an entry uses was not found in the site.' }]);
-      assertNoServerPath('the failed build response', response.body);
-    } finally {
-      fs.rmSync(failFlag);
+    for (const [method, urlPath] of [['GET', '/api/build/status'], ['POST', '/api/build/production'], ['POST', '/api/build/staging']]) {
+      const response = await fetch(base + urlPath, { method, headers: { cookie, Origin: base, 'Content-Type': 'application/json' } });
+      await response.arrayBuffer();
+      assert.equal(response.status, 404, `${method} ${urlPath}`);
     }
+    assert.ok(!serverLog.slice(mark).join('\n').includes('building in'), 'a build ran');
   });
 
   await check('POST /api/publish with an rsync deploy: chosen status fields, the destination only in the log', async () => {

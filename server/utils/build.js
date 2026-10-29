@@ -1,7 +1,9 @@
 /**
- * Build utility
- * Runs the configured Astro production build (under Bun, so the content-layer
- * loader's `bun:sqlite` import works). Shared by the publish pipeline.
+ * The production build Publish runs before a deploy adapter uploads `dist/`:
+ * `build.production` if configured, else the site's own installed astro
+ * (server/utils/astro-bin.js). The only production build runner; the
+ * publish check's build is a separate one, in a worktree
+ * (server/utils/astro-check.js).
  */
 
 import { exec } from 'child_process';

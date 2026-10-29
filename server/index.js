@@ -14,7 +14,6 @@ import { getConfig, IS_DEV, IS_PROD, logConfig } from './config.js';
 // Import API routers
 import collectionsRouter from './api/collections.js';
 import contentRouter from './api/content.js';
-import buildRouter from './api/build.js';
 import gitRouter from './api/git.js';
 import publishRouter from './api/publish.js';
 import imagesRouter from './api/images.js';
@@ -228,7 +227,6 @@ export async function createServer() {
   // API routes
   app.use('/api/collections', requireAuth, collectionsRouter);
   app.use('/api/content', requireAuth, contentRouter);
-  app.use('/api/build', requireAuth, buildRouter);
   app.use('/api/publish', requireAuth, publishRouter);
   // Git endpoints are only mounted when git is enabled. Publishing does not
   // require git — use /api/publish (the git router's /publish is an alias).

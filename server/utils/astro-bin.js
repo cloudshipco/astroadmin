@@ -86,7 +86,6 @@ export async function defaultAstroCommand(siteDir, args) {
 
 /** astro's arguments for the default build commands (a configured one replaces these). */
 export const DEFAULT_BUILD_ARGS = {
-  staging: ['build', '--outDir', 'staging-dist'],
   production: ['build', '--outDir', 'dist'],
 };
 
@@ -94,7 +93,7 @@ export const DEFAULT_BUILD_ARGS = {
  * The command for a build: the configured one if set, else the site's installed
  * astro with the default arguments.
  * @param {string|null|undefined} configured - e.g. config.build.production
- * @param {'staging'|'production'} kind
+ * @param {'production'} kind - a key of DEFAULT_BUILD_ARGS
  * @param {string} siteDir
  * @returns {Promise<{command: string|null, error: string|null}>}
  */

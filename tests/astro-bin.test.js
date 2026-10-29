@@ -114,7 +114,6 @@ await check('the production build refuses when the site has no astro, and runs n
 await check('the default config names no command, so only a configured one counts as custom', async () => {
   const fullConfig = await getConfig();
   assert.equal(fullConfig.build.production, null);
-  assert.equal(fullConfig.build.staging, null);
 });
 
 // astro installed as a package, but no node_modules/.bin: the case where
