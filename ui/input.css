@@ -201,6 +201,90 @@
     @apply text-gray-400 text-sm;
   }
 
+  /* The header's buttons. On a wide screen they sit in .topbar-right's own
+     row as if this wrapper were not there. */
+  .topbar-actions {
+    @apply contents;
+  }
+
+  /* Below laptop width the header cannot hold the picker, the save status and
+     every action in one row: at 390px Publish, Changes and Logout were clipped
+     off the right edge, and at 768px a long save status squeezed "View live
+     site" onto three lines. It becomes two rows: the logo, picker and save
+     status, then the buttons, right-aligned (they wrap rather than overflow if
+     a font runs wide). The save status stays on the first row so its changing
+     text never moves the buttons. */
+  @media (width < 64rem) {
+    .topbar-shopify {
+      @apply h-auto flex-wrap gap-x-3 gap-y-2 py-2;
+    }
+
+    .topbar-left,
+    .topbar-right {
+      @apply contents;
+    }
+
+    .topbar-logo {
+      @apply shrink-0;
+    }
+
+    /* A zero basis: a long entry title shrinks the picker, never pushes the
+       save status off the row. */
+    .topbar-left .entry-picker-button,
+    .topbar-left .page-selector {
+      @apply flex-1 basis-0 min-w-0;
+    }
+
+    .save-status {
+      @apply ml-auto shrink-0 max-w-[40%] truncate;
+    }
+
+    .topbar-actions {
+      @apply flex basis-full flex-wrap justify-end gap-2;
+    }
+
+    /* The panel opened under the h-14 header; the header is taller now, and
+       a phone is narrower than the panel's w-96. */
+    .changes-panel {
+      @apply top-0 h-dvh max-w-full;
+    }
+  }
+
+  /* A phone: the four buttons fit one row at 360px with a shorter live-site
+     label and slightly tighter spacing. */
+  @media (width < 48rem) {
+    .topbar-left .entry-picker-button,
+    .topbar-left .page-selector {
+      @apply max-w-none;
+    }
+
+    .topbar-actions {
+      @apply gap-1.5;
+    }
+
+    .topbar-actions .btn {
+      @apply px-2.5;
+    }
+
+    .topbar-label-extra {
+      @apply hidden;
+    }
+  }
+
+  /* Finger-sized header targets on a touch screen. */
+  @media (pointer: coarse) {
+    /* Padding, not min-height: the View live link is an <a>, which a
+       min-height would not centre. 20px text line + 2 x 10px = 40px. */
+    .topbar-actions .btn {
+      @apply py-2.5;
+    }
+
+    .topbar-left .entry-picker-button,
+    .topbar-left .page-selector {
+      @apply min-h-10;
+    }
+  }
+
   .main-layout {
     @apply flex flex-1 overflow-hidden;
   }

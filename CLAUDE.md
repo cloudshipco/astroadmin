@@ -636,6 +636,18 @@ queue, so the old body is never written back.
   fields ending in `video` are not video pickers, nor is anything but a string by name
   (a union holding an object crashed the entry; form-generator.test.js). A typed clear
   in a new entry saves null (untouched-structure). ~10 s.
+- `bun tests/dashboard-layout-browser.test.js` — the dashboard header and the markdown body
+  toolbar in real Chromium at 360, 390, 768 (touch), 1024 and 1280 px, by measurement:
+  no horizontal page scroll; every header control (picker, View live site, Publish,
+  Changes, Logout) inside the viewport with `elementFromPoint` at its centre landing on
+  it, also with the longest save status showing (which must move no button); every
+  toolbar button and the expand button hit-testable with no two boxes intersecting; the
+  Changes panel inside the viewport; on touch, 40px targets. The dashboard clips its own
+  overflow, so the scroll check alone passed while Publish was cut off at 390px: the hit
+  test is what catches it. Below 64rem the header is two rows (`.topbar-left`/`-right`
+  become `display: contents`; buttons in `.topbar-actions`). The toolbar sits ABOVE
+  `.textarea-wrapper`, since the wrapper positions the expand button at its corner.
+  Seen red at bcfb061. `LAYOUT_SCREENSHOTS=<dir>` saves a screenshot per width. ~4 s.
 - `bun tests/cms-video-packed.test.js` — `components/CmsVideo.astro` from the packed
   tarball in a throwaway Astro 7.3.8 site. Its browser script must be a same-origin FILE
   (`components/cms-video-client.js`, `?url&no-inline`, `<script is:inline src>`): Astro
