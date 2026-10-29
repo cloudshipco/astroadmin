@@ -964,8 +964,14 @@ function generateArrayCard(item, index, itemSchema = null) {
 function findAltProperty(name, siblingProps) {
   if (!siblingProps) return null;
 
-  // A field-specific alt always wins.
-  const specific = [`${name}Alt`, `${name}_alt`].find(candidate => candidate in siblingProps);
+  // A field-specific alt always wins: `<name>Alt`, or, for a name ending in
+  // `image`, the alt named after what comes before it (`bannerAlt` beside
+  // `bannerImage`, #88). Matching only `bannerImageAlt` showed a second alt
+  // box whose `bannerImageAlt` the schema never declared, so Astro dropped it.
+  const candidates = [`${name}Alt`, `${name}_alt`];
+  const base = name.match(/^(.+?)_?image$/i)?.[1];
+  if (base) candidates.push(`${base}Alt`, `${base}_alt`, `${base}alt`);
+  const specific = candidates.find(candidate => Object.hasOwn(siblingProps, candidate));
   if (specific) return specific;
 
   // A plain `alt` only belongs to this image if it is the ONLY image here — as in a

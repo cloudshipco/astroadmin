@@ -206,6 +206,34 @@ check('two image fields sharing one plain alt each keep their own alt input', ()
   assert.ok(/name="heroImageAlt"/.test(html) && /name="cardImageAlt"/.test(html));
 });
 
+// #88: `bannerImage` beside `bannerAlt` showed two alt boxes, and the built-in
+// one saved an undeclared `bannerImageAlt` that Astro strips.
+check('an <x>Image field claims a declared <x>Alt (and <x>_alt)', () => {
+  for (const [imageName, altName] of [
+    ['bannerImage', 'bannerAlt'],
+    ['banner_image', 'banner_alt'],
+    ['bannerimage', 'banneralt'],
+  ]) {
+    const html = generateFields(
+      { [imageName]: { type: 'string' }, [altName]: { type: 'string' } },
+      { [imageName]: '/a.jpg', [altName]: 'A field at dusk' },
+    );
+    assert.equal((html.match(/data-alt-input/g) || []).length, 0, `${imageName} + ${altName}: no built-in alt box`);
+    assert.equal((html.match(new RegExp(`name="${imageName}Alt"`, 'g')) || []).length, 0, `${imageName}: no undeclared ${imageName}Alt`);
+    assert.equal((html.match(new RegExp(`name="${altName}"`, 'g')) || []).length, 1, `${altName} is shown once`);
+    assert.ok(/A field at dusk/.test(html), `${altName} keeps its value`);
+  }
+});
+
+check('an <x>Alt claims only its own image: another image keeps its built-in alt', () => {
+  const html = generateFields(
+    { heroImage: { type: 'string' }, heroAlt: { type: 'string' }, cardImage: { type: 'string' } },
+    { heroImage: '/a.jpg', heroAlt: 'Hero', cardImage: '/b.jpg' },
+  );
+  assert.equal((html.match(/data-alt-input/g) || []).length, 1, 'only cardImage has a built-in alt');
+  assert.ok(/name="cardImageAlt"/.test(html) && !/name="heroImageAlt"/.test(html));
+});
+
 
 // --- Escaping of content that reaches innerHTML ------------------------------
 // The form is built with template literals and inserted via innerHTML, so any

@@ -221,8 +221,12 @@ variants instead of the original upload.
 
 The picker also offers an alt text box, saved next to the image as
 `<field>Alt` (`coverAlt` for `cover`). Declare that field in the schema,
-as above, or Astro leaves it out of `entry.data`. When it is declared
-the picker's own alt box is hidden and the declared field is shown instead.
+as above, or Astro leaves it out of `entry.data`. When the schema declares
+an alt field for the image, the picker's own alt box is hidden and the
+declared field is shown instead. These count: `<field>Alt` or `<field>_alt`;
+for a field ending in `image`, the same name without it (`bannerAlt`,
+`banner_alt` or `banneralt` beside `bannerImage`); and a plain `alt` when it
+is the only image field in the object (a gallery item's `{ src, alt }`).
 
 A list of objects that each have a `src` (`z.array(z.object({ src, alt }))`)
 is edited as a gallery.
