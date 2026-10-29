@@ -17,10 +17,9 @@ import {
   blockedBody,
   commitInCheckout,
   createGitClient,
-  getGitPaths,
-  stageGitPaths,
-  getStagedFilesForPaths,
+  commitConfiguredPaths,
 } from './publish.js';
+import { getAllowedGitPaths } from '../utils/git-paths.js';
 import { withCheckoutExclusive, withCheckoutWrite } from '../utils/checkout-lock.js';
 
 const router = express.Router();
@@ -40,39 +39,13 @@ function commitLimit(rawLimit) {
   return Math.min(Math.max(requested, 1), MAX_COMMIT_LIMIT);
 }
 
-export async function commitConfiguredGitPaths(fullConfig, message) {
-  const git = createGitClient(fullConfig);
-  const gitPaths = getGitPaths(fullConfig);
-  const stagedPaths = await stageGitPaths(git, gitPaths);
-  const stagedFiles = await getStagedFilesForPaths(git, stagedPaths);
-
-  if (stagedFiles.length === 0) {
-    return { result: null, stagedFiles };
-  }
-
-  const result = await git.commit(message, stagedPaths);
-  return { result, stagedFiles };
-}
-
 /**
- * Allowed directories for git file operations (relative to project root) —
- * the configured git paths: src/content plus assets in files mode, assets
- * only in db mode (see config.js defaultGitPathsForStore).
- *
- * Only entries strictly INSIDE the project root count. `path.normalize('')`
- * and `path.normalize('./')` are `.`, so an empty, `./` or `src/..` entry
- * would otherwise widen diff, revert and status to the whole project (and
- * `../x` would reach outside it). Such entries are dropped, so a list of
- * nothing but them scopes nothing, like `[]`. Kept entries come back
- * project-relative without a trailing slash (`src/content/` -> `src/content`).
+ * Commit the configured git paths inside the site (never the content DB), the
+ * same staging Publish does (commitConfiguredPaths).
+ * @returns {Promise<{result: object|null, stagedFiles: string[]}>}
  */
-function getAllowedGitPaths(fullConfig) {
-  const projectRoot = path.resolve(fullConfig.paths.projectRoot);
-  return getGitPaths(fullConfig)
-    .filter((gitPath) => typeof gitPath === 'string')
-    .map((gitPath) => path.relative(projectRoot, path.resolve(projectRoot, gitPath)))
-    .filter((relative) => relative !== '' && relative !== '..'
-      && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
+export function commitConfiguredGitPaths(fullConfig, message) {
+  return commitConfiguredPaths(fullConfig, createGitClient(fullConfig), message);
 }
 
 /**

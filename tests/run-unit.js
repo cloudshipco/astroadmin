@@ -37,7 +37,7 @@ const FAST_TESTS = [
   'api-response', 'login-log', 'rate-limit', 'cross-origin', 'auth',
   'error-paths', 'image-serving', 'image-symlink', 'image-picker-astro',
   'video-upload', 'git-api', 'git-subdir', 'git-subdir-routes',
-  'git-paths-scope', 'git-log-limit', 'checkout-lock', 'publish-sync',
+  'git-paths-scope', 'git-paths-commit', 'git-log-limit', 'checkout-lock', 'publish-sync',
   'publish-message', 'publish-api', 'publish-failure', 'publish-live-status',
   'deploy',
   'build-failure', 'build-deploy-responses',

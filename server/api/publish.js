@@ -26,29 +26,23 @@ import { listSlugs } from '../utils/content.js';
 import { resolveLiveUrl } from '../../ui/live-url.js';
 import { buildProblems } from '../utils/build-failure.js';
 import { withCheckoutExclusive } from '../utils/checkout-lock.js';
+import { getAllowedGitPaths } from '../utils/git-paths.js';
 
 const router = express.Router();
-// Conservative fallback for a malformed config; an explicitly-configured
-// empty array means "stage nothing" and is respected.
 // (Helpers are exported for reuse by api/git.js — keep one definition.)
-const DEFAULT_GIT_PATHS = ['src/styles/', 'public/images/'];
 
 export function createGitClient(fullConfig) {
   return simpleGit(fullConfig.paths.projectRoot);
 }
 
-export function getGitPaths(fullConfig) {
-  return Array.isArray(fullConfig.git?.paths) ? fullConfig.git.paths : DEFAULT_GIT_PATHS;
-}
-
-export async function getStagedFilesForPaths(git, gitPaths) {
+async function getStagedFilesForPaths(git, gitPaths) {
   if (gitPaths.length === 0) return [];
 
   const diffOutput = await git.diff(['--name-only', '--cached', '--', ...gitPaths]);
   return diffOutput.split(/\r?\n/).filter(Boolean);
 }
 
-export async function stageGitPaths(git, gitPaths) {
+async function stageGitPaths(git, gitPaths) {
   const stagedPaths = [];
 
   for (const gitPath of gitPaths) {
@@ -358,15 +352,24 @@ function commitInfo(commitResult) {
 function runGitStep(fullConfig, commitMessage) {
   const git = createGitClient(fullConfig);
   return pushIfAstroAccepts(fullConfig, git, {
-    commit: () => commitPublishPaths(fullConfig, git, commitMessage),
+    commit: async () => (await commitConfiguredPaths(fullConfig, git, commitMessage, {
+      includeDb: Boolean(fullConfig.git?.includeDb),
+    })).result,
   });
 }
 
-/** Stage the configured paths (and the content DB when asked) and commit; null if nothing changed. */
-async function commitPublishPaths(fullConfig, git, commitMessage) {
+/**
+ * Stage the configured git paths inside the site (getAllowedGitPaths, never
+ * the raw list, whose `./` or `../x` staged the whole site or a sibling
+ * folder, #84) and, with `includeDb`, the content DB, then commit exactly
+ * those. The one staging sequence for Publish and the commit route.
+ * @returns {Promise<{result: object|null, stagedFiles: string[]}>} result is
+ *   null when nothing in those paths changed
+ */
+export async function commitConfiguredPaths(fullConfig, git, commitMessage, { includeDb = false } = {}) {
   const commitPaths = [];
   // Optionally force-add the (gitignored) content DB.
-  if (fullConfig.git?.includeDb) {
+  if (includeDb) {
     const relDb = path.relative(fullConfig.paths.projectRoot, fullConfig.database.path);
     try {
       await git.add(['-f', relDb]);
@@ -376,13 +379,13 @@ async function commitPublishPaths(fullConfig, git, commitMessage) {
     }
   }
 
-  commitPaths.push(...await stageGitPaths(git, getGitPaths(fullConfig)));
+  commitPaths.push(...await stageGitPaths(git, getAllowedGitPaths(fullConfig)));
 
   const stagedFiles = await getStagedFilesForPaths(git, commitPaths);
-  if (stagedFiles.length === 0) return null;
-  const commitResult = await git.commit(commitMessage, commitPaths);
+  if (stagedFiles.length === 0) return { result: null, stagedFiles };
+  const result = await git.commit(commitMessage, commitPaths);
   console.log(`✅ Committed: ${commitMessage}`);
-  return commitResult;
+  return { result, stagedFiles };
 }
 
 /**
