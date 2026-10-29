@@ -21,9 +21,12 @@
  * among them) and holds two REAL package directories, as an install does:
  * `astroadmin` (this checkout's package.json and components/, so the real
  * CmsVideo) and `widgets` (a component with a <style> and a bundled
- * <script>, one level down). The check must pass, the built page must carry
- * both components' markup, CSS and script (so the build really used them),
- * and the live packages must be left byte for byte as they were.
+ * <script>, one level down), and one pnpm-style package: `pnpm-widget` is a
+ * link into `node_modules/.pnpm/pnpm-widget@1.0.0/node_modules/`, where its
+ * own dependency `pnpm-dep` sits beside it (reachable from nowhere else).
+ * The check must pass, the built page must carry the components' markup,
+ * CSS and script (so the build really used them), and the live packages,
+ * the store and node_modules' own entries must be left as they were.
  *
  *   bun tests/check-linked-styles.test.js     (~2 s)
  */
@@ -47,6 +50,9 @@ const firstSegment = (target) => target.split(path.sep).filter(Boolean)[0];
 const WIDGET_COLOUR = 'rgb(11, 22, 33)';
 const WIDGET_COLOUR_BUILT = '#0b1621'; // the same colour, as the build minifies it
 const WIDGET_SCRIPT_MARKER = 'widget-script-ran';
+const PNPM_COLOUR = 'rgb(44, 55, 66)';
+const PNPM_COLOUR_BUILT = '#2c3742';
+const PNPM_DEP_MARKER = 'from-the-pnpm-dependency';
 
 function git(cwd, ...args) {
   return execFileSync('/usr/bin/git', args, { cwd, encoding: 'utf-8' }).trim();
@@ -58,17 +64,25 @@ function writeFile(root, relativePath, content) {
   fs.writeFileSync(fullPath, content);
 }
 
-/** Every file under a directory with its sha256, for a before/after comparison. */
-function treeDigest(dir) {
+/**
+ * Every file under a directory with its sha256, and every link with its
+ * target, for a before/after comparison. `depth` stops the walk (1: the
+ * directory's own entries only).
+ */
+function treeDigest(dir, { depth = Infinity } = {}) {
   const lines = [];
-  const walk = (current) => {
+  const walk = (current, level) => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const full = path.join(current, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else lines.push(`${path.relative(dir, full)} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
+      const relative = path.relative(dir, full);
+      if (entry.isSymbolicLink()) lines.push(`${relative} -> ${fs.readlinkSync(full)}`);
+      else if (entry.isDirectory()) {
+        lines.push(`${relative}/`);
+        if (level < depth) walk(full, level + 1);
+      } else lines.push(`${relative} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
     }
   };
-  walk(dir);
+  walk(dir, 1);
   return lines.join('\n');
 }
 
@@ -122,6 +136,30 @@ const { label } = Astro.props;
 `);
   writeFile(widgetsDir, 'src/parts/notes.txt', 'not a component\n');
 
+  // A pnpm install: the package's real directory is in the virtual store
+  // (node_modules/.pnpm, a dot-directory the check does not link), with its
+  // own dependency beside it, and node_modules/<name> is a symbolic link.
+  const pnpmStore = path.join(siteDir, 'node_modules', '.pnpm');
+  const pnpmPackageDir = path.join(pnpmStore, 'pnpm-widget@1.0.0', 'node_modules', 'pnpm-widget');
+  writeFile(pnpmPackageDir, 'package.json', JSON.stringify({
+    name: 'pnpm-widget', version: '1.0.0', type: 'module',
+    exports: { './PnpmWidget.astro': './PnpmWidget.astro' },
+  }));
+  writeFile(pnpmPackageDir, 'PnpmWidget.astro', `---
+import { greeting } from 'pnpm-dep';
+---
+<p class="pnpm-widget">{greeting}</p>
+<style>
+  .pnpm-widget { color: ${PNPM_COLOUR}; }
+</style>
+`);
+  const pnpmDepDir = path.join(pnpmStore, 'pnpm-dep@1.0.0', 'node_modules', 'pnpm-dep');
+  writeFile(pnpmDepDir, 'package.json', JSON.stringify({ name: 'pnpm-dep', version: '1.0.0', type: 'module', exports: './index.js' }));
+  writeFile(pnpmDepDir, 'index.js', `export const greeting = '${PNPM_DEP_MARKER}';\n`);
+  // As pnpm links them: relative links, the dependency reachable only from beside the package.
+  fs.symlinkSync('../../pnpm-dep@1.0.0/node_modules/pnpm-dep', path.join(pnpmStore, 'pnpm-widget@1.0.0', 'node_modules', 'pnpm-dep'));
+  fs.symlinkSync('.pnpm/pnpm-widget@1.0.0/node_modules/pnpm-widget', path.join(siteDir, 'node_modules', 'pnpm-widget'));
+
   writeFile(siteDir, 'package.json', JSON.stringify({ type: 'module' }));
   writeFile(siteDir, 'astro.config.mjs', 'export default {};\n');
   writeFile(siteDir, '.gitignore', 'node_modules\n.astro\ndist\n');
@@ -129,10 +167,12 @@ const { label } = Astro.props;
   writeFile(siteDir, 'src/pages/index.astro', `---
 import CmsVideo from 'astroadmin/components/CmsVideo.astro';
 import Widget from 'widgets/Widget.astro';
+import PnpmWidget from 'pnpm-widget/PnpmWidget.astro';
 ---
 <html><body>
 <CmsVideo src="/images/loop.webm" id="loop" />
 <Widget label="hello" />
+<PnpmWidget />
 </body></html>
 `);
   git(siteDir, 'init', '-q', '-b', 'main');
@@ -141,7 +181,13 @@ import Widget from 'widgets/Widget.astro';
   git(siteDir, 'add', '-A');
   git(siteDir, 'commit', '-q', '-m', 'initial');
 
-  const livePackagesBefore = `${treeDigest(astroadminDir)}\n${treeDigest(widgetsDir)}`;
+  const liveStore = path.join(siteDir, 'node_modules', '.astro');
+  const livePackages = () => [
+    treeDigest(astroadminDir), treeDigest(widgetsDir), treeDigest(pnpmStore),
+    treeDigest(path.join(siteDir, 'node_modules'), { depth: 1 }),
+    fs.existsSync(liveStore) ? treeDigest(liveStore) : 'no data store',
+  ].join('\n');
+  const livePackagesBefore = livePackages();
 
   process.env.ASTROADMIN_PROJECT_ROOT = siteDir;
   process.env.TMPDIR = checkTmpDir;
@@ -168,8 +214,15 @@ import Widget from 'widgets/Widget.astro';
     assert.ok(built.includes(WIDGET_SCRIPT_MARKER), "the Widget's <script> is in the build");
   });
 
-  await check('the live packages are left as they were', () => {
-    assert.strictEqual(`${treeDigest(astroadminDir)}\n${treeDigest(widgetsDir)}`, livePackagesBefore);
+  await check('the pnpm-installed component built, with its <style> and its own dependency', () => {
+    assert.match(built, new RegExp(`<p class="pnpm-widget[^"]*"[^>]*>${PNPM_DEP_MARKER}</p>`), 'PnpmWidget rendered its dependency');
+    const rule = built.match(/\.pnpm-widget\[data-astro-cid-[a-z0-9]+\]\{color:([^}]+)\}/);
+    assert.ok(rule, "the PnpmWidget's <style> is in the build");
+    assert.strictEqual(rule[1], PNPM_COLOUR_BUILT);
+  });
+
+  await check('the live packages (and the store) are left as they were', () => {
+    assert.strictEqual(livePackages(), livePackagesBefore);
   });
 
   await check("the check's temp directory is removed", () => {
