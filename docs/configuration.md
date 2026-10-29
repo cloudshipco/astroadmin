@@ -122,13 +122,13 @@ Every failed login writes one line to standard output, in this fixed form:
 ```
 
 The time is local with its UTC offset. The address is the one Express sees:
-the connecting address, or in production (which trusts one proxy) the address
-the proxy passed in `X-Forwarded-For`. It is the client's own address, IPv6
-included, not the /56 the rate limit counts it in, since fail2ban bans single
-addresses; an IPv4-mapped address is written in its IPv4 form. An address
-that does not parse is
-written as `ip=invalid`. Nothing the client sent, such as the username, is in
-the line, so a request cannot forge a second line. The line is written after
+the connecting address, or, when the connection comes from a trusted proxy
+(below), the address that proxy put in `X-Forwarded-For`. It is the client's
+own address, IPv6 included, not the /56 the rate limit counts it in, since
+fail2ban bans single addresses; an IPv4-mapped address is written in its
+IPv4 form. An address that does not parse is written as `ip=invalid`.
+Nothing else the client sent, such as the username, is in the line, so a
+request cannot forge a second line. The line is written after
 the same-origin check, so another site cannot make a visitor's browser produce
 it. A fail2ban filter for it (anchored at the end of the line, not the start,
 because a journal or syslog prefix comes before the message):
@@ -137,6 +137,34 @@ because a journal or syslog prefix comes before the message):
 [Definition]
 failregex = \] auth\.failed ip=<ADDR>$
 ```
+
+### Trusted proxies
+
+The rate limits and the `auth.failed` line take the client's address from
+`X-Forwarded-For` only when the connection comes from a trusted proxy;
+otherwise any client could name its own address in that header, get a fresh
+budget per request and point fail2ban at someone else. In production the
+default trusts `loopback` only: a proxy on the same machine (nginx on
+`127.0.0.1` or `::1`), which is the usual layout. A client that reaches the
+editor's port directly is counted, and logged, by its own address. In
+development nothing is trusted.
+
+Set `TRUST_PROXY` (or `trustProxy` in `astroadmin.config.js`; the
+environment wins) when the proxy is elsewhere. It takes Express's
+[`trust proxy`](https://expressjs.com/en/guide/behind-proxies.html) forms:
+a comma-separated list of addresses, CIDR ranges and the names `loopback`,
+`linklocal` and `uniquelocal` (`TRUST_PROXY=10.0.0.5` for a proxy on another
+machine); a number of hops (`1`), which believes whatever the nearest peer
+says and so suits only an app no client can reach except through that
+proxy; `true` (believe every peer, with the same caveat); or `false`.
+
+With a CDN such as Cloudflare in front of nginx, nginx's peer is the CDN's
+edge, so every visitor arrives from a handful of edge addresses and shares
+their budgets, and fail2ban would ban the edge. Have nginx restore the
+visitor's address first (its `real_ip` module: `set_real_ip_from` for each
+of the CDN's published ranges and `real_ip_header CF-Connecting-IP`), so the
+`X-Forwarded-For` nginx passes on names the visitor, and leave `TRUST_PROXY`
+at `loopback`.
 
 Every request that changes something (saves, uploads, git actions, publish,
 login, logout) must come from the editor's own origin; others get a 403.
@@ -272,6 +300,7 @@ active development; see the README.
 | `SESSION_SECRET` | Session signing secret | a development value |
 | `SESSION_DB_PATH` | Session database in production | `/data/sessions.db` |
 | `ALLOWED_ORIGINS` | Extra origins allowed to make changes, comma separated | unset |
+| `TRUST_PROXY` | Peers whose `X-Forwarded-For` is believed (see [trusted proxies](#trusted-proxies)) | `loopback` in production, none in development |
 | `PREVIEW_URL` | `preview.url` | `http://localhost:4321` |
 | `PUBLIC_URL` | `publicUrl` | unset |
 | `GIT_ENABLED` | `false` turns git off | `true` |

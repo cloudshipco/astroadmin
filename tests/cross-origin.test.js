@@ -275,7 +275,7 @@ const { requireSameOrigin } = await import('../server/utils/same-origin.js');
 
 async function guardStatus(configuredOrigins, headers) {
   const proxied = express();
-  proxied.set('trust proxy', 1);
+  proxied.set('trust proxy', 'loopback'); // production's default
   proxied.use('/api', requireSameOrigin(configuredOrigins));
   proxied.post('/api/write', (req, res) => res.sendStatus(204));
   const listener = proxied.listen(0, '127.0.0.1');

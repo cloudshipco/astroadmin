@@ -35,9 +35,13 @@ export async function createServer() {
   const fullConfig = await getConfig();
   const app = express();
 
-  // Trust proxy (for secure cookies behind nginx/reverse proxy)
-  if (IS_PROD) {
-    app.set('trust proxy', 1);
+  // Trusted proxies (config `trustProxy`, env TRUST_PROXY): their
+  // X-Forwarded-For is the client's address (rate limits, the auth.failed
+  // log) and X-Forwarded-Proto makes secure cookies work behind TLS
+  // termination. Production defaults to loopback only, so a client that
+  // reaches the app directly cannot choose its own address.
+  if (fullConfig.trustProxy !== false && fullConfig.trustProxy !== undefined) {
+    app.set('trust proxy', fullConfig.trustProxy);
   }
 
   // Middleware. JSON only: nothing in the admin posts a urlencoded form (login

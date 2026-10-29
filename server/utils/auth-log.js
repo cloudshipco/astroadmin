@@ -3,12 +3,16 @@
  *
  *   [2026-10-29T14:03:07.412+00:00] auth.failed ip=203.0.113.9
  *
- * One line per refused login, always this shape. The address is `req.ip`,
- * which is the socket address unless the app trusts a proxy (production
- * trusts one, so it is the address nginx passed on). Nothing the client typed
- * (the username, a header) is written, so no request can forge a second line
- * or an address of its choosing: an address that does not parse as one is
- * written as `ip=invalid`.
+ * One line per refused login, always this shape. The address is `req.ip`:
+ * the socket address, or, when the socket's peer is a trusted proxy
+ * (`trustProxy`: loopback only by default in production, server/config.js),
+ * the address that proxy passed in X-Forwarded-For. So a client reaching the
+ * app directly cannot choose its address; behind a trusted proxy it is what
+ * the proxy wrote, which is why a CDN in front of nginx needs nginx's
+ * real_ip handling (docs/configuration.md, "Trusted proxies"). Nothing else
+ * the client typed (the username, other headers) is written, so no request
+ * can forge a second line: an address that does not parse as one is written
+ * as `ip=invalid`.
  *
  * The line is written by the login handler, which runs after the same-origin
  * guard, so a cross-site page cannot get a victim's browser to produce it

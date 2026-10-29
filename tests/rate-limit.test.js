@@ -18,8 +18,13 @@
  * - a refusal is JSON ({ error, message }) with a Retry-After header, not the
  *   plain text the dashboard failed to parse.
  *
- * Requests carry X-Forwarded-For (the server trusts one proxy in production,
- * as behind nginx), so each case has its own address.
+ * Requests carry X-Forwarded-For from 127.0.0.1 (production trusts a
+ * loopback proxy, as nginx on the same host), so each case has its own
+ * address. A peer that is not loopback has its X-Forwarded-For ignored
+ * (counted and logged by its own address) unless TRUST_PROXY names it. That
+ * peer is simulated by overriding the accepted socket's remoteAddress, which
+ * is what express reads, since a test host may have no second interface to
+ * connect from.
  *
  *   bun tests/rate-limit.test.js
  */
@@ -250,6 +255,85 @@ await check('a signed-in session is limited at sessionMax', async () => {
   const statuses = await burst(limits.sessionMax, () => fetch(`${base}/api/session`, { headers: via('10.0.0.5', { cookie: secondCookie }) }));
   assert.deepEqual([...new Set(statuses)], [200], `${statuses.filter((s) => s !== 200).length} of ${limits.sessionMax} refused`);
   await assertJsonRefusal(await fetch(`${base}/api/session`, { headers: via('10.0.0.5', { cookie: secondCookie }) }));
+});
+
+/**
+ * Serve `serverApp` on 127.0.0.1, but with every connection's peer address
+ * replaced by `peerAddress` before the request is parsed: what express (via
+ * req.socket.remoteAddress) sees when a client connects from another host.
+ * It proves the app's trust decision follows the socket address; it does not
+ * exercise a real non-loopback route, which a test host may not have.
+ */
+async function listenAsPeer(serverApp, peerAddress) {
+  const peerServer = serverApp.listen(0, '127.0.0.1');
+  await new Promise((resolve) => peerServer.once('listening', resolve));
+  let connections = 0;
+  peerServer.prependListener('connection', (socket) => {
+    connections++;
+    Object.defineProperty(socket, 'remoteAddress', { value: peerAddress, configurable: true });
+  });
+  return { peerServer, peerBase: `http://127.0.0.1:${peerServer.address().port}`, connections: () => connections };
+}
+
+const peerLogin = (peerBase, forwardedFor) => fetch(`${peerBase}/api/login`, {
+  method: 'POST',
+  headers: via(forwardedFor, { 'Content-Type': 'application/json' }),
+  body: JSON.stringify({ username: 'admin', password: 'wrong' }),
+});
+
+await check('by default only a loopback peer is a trusted proxy: another peer\'s X-Forwarded-For is ignored', async () => {
+  const { peerServer, peerBase, connections } = await listenAsPeer(app, '198.51.100.70');
+  try {
+    // Ten failed logins, each claiming a different client. Trusted, they
+    // would be ten addresses with a budget each; ignored, they are one.
+    let lines;
+    const statuses = [];
+    lines = await captureLog(async () => {
+      for (let index = 0; index < limits.loginMax; index++) {
+        const response = await peerLogin(peerBase, `203.0.113.${100 + index}`);
+        await response.arrayBuffer();
+        statuses.push(response.status);
+      }
+    });
+    assert.ok(connections() > 0, 'positive control: the peer address was applied');
+    assert.deepEqual([...new Set(statuses)], [401]);
+    await assertJsonRefusal(await peerLogin(peerBase, '203.0.113.200'));
+    const failures = lines.filter((line) => line.includes('auth.failed'));
+    assert.ok(failures.length === limits.loginMax && failures.every((line) => line.endsWith('auth.failed ip=198.51.100.70')), failures.join('\n'));
+  } finally {
+    peerServer.close();
+  }
+});
+
+await check('TRUST_PROXY names other proxies: then their X-Forwarded-For is the client', async () => {
+  process.env.TRUST_PROXY = '198.51.100.0/24, loopback';
+  let overridden;
+  try {
+    overridden = (await createServer()).app;
+  } finally {
+    delete process.env.TRUST_PROXY;
+  }
+  assert.deepEqual(overridden.get('trust proxy fn')('198.51.100.71', 0), true, 'the named range is trusted');
+  const { peerServer, peerBase } = await listenAsPeer(overridden, '198.51.100.71');
+  try {
+    const lines = await captureLog(async () => {
+      assert.equal((await peerLogin(peerBase, '203.0.113.201')).status, 401);
+    });
+    assert.ok(lines.some((line) => line.endsWith('auth.failed ip=203.0.113.201')), lines.join('\n'));
+  } finally {
+    peerServer.close();
+  }
+});
+
+await check('trustProxySetting: express\'s forms from TRUST_PROXY', async () => {
+  const { trustProxySetting } = await import('../server/config.js');
+  assert.equal(trustProxySetting(undefined, true), 'loopback', 'production default');
+  assert.equal(trustProxySetting(undefined, false), false, 'development default');
+  assert.equal(trustProxySetting('', true), 'loopback', 'empty is unset');
+  assert.equal(trustProxySetting('2', true), 2, 'a number of hops');
+  assert.equal(trustProxySetting('false', true), false);
+  assert.equal(trustProxySetting('true', true), true);
+  assert.equal(trustProxySetting('loopback, 10.0.0.0/8', true), 'loopback, 10.0.0.0/8');
 });
 
 console.log('='.repeat(40));

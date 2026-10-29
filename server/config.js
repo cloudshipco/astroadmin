@@ -50,11 +50,41 @@ const defaultPaths = {
   images: path.join(PROJECT_ROOT, 'public/images'),
 };
 
+/**
+ * Express's `trust proxy` setting: which peers may tell the app, through
+ * X-Forwarded-For and X-Forwarded-Proto, who the client is and whether it
+ * came over HTTPS. From TRUST_PROXY when set, in express's own forms: a
+ * number of hops (`1`), `true` (every peer: only behind a proxy that
+ * overwrites X-Forwarded-For), `false`, or a comma-separated list of
+ * addresses, CIDR ranges and the names `loopback`, `linklocal`,
+ * `uniquelocal`. Unset, production trusts `loopback` only (a proxy on the
+ * same host, such as nginx on 127.0.0.1) and development trusts nothing.
+ * An address-based setting means a client that reaches the app directly
+ * cannot choose the address the rate limits and the auth.failed log see;
+ * a hop count trusted ANY peer's header.
+ * @param {string | undefined} value TRUST_PROXY
+ * @param {boolean} production
+ * @returns {boolean | number | string}
+ */
+export function trustProxySetting(value, production) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (text === '') return production ? 'loopback' : false;
+  if (text === 'true') return true;
+  if (text === 'false') return false;
+  if (/^\d+$/.test(text)) return Number(text);
+  return text;
+}
+
 // Default configuration
 const defaultConfig = {
   // Server settings (ASTROADMIN_PORT takes priority over PORT to avoid conflicts)
   port: parseInt(process.env.ASTROADMIN_PORT || process.env.PORT, 10) || 4000,
   host: process.env.ASTROADMIN_HOST || process.env.HOST || 'localhost',
+
+  // Which peers are trusted proxies (express `trust proxy`); see
+  // trustProxySetting. astroadmin.config.js may set `trustProxy`; TRUST_PROXY
+  // in the environment wins, as the host's layout is the operator's.
+  trustProxy: trustProxySetting(undefined, IS_PROD),
 
   // Paths
   paths: defaultPaths,
@@ -287,6 +317,10 @@ export async function getConfig() {
   if (!Array.isArray(user.git?.paths)) {
     const storeMode = process.env.ASTROADMIN_CONTENT_STORE || merged.content?.store || 'files';
     merged.git = { ...merged.git, paths: defaultGitPathsForStore(storeMode) };
+  }
+
+  if (typeof process.env.TRUST_PROXY === 'string' && process.env.TRUST_PROXY.trim() !== '') {
+    merged.trustProxy = trustProxySetting(process.env.TRUST_PROXY, IS_PROD);
   }
 
   return merged;
