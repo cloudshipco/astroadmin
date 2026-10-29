@@ -16,6 +16,12 @@
  * image-field-astro). Run those by name before a release. Every other
  * tests/*.test.js file is in FAST_TESTS below.
  *
+ * One fast test needs a browser: image-serving checks in Chromium that an
+ * uploaded SVG runs no script, and fails (never skips) without one. It uses
+ * CHROMIUM_PATH, else a headless shell in Playwright's cache
+ * (tests/chromium-path.js); get one with
+ * `npx playwright-core install chromium-headless-shell`.
+ *
  *   bun tests/run-unit.js            every file below
  *   bun tests/run-unit.js git ui     only files whose name contains a word
  */

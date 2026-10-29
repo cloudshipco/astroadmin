@@ -20,7 +20,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { chromium } from 'playwright-core';
-import { chromiumPath } from './chromium-path.js';
+import { launchChromium } from './chromium-path.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-image-serving-')));
@@ -147,7 +147,7 @@ await check('without a session, every admin-served folder refuses (draft files a
 // difference). So a video gets `sandbox allow-same-origin` and
 // `media-src 'self'`. Without allow-scripts nothing runs, and the sandbox's
 // automatic-features flag stops autoplay: the viewer starts it.
-const browser = await chromium.launch({ executablePath: chromiumPath() });
+const browser = await launchChromium(chromium);
 const context = await browser.newContext();
 await context.addCookies([{ name: cookie.split('=')[0], value: cookie.slice(cookie.indexOf('=') + 1), url: base }]);
 
