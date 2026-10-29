@@ -511,7 +511,7 @@ function openTextareaModal(textarea, onChange) {
         <button type="button" class="textarea-modal-close" data-close-textarea-modal>&times;</button>
       </div>
       <div class="textarea-modal-body">
-        <textarea id="textareaModalInput" class="textarea-modal-input ${isMarkdown ? 'markdown-input' : ''}" placeholder="Enter your text...">${escapeHtml(textarea.value)}</textarea>
+        <textarea id="textareaModalInput" class="textarea-modal-input ${isMarkdown ? 'markdown-input' : ''}" placeholder="Enter your text..."></textarea>
       </div>
       <div class="textarea-modal-footer">
         <span class="textarea-char-count">${textarea.value.length} characters</span>
@@ -524,6 +524,9 @@ function openTextareaModal(textarea, onChange) {
   `;
 
   const modalInput = modal.querySelector('#textareaModalInput');
+  // Set in script, not markup: the parser drops a line break straight after
+  // <textarea>, so a value starting with one lost it (see textareaContent).
+  modalInput.value = textarea.value;
   const charCount = modal.querySelector('.textarea-char-count');
 
   modalInput.addEventListener('input', () => {

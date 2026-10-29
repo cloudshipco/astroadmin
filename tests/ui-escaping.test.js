@@ -159,7 +159,7 @@ await check('number field: a non-numeric stored value cannot leave the value att
 // harness (it boots on import), so its render code is run directly, extracted
 // from the source like tests/focus-editor-field.test.js does.
 const dashboardSrc = readFileSync(path.join(import.meta.dir, '../ui/dashboard.js'), 'utf8');
-const escapeSrc = readFileSync(path.join(import.meta.dir, '../ui/escape-html.js'), 'utf8').replace('export function', 'function');
+const escapeSrc = readFileSync(path.join(import.meta.dir, '../ui/escape-html.js'), 'utf8').replace(/export function/g, 'function');
 
 await check('dashboard: a virtual page with a hostile file name renders it as text', () => {
   const fnSrc = dashboardSrc.match(/function renderVirtualPagePanel\(page\) \{[\s\S]*?\n\}/)?.[0];

@@ -20,3 +20,15 @@ export function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
+
+/**
+ * A value as a <textarea>'s markup content. The HTML parser drops ONE line
+ * break straight after `<textarea>`, so a value starting with a line break
+ * lost it (`"\nfoo"` read back as `"foo"`, and the next save wrote that). One
+ * extra line break in front is the one the parser drops. Where a textarea's
+ * value can be set in script instead (`.value = x`), do that.
+ */
+export function textareaContent(value) {
+  const escaped = escapeHtml(value);
+  return /^[\r\n]/.test(escaped) ? `\n${escaped}` : escaped;
+}

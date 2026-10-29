@@ -10,7 +10,7 @@
 
 import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, isPreviewableVideo, setWidgetValue, CLEARED_ATTRIBUTE, colorToHex, colourSwatchTitle, COLOUR_NONE_ATTRIBUTE, COLOUR_CLEAR_BUTTON } from './field-widgets.js';
 
-import { escapeHtml } from './escape-html.js';
+import { escapeHtml, textareaContent } from './escape-html.js';
 // The keywords the schema parser marks a real date, a file() entry's id and
 // Astro's image() with (shared with the server).
 import { DATE_MARKER, ENTRY_ID_MARKER, IMAGE_MARKER } from './schema-markers.js';
@@ -674,7 +674,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
             ${originalPathAttribute}
             ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
             ${schema.required ? 'required' : ''}
-          >${escapeHtml(content)}</textarea>
+          >${textareaContent(content)}</textarea>
           <button type="button" class="textarea-expand-btn" data-expand-textarea title="Expand editor">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="15 3 21 3 21 9"></polyline>

@@ -774,6 +774,18 @@ check('a union or untyped field ending in video is not a picker, and a picker gi
   }
 });
 
+// The HTML parser drops ONE line break straight after <textarea>, so a value
+// starting with one must carry an extra one in the markup (happy-dom does not
+// drop it, so this is pinned on the markup; checked once in Chromium, where
+// "\nfoo" read back as "foo" before and as "\nfoo" after).
+check('a textarea value starting with a line break keeps it: one extra break after the tag', () => {
+  const schema = { type: 'object', properties: { summary: { type: 'string' }, notes: { type: 'string' } } };
+  const html = generateForm(schema, { summary: '\nfoo', notes: 'bar\nbaz' });
+  const content = (name) => html.match(new RegExp(`name="${name}"[^>]*>([\\s\\S]*?)</textarea>`))?.[1];
+  assert.equal(content('summary'), '\n\nfoo', 'the parser drops the first break, leaving the stored one');
+  assert.equal(content('notes'), 'bar\nbaz', 'control: no extra break when the value does not start with one');
+});
+
 console.log('\n========================================\n');
 console.log(`📊 ${passed} checks passed, ${failures.length} failed.`);
 if (failures.length > 0) process.exit(1);
