@@ -20,7 +20,8 @@ Three review rounds (9, 10, 10 findings). Deferred: CmsVideo copies
 CmsImage's dev-only `existsInPublic` (with its `process.cwd()` root) instead
 of sharing it; a library video opened directly in a tab is blocked by the
 `/images` CSP (no `media-src`); CmsImage itself ignores `base` for the files
-it leaves unoptimised (SVG, external, dev original).
+it leaves unoptimised (SVG, external, dev original). Filed as #79 (shared
+helper), #80 (media-src) and #78 (CmsImage base).
 
 ## The request
 
