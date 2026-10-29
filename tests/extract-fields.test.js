@@ -493,7 +493,40 @@ check('integer fields (plain, default, nullable, nested, array) read back as num
     required: ['order', 'stats', 'sizes'],
   };
   const entry = { order: 2, rank: 7, stats: { visits: 40 }, sizes: [3, 5] };
-  equal(extractFormData(render(schema, entry), schema), entry);
+  equal(extractFormData(render(schema, entry), schema), entry, 'positive control: unedited, every value is the stored one');
+  // A bound form gives an untouched control its stored value back, so only an
+  // EDIT reads the number from the DOM: that is what this pins.
+  const form = render(schema, entry);
+  const edits = { order: '12', rank: '-3', 'stats.visits': '41', 'sizes[1]': '6' };
+  for (const [name, value] of Object.entries(edits)) form.querySelector(`[name="${name}"]`).value = value;
+  equal(extractFormData(form, schema), { order: 12, rank: -3, stats: { visits: 41 }, sizes: [3, 6] });
+});
+
+check('an edited plain number (not an integer, not nullable) saves as a number', () => {
+  const schema = { type: 'object', properties: { title: { type: 'string' }, weight: { type: 'number' } }, required: ['title', 'weight'] };
+  const form = render(schema, { title: '2024', weight: 1 });
+  form.querySelector('[name="weight"]').value = '2.5';
+  form.querySelector('[name="title"]').value = '2025';
+  equal(extractFormData(form, schema), { title: '2025', weight: 2.5 }, 'the number is a number; a text field holding digits stays a string');
+});
+
+// --- Checkboxes -------------------------------------------------------------
+// FormData leaves an unchecked box out entirely, so a box the editor unchecks
+// is read by its own pass; without it the unchecked value is never saved.
+
+check('unchecking a plain checkbox saves false, and checking one saves true', () => {
+  const schema = {
+    type: 'object',
+    properties: { featured: { type: 'boolean' }, draft: { type: 'boolean' }, meta: { type: 'object', properties: { pinned: { type: 'boolean' } } } },
+    required: ['featured', 'draft', 'meta'],
+  };
+  const entry = { featured: true, draft: false, meta: { pinned: true } };
+  const form = render(schema, entry);
+  equal(form.querySelector('[name="featured"]').type, 'checkbox', 'control: a plain boolean is a checkbox');
+  form.querySelector('[name="featured"]').checked = false;
+  form.querySelector('[name="draft"]').checked = true;
+  form.querySelector('[name="meta.pinned"]').checked = false;
+  equal(extractFormData(form, schema), { featured: false, draft: true, meta: { pinned: false } });
 });
 
 // --- A cleared number is absent, never "" (#61) --------------------------------
