@@ -324,5 +324,85 @@ check('a whole-block summary line is disabled once that block is deleted', () =>
   assert.equal(line.disabled, true);
 });
 
+// --- Top-level lists ------------------------------------------------------------
+// An entry that IS a list (a JSON file holding an array) is validated as one,
+// so its issue paths start at an item: '[1]', '[1].title', '' for the whole
+// list. An inline list is drawn as one field named `items` (items[0], ...);
+// a list of objects is cards under `_root`. The paths here come from the
+// real validator (validateAgainstSchema on a real zod schema), not by hand.
+
+const { z } = await import('zod');
+const { validateAgainstSchema } = await import('../server/utils/content-validation.js');
+
+async function topLevelListProblems(zodSchema, entry) {
+  const jsonSchema = z.toJSONSchema(zodSchema);
+  const validation = await validateAgainstSchema({ _zodSchema: zodSchema, schema: jsonSchema }, entry);
+  const form = document.createElement('form');
+  form.innerHTML = generateForm(jsonSchema, entry);
+  document.body.appendChild(form);
+  setupFormHandlers(form, () => {});
+  return { form, validation };
+}
+
+async function checkAsync(name, fn) {
+  try {
+    await fn();
+    console.log(`✅ ${name}`);
+    passed++;
+  } catch (error) {
+    console.log(`❌ ${name}\n   ${String(error.message).split('\n').join('\n   ')}`);
+    failures.push(name);
+  }
+}
+
+await checkAsync('a top-level inline list item\'s problem is marked on that item, and its summary line focuses it', async () => {
+  const { form, validation } = await topLevelListProblems(z.array(z.string().min(1)), ['First', '', 'Third']);
+  assert.deepEqual(validation.issues.map((issue) => issue.path), ['[1]'], 'control: the validator reports the item as [1]');
+  const itemInput = form.querySelector('[name="items[1]"]');
+  assert.ok(itemInput, 'control: the renderer names the item items[1]');
+  assert.ok(findFieldForPath(form, '[1]') === itemInput, '[1] does not find items[1]');
+  showEntryProblems(form, validation);
+  assert.equal(itemInput.getAttribute('aria-invalid'), 'true', 'the item is not marked');
+  assert.equal(form.querySelectorAll('.field-problem').length, 1, 'the message is not under the list');
+  const line = form.querySelector('.entry-problems li button');
+  assert.ok(line, 'the summary line is not a button');
+  line.click();
+  assert.ok(document.activeElement === itemInput, 'the item does not have focus');
+  assert.equal(form.querySelector('[name="items[0]"]').getAttribute('aria-invalid'), null, 'control: another item is not marked');
+});
+
+await checkAsync('a whole top-level inline list\'s problem names it, without marking an object entry\'s `items` field', async () => {
+  const { form } = await topLevelListProblems(z.array(z.string()), ['a']);
+  assert.ok(findFieldForPath(form, '[3]') === form.querySelector('[data-field="items"]'), 'an item not rendered does not find its list');
+  const objectForm = document.createElement('form');
+  objectForm.innerHTML = generateForm({ type: 'object', properties: { items: { type: 'array', items: { type: 'string' } } } }, { items: ['a'] });
+  assert.equal(findFieldForPath(objectForm, ''), null, 'a whole-entry problem on an object entry is not the items field');
+});
+
+const cardItem = z.object({ title: z.string().min(1), note: z.string().optional() });
+
+await checkAsync('a top-level card list item\'s problem is marked on its card, and its summary line goes there', async () => {
+  const { form, validation } = await topLevelListProblems(z.array(cardItem), [{ title: 'One' }, { title: '' }, { title: 'Three' }]);
+  assert.deepEqual(validation.issues.map((issue) => issue.path), ['[1].title'], 'control: the validator reports [1].title');
+  const cards = [...form.querySelectorAll('[data-field="_root"] .array-card')];
+  assert.equal(cards.length, 3, 'control: three cards rendered');
+  assert.ok(findFieldForPath(form, '[1].title') === cards[1], 'the problem does not find its card');
+  showEntryProblems(form, validation);
+  const message = form.querySelector('.field-problem');
+  assert.ok(message, 'the problem is not marked on the list');
+  assert.equal(message.textContent, `${describeIssuePath('[1].title')}: ${validation.issues[0].message}`, 'it names the card');
+  const line = form.querySelector('.entry-problems li button');
+  assert.ok(line, 'the summary line is not a button');
+  assert.equal(line.textContent.startsWith('2 › Title'), true, line.textContent);
+});
+
+await checkAsync('a whole top-level card list\'s problem is marked on the list', async () => {
+  const { form, validation } = await topLevelListProblems(z.array(cardItem).min(2), [{ title: 'One' }]);
+  assert.deepEqual(validation.issues.map((issue) => issue.path), [''], 'control: the validator reports the whole list as ""');
+  assert.ok(findFieldForPath(form, '') === form.querySelector('[data-array-cards][data-field="_root"]'), '"" does not find the card list');
+  showEntryProblems(form, validation);
+  assert.equal(form.querySelectorAll('.field-problem').length, 1);
+});
+
 console.log(`\n📊 ${passed} passed, ${failures.length} failed.`);
 if (failures.length > 0) process.exitCode = 1;

@@ -18,7 +18,7 @@
  * and focuses it.
  */
 
-import { formatLabel } from './form-generator.js';
+import { formatLabel, TOP_LEVEL_LIST_KEY } from './form-generator.js';
 import { entryDashboardPath } from './entry-urls.js';
 
 const SUMMARY_CLASS = 'entry-problems';
@@ -48,7 +48,20 @@ export function describeIssuePath(issuePath) {
  * @returns {Element|null}
  */
 export function findFieldForPath(form, issuePath) {
-  let candidate = issuePath;
+  // An entry that is a list is validated as one, so its paths start at an
+  // item ('[1]', '[1].title') or are '' for the whole list. Only such an
+  // entry has a path starting with '['. A list of objects is cards, whose
+  // fields live in the item modal: a problem anywhere in an item is its card.
+  const topLevelCards = form.querySelector('[data-array-cards][data-top-level-array="true"]');
+  issuePath = issuePath || '';
+  if (topLevelCards && (issuePath === '' || issuePath.startsWith('['))) {
+    const itemIndex = /^\[(\d+)\]/.exec(issuePath)?.[1];
+    const card = [...topLevelCards.children]
+      .find((child) => child.classList.contains('array-card') && child.dataset.index === itemIndex);
+    return card || topLevelCards;
+  }
+  // Any other list is drawn as one field (items[0], items[1]).
+  let candidate = issuePath.startsWith('[') ? `${TOP_LEVEL_LIST_KEY}${issuePath}` : issuePath;
   while (candidate) {
     const escaped = CSS.escape(candidate);
     // Array, block, gallery and reference lists carry data-field on a

@@ -103,7 +103,7 @@ export function generateFields(properties, data = {}, options = {}) {
  * and extractFormData unwraps it again. bindOriginalValues wraps a stored list
  * the same way, so its paths find the stored items.
  */
-const TOP_LEVEL_LIST_KEY = 'items';
+export const TOP_LEVEL_LIST_KEY = 'items';
 
 /**
  * Whether a top-level list is edited inline, as the same list would be as a

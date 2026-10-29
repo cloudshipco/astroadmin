@@ -460,7 +460,10 @@ runner aggregating them). Most run server-less and need env vars:
   (`goToField`, which click-to-edit uses too); a problem on a whole block
   (`blocks[1]`, a block-level refinement) goes to that block, not the list; a line whose
   block was deleted since is disabled. Blocks do not nest: `findDiscriminatedUnions` does not descend into a union's
-  options, so a union inside a block is not a block list.
+  options, so a union inside a block is not a block list. An entry that IS a list
+  is validated as one (`[1]`, `[1].title`, `''`): an inline item is found as
+  `items[1]` (`TOP_LEVEL_LIST_KEY`), a card list's item problem marks its card and
+  a whole-list problem the `_root` list; paths come from the real validator.
 - `bun tests/block-reveal.test.js` — the same on a real site's schema and content
   (`tests/fixtures/derived-blocks-site`, derived from a client site: its blocks and pages
   collection with comments removed and example strings made generic, a page with its text
