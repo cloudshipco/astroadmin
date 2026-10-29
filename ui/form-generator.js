@@ -1630,10 +1630,29 @@ function finalItemPaths(items, listPath) {
  * @returns {object}
  */
 export function extractItem(container, item, schema) {
-  const { data, removed } = extractValues(container, schema);
+  const { data } = extractValues(container, schema);
   const result = { ...item, ...data };
-  for (const key of removed) delete result[key];
+  // A rendered field missing from what was read was left out on purpose: by
+  // cleanup (an emptied optional), by the read itself (an empty number box,
+  // #61) or as absent when stored. Merged over the item, it came back as
+  // stored, so clearing a number in the modal saved its old value.
+  for (const key of renderedKeys(container)) {
+    if (!(key in data)) delete result[key];
+  }
   return result;
+}
+
+/** The top-level keys a container renders a control or container for. */
+function renderedKeys(container) {
+  const keys = new Set();
+  const add = (path) => {
+    const key = path?.split(/[.[]/)[0];
+    if (key) keys.add(key);
+  };
+  container.querySelectorAll('[name]').forEach((element) => add(element.getAttribute('name')));
+  container.querySelectorAll('[data-field]').forEach((element) => add(element.dataset.field));
+  container.querySelectorAll('[data-object-field]').forEach((element) => add(element.dataset.objectField));
+  return keys;
 }
 
 /**
