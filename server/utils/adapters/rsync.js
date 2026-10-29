@@ -12,6 +12,7 @@
 
 import { spawn } from 'child_process';
 import fs from 'fs';
+import net from 'net';
 import os from 'os';
 import path from 'path';
 
@@ -126,6 +127,26 @@ function sshPort(port) {
 }
 
 /**
+ * A remote user name as rsync and ssh take it: letters, digits, `.`, `_`
+ * and `-`, not starting with `-`. rsync hands `user@host` to ssh as ONE
+ * argument (even after `--`), so a value starting with `-` would be an ssh
+ * option such as -oProxyCommand.
+ */
+const REMOTE_USER = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
+
+/**
+ * A host name or IPv4 address (letters, digits, `.`, `-`, `_`, not starting
+ * with `-`), or an IPv6 address in brackets, as rsync wants it in
+ * `user@[2001:db8::1]:path`.
+ */
+function isRemoteHost(host) {
+  const text = String(host);
+  const bracketed = /^\[([^\]]+)\]$/.exec(text);
+  if (bracketed) return net.isIPv6(bracketed[1]);
+  return /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(text);
+}
+
+/**
  * One argument of rsync's `-e` command. rsync splits that string on spaces
  * itself and honours quotes: inside single quotes a doubled '' is one quote
  * (rsync(1), --rsh).
@@ -149,6 +170,12 @@ function validate(config, context = {}) {
   // user is only required for remote deploys (when host is set)
   if (config?.host && !config?.user) {
     errors.push('rsync.user is required when rsync.host is specified');
+  }
+  if (config?.host && !isRemoteHost(config.host)) {
+    errors.push('rsync.host must be a host name, an IPv4 address or an IPv6 address in brackets');
+  }
+  if (config?.host && config?.user && !REMOTE_USER.test(String(config.user))) {
+    errors.push('rsync.user may hold only letters, digits, ".", "_" and "-", and must not start with "-"');
   }
   if (config?.host && sshPort(config.port) === null) {
     errors.push('rsync.port must be a whole number from 1 to 65535');
@@ -221,7 +248,8 @@ function deploy({ projectRoot, distDir, config, log }) {
     ? config.path
     : `${config.user}@${config.host}:${config.path}`;
 
-  args.push(distPath, destination);
+  // `--`: a local destination starting with `-` is a path, not an option.
+  args.push('--', distPath, destination);
 
   const targetDescription = isLocal ? config.path : `${config.host}:${config.path}`;
   log(`🚀 Starting rsync deploy to ${targetDescription}${isLocal ? ' (local)' : ''}`);

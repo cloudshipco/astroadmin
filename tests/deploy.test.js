@@ -212,6 +212,66 @@ for (const keyPath of [path.join(guardRoot, 'my keys/deploy key'), path.join(gua
   });
 }
 
+// rsync hands `user@host` to ssh as one argument, even after `--`, so a
+// user or host starting with `-` is an ssh OPTION (-oProxyCommand runs a
+// command on the admin's host).
+const HOSTILE_REMOTE = [
+  { user: '-oProxyCommand=touch /tmp/pwned', host: 'h' },
+  { user: 'deploy', host: '-oProxyCommand=touch /tmp/pwned' },
+  { user: 'de ploy', host: 'h' },
+  { user: 'deploy', host: 'h /srv' },
+  { user: 'deploy', host: 'h:/srv' },
+  { user: 'de@ploy', host: 'h' },
+  { user: 'deploy', host: '[not-an-address]' },
+];
+for (const remote of HOSTILE_REMOTE) {
+  await check(`validate: refuses user ${JSON.stringify(remote.user)} with host ${JSON.stringify(remote.host)}`, () => {
+    const result = validateDeployConfig({ adapter: 'rsync', rsync: { path: '/srv/www', ...remote } }, guardContext);
+    assert.equal(result.valid, false, 'accepted');
+    assert.ok(result.errors.every((error) => !error.includes('pwned')), 'our sentence, not the value');
+  });
+}
+
+await check('validate: ordinary users and hosts are accepted (positive control)', () => {
+  const remotes = [
+    { user: 'deploy', host: 'example.com' },
+    { user: 'www-data', host: 'web-1.example.com' },
+    { user: 'u_1.x', host: '203.0.113.9' },
+    { user: 'deploy', host: '[2001:db8::1]' },
+    { user: 'deploy', host: 'localhost' },
+  ];
+  for (const remote of remotes) {
+    assert.deepEqual(validateDeployConfig({ adapter: 'rsync', rsync: { path: '/srv/www', ...remote } }, guardContext), { valid: true, errors: [] }, JSON.stringify(remote));
+  }
+});
+
+await check('deploy: a hostile user never reaches ssh, even past validate()', async () => {
+  const bin = fs.mkdtempSync(path.join(guardRoot, 'bin-'));
+  const record = path.join(bin, 'args.txt');
+  fs.writeFileSync(path.join(bin, 'ssh'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${record}'\nexit 255\n`, { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${bin}:${originalPath}`;
+  try {
+    await assert.rejects(
+      () => deploy({ adapter: 'rsync', rsync: { host: 'h', user: '-oProxyCommand=x', path: '/srv/www' } }, guardProject, { log: () => {} }),
+      /refused/,
+    );
+  } finally {
+    process.env.PATH = originalPath;
+  }
+  assert.equal(fs.existsSync(record), false, 'ssh was run');
+});
+
+await check('deploy: a local path starting with "-" is a path, not an rsync option', async () => {
+  // Only reachable with the override (a relative path is inside the project).
+  // Without `--`, rsync reads `--version` as its option, prints its version,
+  // exits 0, and the deploy "succeeds" having copied nothing.
+  fs.writeFileSync(path.join(guardProject, 'dist', 'index.html'), '<h1>hi</h1>');
+  const result = await deploy({ adapter: 'rsync', rsync: { path: '--version', allowDestructivePath: true } }, guardProject, { log: () => {} });
+  assert.equal(result.success, true);
+  assert.equal(fs.readFileSync(path.join(guardProject, '--version', 'index.html'), 'utf8'), '<h1>hi</h1>');
+});
+
 await check('validate: a port that is not a whole number is refused', () => {
   for (const port of ['22 -oProxyCommand=x', 0, 70000, 'abc']) {
     const result = validateDeployConfig({ adapter: 'rsync', rsync: { host: 'h', user: 'u', path: '/srv/www', port } }, guardContext);

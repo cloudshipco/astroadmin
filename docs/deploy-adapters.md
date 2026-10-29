@@ -39,6 +39,11 @@ AstroAdmin runs `rsync -av --delete dist/ <destination>`, adding `-z` and
 remote host. `--delete` removes files at the destination that are not in
 `dist/`, so point `path` at a directory that holds only the site. The key
 path is quoted, so it may contain spaces, and `port` must be a whole number.
+`user` may hold letters, digits, `.`, `_` and `-`; `host` is a host name, an
+IPv4 address, or an IPv6 address in brackets (`[2001:db8::1]`, which needs
+rsync 3: the `openrsync` macOS ships as `/usr/bin/rsync` does not parse it).
+Neither may start with `-`: rsync passes `user@host` to ssh as one argument,
+where a leading `-` would be read as an ssh option.
 
 Publish refuses a destination where `--delete` would destroy something, and
 says why, before it commits or builds anything:
