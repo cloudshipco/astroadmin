@@ -94,6 +94,7 @@
     "components/CmsImage.astro",
     "components/CmsVideo.astro",
     "components/cms-video-client.js",
+    "components/site-files.js",
     "README.md",
     "LICENSE"
   ]

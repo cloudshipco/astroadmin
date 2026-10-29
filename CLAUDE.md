@@ -547,8 +547,10 @@ queue, so the old body is never written back.
   overrides, a PNG fallback gets none, and a site's `image.service.config.avif.quality`
   wins (a second build). Then `astro dev --ignore-lock` (without the
   flag Astro 7 detaches and outlives the test): a file added after start renders as the
-  plain original (`data-cms-image="dev-original"`), and a malformed `%`-escape gives the
-  strict error, not a URIError (~15 s).
+  plain original (`data-cms-image="dev-original"`), also when `astro dev --root site` runs
+  from the directory above the site (public/ comes from Astro's root through
+  `astro:config/server` in `components/site-files.js`, never `process.cwd()`), and a
+  malformed `%`-escape gives the strict error, not a URIError (~15 s).
 
 - `bun tests/video-upload.test.js` — videos through the real upload route: MP4 and WebM
   (real ffmpeg fixtures in `tests/fixtures/video`, commands in the test header) install
@@ -588,7 +590,8 @@ queue, so the old body is never written back.
   attribute, the button), the poster optimised to WebP at `posterWidth`, missing video or
   poster failing the build; then in Chromium: it plays by itself, the button pauses and
   resumes it, and under reduced motion it never starts until Play, and it plays under
-  `astro dev` (the preview); with `base: '/blog'`
+  `astro dev` (the preview), run from the directory above the site with `--root`, where a
+  video and poster uploaded after start are found in the site's public/; with `base: '/blog'`
   local paths are served under it; a value that is not an .mp4/.webm path or URL (a typed
   bare name, a YouTube page) fails the build by name. ~20 s.
 

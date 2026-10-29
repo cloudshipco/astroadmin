@@ -23,7 +23,8 @@
  *   images; an external URL or SVG is used as is.
  * - A local `/images/` video or poster with no file under public/ fails the
  *   build with an error naming the content value. In `astro dev` (MODE, as
- *   CmsImage) a file uploaded after start is used as the original.
+ *   CmsImage) a file uploaded after start (in the site's public/, see
+ *   site-files.js) is used as the original.
  * - A local path (`/images/...`) is served under the site's `base`
  *   (`/blog/images/...` with `base: '/blog'`); the stored value is not.
  * - `class` and every other attribute (data-aa-field...) go on the <video>;
@@ -37,8 +38,7 @@
  */
 import { getImage } from 'astro:assets';
 import type { ImageMetadata } from 'astro';
-import { existsSync, statSync } from 'node:fs';
-import { join, normalize, sep } from 'node:path';
+import { existsInPublic, withBase } from './site-files.js';
 // The browser script as a file of its own (see cms-video-client.js): `?url`
 // emits it unprocessed and `no-inline` keeps Vite from turning a small one
 // into a data: URL. Either an inline script or a data: URL is blocked by a
@@ -78,20 +78,6 @@ const PUBLIC_IMAGES = import.meta.glob<{ default: ImageMetadata }>(
 );
 const OPTIMISABLE = /\.(jpe?g|png|webp|avif)$/i;
 
-/** True when `sitePath` (e.g. /images/x.mp4) is a file under public/. Dev only. */
-function existsInPublic(sitePath: string): boolean {
-  const publicDir = join(process.cwd(), 'public');
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(sitePath);
-  } catch {
-    return false;
-  }
-  const file = normalize(join(publicDir, decoded));
-  if (!file.startsWith(publicDir + sep)) return false;
-  return existsSync(file) && statSync(file).isFile();
-}
-
 function missing(kind: string, value: string): Error {
   return new Error(
     `CmsVideo: ${kind} "${value}" names a local file, but no file matches /public${value}. ` +
@@ -129,12 +115,6 @@ if (poster.startsWith('/images/') && OPTIMISABLE.test(poster)) {
   }
 } else {
   posterUrl = withBase(poster);
-}
-
-/** A root-relative path under the site's `base`; anything else as it is. */
-function withBase(sitePath: string): string {
-  if (!sitePath.startsWith('/') || sitePath.startsWith('//')) return sitePath;
-  return import.meta.env.BASE_URL.replace(/\/$/, '') + sitePath;
 }
 
 const srcPath = src.split(/[?#]/)[0];

@@ -390,17 +390,25 @@ import CmsVideo from 'astroadmin/components/CmsVideo.astro';
 
   // --- astro dev (the editor's preview) ---------------------------------
   // `?url&no-inline` must resolve in dev too, where Vite serves the file
-  // itself; the hosted preview is `astro dev`.
-  writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
+  // itself; the hosted preview is `astro dev`. Run as `astro dev --root site`
+  // from the directory above the site, so the working directory is not the
+  // site's root: a video uploaded after start is looked up in the SITE's
+  // public/ (it read `process.cwd()/public`, and reported the upload
+  // missing). `server.hmr: false`, as the hosted preview runs it: otherwise
+  // the watcher can add the upload to the glob before the request lands.
+  writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({ vite: { server: { hmr: false } } });\n");
   writeSiteFile('src/pages/index.astro', goodPage);
+  writeSiteFile('src/pages/late.astro', page('<CmsVideo src="/images/late.webm" poster="/images/late-still.png" id="late" />'));
+  const astroBin = path.relative(workDir, path.join(siteDir, 'node_modules/astro/bin/astro.mjs'));
+  const rootArgs = ['--root', path.relative(workDir, siteDir)];
   const port = await new Promise((resolve) => {
     const probe = net.createServer().listen(0, '127.0.0.1', () => {
       const { port: freePort } = probe.address();
       probe.close(() => resolve(freePort));
     });
   });
-  const dev = spawn('node', ['node_modules/astro/bin/astro.mjs', 'dev', '--port', String(port), '--host', '127.0.0.1', '--ignore-lock'], {
-    cwd: siteDir,
+  const dev = spawn('node', [astroBin, 'dev', ...rootArgs, '--port', String(port), '--host', '127.0.0.1', '--ignore-lock'], {
+    cwd: workDir,
     env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -427,11 +435,21 @@ import CmsVideo from 'astroadmin/components/CmsVideo.astro';
       assert.strictEqual(await tab.evaluate(() => document.querySelector('#loop').closest('[data-cms-video]').querySelector('[data-cms-video-toggle]').hidden), false);
       await tab.close();
     });
+    await check('in astro dev from another directory, a video and poster uploaded after start are found in the site\'s public/', async () => {
+      writeSiteFile('public/images/late.webm', fs.readFileSync(path.join(fixtures, 'clip.webm')));
+      writeSiteFile('public/images/late-still.png', await sharp({
+        create: { width: 64, height: 36, channels: 3, background: { r: 200, g: 40, b: 40 } },
+      }).png().toBuffer());
+      const lateHtml = await (await fetch(`http://127.0.0.1:${port}/late`)).text();
+      assert.match(lateHtml, /<source src="\/images\/late\.webm" type="video\/webm"/, `${lateHtml.slice(0, 1500)}\n${devOutput.slice(-2000)}`);
+      assert.match(lateHtml, /poster="\/images\/late-still\.png"/, lateHtml.slice(0, 1500));
+      assert.doesNotMatch(devOutput, /names a local file/, 'no missing-file error');
+    });
     await browser.close();
     browser = undefined;
   } finally {
     dev.kill();
-    spawnSync('node', ['node_modules/astro/bin/astro.mjs', 'dev', 'stop'], { cwd: siteDir, encoding: 'utf8' });
+    spawnSync('node', [astroBin, 'dev', 'stop', ...rootArgs], { cwd: workDir, encoding: 'utf8' });
   }
 
   console.log(`\n${passed} passed`);

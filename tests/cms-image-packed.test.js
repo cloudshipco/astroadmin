@@ -27,7 +27,9 @@
  * - in `astro dev`, a file added after start renders as the plain original
  *   (data-cms-image="dev-original"), and a malformed %-escape is the strict
  *   error, not a URIError;
- * - both dev checks hold with NODE_ENV=production too (DEV is then false).
+ * - both dev checks hold with NODE_ENV=production too (DEV is then false),
+ *   and when `astro dev --root site` runs from the directory above the site
+ *   (public/ is the site's, not the working directory's).
  *
  * Needs the network the first time (the site's install), then bun's cache.
  *
@@ -369,7 +371,13 @@ try {
     'astro.config.mjs',
     "import { defineConfig } from 'astro/config';\nexport default defineConfig({ vite: { server: { hmr: false } } });\n",
   );
-  async function devChecks(envLabel, envOverrides, lateName) {
+  /**
+   * `fromParent`: run `astro dev --root site` from the directory above the
+   * site, as a site kept in a subfolder of its repo is. The dev-original
+   * lookup must then use the site's root, not the process's working
+   * directory (it read `process.cwd()/public`, and reported the upload missing).
+   */
+  async function devChecks(envLabel, envOverrides, lateName, { fromParent = false } = {}) {
     const port = await new Promise((resolve) => {
       const probe = net.createServer().listen(0, '127.0.0.1', () => {
         const { port: freePort } = probe.address();
@@ -381,8 +389,11 @@ try {
       page(`<CmsImage src="/images/${lateName}" alt="Late" sizes="100vw" class="late" data-aa-field="late" />`),
     );
     writeSiteFile('src/pages/malformed.astro', page('<CmsImage src="/images/bad%E0%A4%A.jpg" alt="" sizes="100vw" />'));
-    const dev = spawn('node', ['node_modules/astro/bin/astro.mjs', 'dev', '--port', String(port), '--host', '127.0.0.1', '--ignore-lock'], {
-      cwd: siteDir,
+    const devCwd = fromParent ? workDir : siteDir;
+    const astroBin = path.relative(devCwd, path.join(siteDir, 'node_modules/astro/bin/astro.mjs'));
+    const rootArgs = fromParent ? ['--root', path.relative(devCwd, siteDir)] : [];
+    const dev = spawn('node', [astroBin, 'dev', ...rootArgs, '--port', String(port), '--host', '127.0.0.1', '--ignore-lock'], {
+      cwd: devCwd,
       env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1', ...envOverrides },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -433,11 +444,12 @@ try {
       // --ignore-lock keeps Astro 7 in the foreground as our child (without it
       // `astro dev` detaches and outlives the test); stop it either way.
       dev.kill();
-      spawnSync('node', ['node_modules/astro/bin/astro.mjs', 'dev', 'stop'], { cwd: siteDir, encoding: 'utf8' });
+      spawnSync('node', [astroBin, 'dev', 'stop', ...rootArgs], { cwd: devCwd, encoding: 'utf8' });
     }
   }
   await devChecks('', {}, 'late.png');
   await devChecks(' (NODE_ENV=production)', { NODE_ENV: 'production' }, 'late-prod.png');
+  await devChecks(' (run from the parent directory with --root)', {}, 'late-root.png', { fromParent: true });
 
   console.log(`\ncms-image-packed: ${passed} passed`);
 } finally {

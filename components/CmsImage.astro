@@ -21,7 +21,7 @@
  * - A local raster path with no glob entry:
  *     build: an error naming the content value;
  *     dev:   (`astro dev`, by MODE; see IS_ASTRO_DEV) if the file exists
- *            under public/, a plain <img> of the original,
+ *            under the site's public/ (site-files.js), a plain <img> of the original,
  *            marked data-cms-image="dev-original" (Vite re-reads the glob only
  *            on a restart or a file event, which `server.hmr: false` turns
  *            off, so a fresh upload is not in it yet); otherwise the error.
@@ -39,8 +39,7 @@
  */
 import { Picture, imageConfig } from 'astro:assets';
 import type { ImageMetadata } from 'astro';
-import { existsSync, statSync } from 'node:fs';
-import { join, normalize, sep } from 'node:path';
+import { existsInPublic } from './site-files.js';
 
 interface Props {
   src?: string;
@@ -110,20 +109,6 @@ const PUBLIC_IMAGES = import.meta.glob<{ default: ImageMetadata }>(
   { caseSensitive: false },
 );
 const OPTIMISABLE = /\.(jpe?g|png|webp|avif)$/i;
-
-/** True when `sitePath` (e.g. /images/x.jpg) is a file under public/. Dev only. */
-function existsInPublic(sitePath: string): boolean {
-  const publicDir = join(process.cwd(), 'public');
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(sitePath);
-  } catch {
-    return false; // a malformed escape (URIError): treat as missing
-  }
-  const file = normalize(join(publicDir, decoded));
-  if (!file.startsWith(publicDir + sep)) return false;
-  return existsSync(file) && statSync(file).isFile();
-}
 
 let image: ImageMetadata | undefined;
 let devOriginal = false;
