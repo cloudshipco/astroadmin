@@ -48,16 +48,31 @@ Fixes from the review:
 - the schema markers are defined once (`ui/schema-markers.js`);
 - numeric `file()` ids are found the way Astro finds them, and stay numbers.
 
-## Found and not done
+## Follow-ups after 1.10.0
 
-- Publish is blocked by any uncommitted change in the repository, even one
-  outside the site, because `pull --rebase` refuses. Worth an issue.
-- `stageGitPaths` stages the raw `git.paths`, not `getAllowedGitPaths`.
-- The files store cannot edit object-shaped `file()` JSON (`{ "<id>": {...} }`),
-  though Astro and the validator accept it.
-- With a custom `publicDir`, CmsImage and CmsVideo find nothing: their globs
-  are `/public/images`.
-- Closing a stacked modal unlocks page scroll while the modal under it is
-  still open. The modal stack could own scroll locking.
-- `openArrayEditor` may be dead code.
+On main, not yet released (housekeeping, 2026-10-29):
+- The modal stack owns page scroll locking (stacked modals no longer unlock
+  the page while one is still open).
+- The unreachable list modal (`openArrayEditor`) is removed.
+- The dashboard header is two rows below 64rem, with nothing clipped at 360px,
+  and has 40px targets on touch screens. The markdown toolbar's expand button
+  no longer covers a toolbar button.
+- Toasts and the publish-problems panel open under the header at every width
+  (`--topbar-bottom`). The toasts' inline styles became `.notification`
+  classes.
+
+Filed:
+- #83 publish refused for uncommitted changes outside the site;
+- #84 publish stages the raw `git.paths`;
+- #85 object-shaped `file()` JSON can't be edited;
+- #86 custom `publicDir`;
+- #87 short values shown as textareas;
+- #88 duplicate alt box.
+
+Still open, not filed:
 - A whole-list problem on an inline top-level list has no field mark.
+- At phone width the editor panel's 300px minimum leaves the preview 60-90px
+  wide. A phone layout for the whole page is separate work.
+- The dialogs that aren't on the modal stack (new entry, entry picker,
+  commit/publish, diff) each handle Escape themselves. Putting them on the
+  stack would give every modal one rule for Escape and scroll locking.
