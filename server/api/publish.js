@@ -28,18 +28,25 @@ import { resolveLiveUrl } from '../../ui/live-url.js';
 import { buildProblems } from '../utils/build-failure.js';
 import { withCheckoutExclusive } from '../utils/checkout-lock.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
-import { GIT_ENVIRONMENT } from '../utils/git-exec.js';
+import { GIT_ENVIRONMENT, SIMPLE_GIT_UNSAFE, hardenedConfig } from '../utils/git-exec.js';
 
 const router = express.Router();
 // (Helpers are exported for reuse by api/git.js — keep one definition.)
 
 /**
- * Every simple-git client the admin uses. simple-git 4 drops ambient GIT_*
- * variables unless allowed: the allowed ones are GIT_ENVIRONMENT
- * (utils/git-exec.js), shared with the execFile helpers.
+ * Every simple-git client the admin uses, with the rules the execFile
+ * helpers share (utils/git-exec.js): the hardening `-c` overrides, so no
+ * hook, fsmonitor, filter, gpg or ext:: command the repository names runs
+ * (#67), with the simple-git opt-ins that let them through its argument
+ * guard; and only GIT_ENVIRONMENT's ambient variables (simple-git 4 drops
+ * the other GIT_* ones). The filter overrides are read when the client is
+ * made, so make a client per request, not one for the process.
  */
 export function createGitClient(fullConfig) {
-  return simpleGit(fullConfig.paths.projectRoot, {
+  const projectRoot = fullConfig.paths.projectRoot;
+  return simpleGit(projectRoot, {
+    config: hardenedConfig(projectRoot),
+    unsafe: { ...SIMPLE_GIT_UNSAFE },
     allowEnvironment: [...GIT_ENVIRONMENT],
   });
 }

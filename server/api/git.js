@@ -22,6 +22,7 @@ import {
 } from './publish.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
 import { withCheckoutExclusive, withCheckoutWrite } from '../utils/checkout-lock.js';
+import { NO_DIFF_PROGRAMS } from '../utils/git-exec.js';
 
 const router = express.Router();
 
@@ -168,7 +169,7 @@ export async function scopedChangesBetween(git, fromCommit, toCommit, allowedGit
   if (pathspecs.length === 0 || fromCommit === toCommit) return changes;
 
   const output = await git.raw([
-    'diff', '--numstat', '-z', '--no-renames', '--relative', fromCommit, toCommit, '--', ...pathspecs,
+    'diff', ...NO_DIFF_PROGRAMS, '--numstat', '-z', '--no-renames', '--relative', fromCommit, toCommit, '--', ...pathspecs,
   ]);
   for (const record of output.split('\0')) {
     const match = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(record);
@@ -574,13 +575,13 @@ router.get('/diff', async (req, res) => {
 
     if (validatedFrom && validatedTo) {
       // Diff between two commits
-      diffResult = await git.diff(['--relative', validatedFrom, validatedTo, '--', ...pathspecs]);
+      diffResult = await git.diff([...NO_DIFF_PROGRAMS, '--relative', validatedFrom, validatedTo, '--', ...pathspecs]);
     } else if (validatedFrom) {
       // Diff from a specific commit to working tree
-      diffResult = await git.diff(['--relative', validatedFrom, '--', ...pathspecs]);
+      diffResult = await git.diff([...NO_DIFF_PROGRAMS, '--relative', validatedFrom, '--', ...pathspecs]);
     } else {
       // Diff of uncommitted changes (staged + unstaged)
-      diffResult = await git.diff(['--relative', 'HEAD', '--', ...pathspecs]);
+      diffResult = await git.diff([...NO_DIFF_PROGRAMS, '--relative', 'HEAD', '--', ...pathspecs]);
     }
 
     res.json({
@@ -620,7 +621,7 @@ router.get('/show', async (req, res) => {
 
     // Validate commit reference
     const ref = commit ? await validateCommitRef(git, commit) : 'HEAD';
-    const content = await git.show([showObjectSpec(ref, validatedFile)]);
+    const content = await git.show([...NO_DIFF_PROGRAMS, showObjectSpec(ref, validatedFile)]);
 
     res.json({
       success: true,
