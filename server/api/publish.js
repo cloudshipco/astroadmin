@@ -29,7 +29,7 @@ import { buildProblems } from '../utils/build-failure.js';
 import { withCheckoutExclusive } from '../utils/checkout-lock.js';
 import { filterDriverInUse } from '../utils/filter-attributes.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
-import { FETCH_PROGRAMS, GIT_PASSED_ENVIRONMENT, PUSH_PROGRAMS, SIMPLE_GIT_UNSAFE, gitEnvironment, hardenedConfig } from '../utils/git-exec.js';
+import { FETCH_PROGRAMS, GIT_PASSED_ENVIRONMENT, NO_DIFF_PROGRAMS, PUSH_PROGRAMS, SIMPLE_GIT_UNSAFE, gitEnvironment, hardenedConfig } from '../utils/git-exec.js';
 
 const router = express.Router();
 // (Helpers are exported for reuse by api/git.js — keep one definition.)
@@ -270,6 +270,17 @@ async function rebaseOntoUpstream(git, upstream) {
   }
   if (await isAncestor(git, upstreamHead, localHead)) return 'synced';
 
+  // `reset --keep` resets the index. A file staged as one version and
+  // changed since (not the editor's: its commit names its own paths) would
+  // lose the staged version, so that is refused like any other local change
+  // in the way. A wholly staged file only becomes unstaged: its text is in
+  // the working tree, which is kept.
+  const partlyStaged = await partlyStagedFiles(git);
+  if (partlyStaged.length > 0) {
+    console.error('Publish refused: files are staged and changed since, outside what the editor commits:', partlyStaged.join(', '));
+    return 'local-changes';
+  }
+
   const rebased = await rebaseInWorktree(git, localHead, upstreamHead, await forkPointRef(git, upstreamHead));
   if (rebased === null) return 'conflict';
 
@@ -285,6 +296,15 @@ async function rebaseOntoUpstream(git, upstream) {
   }
   console.log('✅ Rebased onto the latest changes');
   return 'synced';
+}
+
+/** Files whose staged version differs from both HEAD and the working tree. */
+async function partlyStagedFiles(git) {
+  const names = async (args) => new Set((await git.raw(['diff', ...NO_DIFF_PROGRAMS, '--name-only', '-z', '--no-renames', ...args])).split('\0').filter(Boolean));
+  const staged = await names(['--cached', 'HEAD']);
+  if (staged.size === 0) return [];
+  const changedSince = await names([]);
+  return [...staged].filter((file) => changedSince.has(file));
 }
 
 /**

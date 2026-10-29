@@ -229,6 +229,37 @@ try {
       });
     }
 
+    // Staged changes that are not the editor's survive the commit (it names
+    // its own paths), but `reset --keep` resets the index: a file staged as
+    // one version and edited since would lose the staged version.
+    await check(`${route}: a partly staged file outside the editor's paths is refused (409), and kept`, async () => {
+      developerPushes('other/notes.md', `notes from the developer (${route}, staged)\n`);
+      writeFile(repoRoot, 'README.md', '# staged version\n');
+      git(repoRoot, 'add', 'README.md');
+      writeFile(repoRoot, 'README.md', '# staged version, edited since\n');
+      assert.equal((await save(`Home (${route}, partly staged)`)).status, 200);
+      const remoteBefore = remoteHead();
+      const { status, body } = await send();
+      assert.equal(status, 409, JSON.stringify(body));
+      assert.equal(body.pushed, false);
+      assertNoServerText(body);
+      assert.equal(remoteHead(), remoteBefore, 'nothing pushed');
+      assert.equal(git(repoRoot, 'show', ':README.md'), '# staged version', 'the staged version is still staged');
+      assert.equal(readRepo('README.md'), '# staged version, edited since\n', 'the working copy is untouched');
+    });
+
+    await check(`${route}: a wholly staged file outside the editor's paths does not stop a publish, and keeps its text`, async () => {
+      developerPushes('other/notes.md', `notes from the developer (${route}, wholly staged)\n`);
+      writeFile(repoRoot, 'README.md', '# staged in full\n');
+      git(repoRoot, 'add', 'README.md');
+      assert.equal((await save(`Home (${route}, wholly staged)`)).status, 200);
+      const { status, body } = await send();
+      assert.equal(status, 200, JSON.stringify(body));
+      assert.equal(remoteHead(), localHead(), 'published');
+      assert.notEqual(tryGit(remoteDir, 'show', 'main:README.md'), '# staged in full', 'the staged file was not published');
+      assert.equal(readRepo('README.md'), '# staged in full\n', 'its text is kept (unstaged now)');
+    });
+
     // `git pull --rebase` used the remote-tracking branch's reflog
     // (--fork-point): a commit that was pushed and then force-pushed away
     // upstream is not replayed. A rebase onto the fetched head alone replays
