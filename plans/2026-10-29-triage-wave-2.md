@@ -134,3 +134,19 @@ exist are not an error).
 Before release: evaluate the NixOS module change; post the
 drafted issue comments and close #2, #3, #37, #40, #59, #61 (part 1), #64, #67,
 #69, #70, #73, #77, #83, #84, #86, #88, #89.
+
+## Review pass 1 (2026-10-29)
+
+Four fresh read-only reviewers on 32da2eb..main. Two HIGH, both regressions
+from this wave: the #83 worktree rebase replayed commits upstream had
+force-pushed away (no `--fork-point`), and a number cleared in the item modal
+came back (the #61 deletion happens inside readFields, so `extractItem`'s
+spread restored it). MEDIUM: LFS files recommitted as full bytes; merge
+drivers, `uploadpack`, `core.sshCommand` not neutralised; pnpm packages missed
+by #89; rsync `~user`; login limit per full IPv6 address; `trust proxy` 1 in
+production lets a client forge its address; doctor Ctrl-C leaves its build and
+folder; stale docs. Decisions: refuse LFS sites; delete `/api/git/pull`;
+`trust proxy` defaults to loopback with an override. Release: the whole wave as
+one release after the fixes (not a 1.10.1 hotfix); the npm release does not
+need the NixOS module change. Fix lanes A (publish/git), B (editor), C
+(server/auth/deploy), D (doctor/tests/docs, #90) running.
