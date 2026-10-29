@@ -315,6 +315,11 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   a command line) beside Astro lines whose id, `Location:` and image path are server paths
   gets codes and our sentences only, together and one leak at a time; the text is in the
   server log. On the pre-change code 8 of the single leaks reached the body.
+- `bun tests/publish-live-status.test.js` — after a push to a build-on-push host, the
+  dashboard polls the public page (`pollUntilLive`, extracted from dashboard.js, happy-dom,
+  fake clock): a page whose HTML changes is reported live in green; one that never changes
+  (a failed or slow host build, #54) or stays unreachable gets a plain warning that the
+  changes were sent but could not be confirmed live, never a success tick.
 - `bun tests/error-paths.test.js` — API errors send a fixed, route-specific message, over
   HTTP: an image() preview whose file vanishes after its stat() (sendFile's callback, not the
   error middleware), an unreadable `/images` file (the app error middleware), upload, delete,

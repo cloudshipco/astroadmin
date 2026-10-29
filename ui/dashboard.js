@@ -2171,7 +2171,8 @@ function showPublishStatus(message) {
   document.body.appendChild(el);
   return {
     update(msg, { type = 'info', link = null, autoDismissMs = null } = {}) {
-      el.style.background = type === 'success' ? '#22c55e' : type === 'error' ? '#ef4444' : '#667eea';
+      el.style.background = type === 'success' ? '#22c55e' : type === 'error' ? '#ef4444'
+        : type === 'warning' ? '#b45309' : '#667eea';
       el.textContent = msg;
       if (link) {
         el.appendChild(document.createTextNode(' '));
@@ -2209,7 +2210,13 @@ async function pollUntilLive(pagePath, preHash, status, liveUrl) {
       return;
     }
   }
-  status.update('✅ Published. Your changes should be live shortly.', { type: 'success', link: liveUrl, autoDismissMs: 10000 });
+  // Gave up without seeing the page change: the push happened, but a failed
+  // or slow build on the host looks exactly like this, so it is not a success.
+  status.update(
+    "Your changes have been sent to your site, but we couldn't confirm they are live yet. " +
+    "Check your site again in a few minutes. If they still don't appear, check your hosting dashboard.",
+    { type: 'warning', link: liveUrl, autoDismissMs: 30000 },
+  );
 }
 
 // Publish changes
