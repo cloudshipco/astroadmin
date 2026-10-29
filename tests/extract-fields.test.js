@@ -419,7 +419,7 @@ check('an optional literal that is not "" is not written where nothing is stored
   const form = render(schema, { title: 'T', blocks: [] });
   setupFormHandlers(form, () => {});
   form.querySelector('[name="title"]').value = 'After';
-  form.querySelector('#add-block-type').value = 'note';
+  form.querySelector('.add-block-type').value = 'note';
   form.querySelector('.add-block-btn').click();
   form.querySelector('[name="blocks[0].heading"]').value = 'New';
   equal(extractFormData(form, schema), { title: 'After', blocks: [{ type: 'note', heading: 'New' }] });
@@ -588,7 +588,7 @@ check('a number cleared in a block added since binding (unbound) is absent; its 
   const entry = { title: 'T', order: 1, blocks: [] };
   const form = render(COUNT_PAGE_SCHEMA, entry);
   setupFormHandlers(form, () => {});
-  form.querySelector('#add-block-type').value = 'note';
+  form.querySelector('.add-block-type').value = 'note';
   form.querySelector('.add-block-btn').click();
   numberControl(form, 'blocks[0].heading').value = 'New';
   // A new block starts its number at 0 (createEmptyBlock); clearing it is the edit.

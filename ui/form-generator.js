@@ -738,7 +738,7 @@ function generateBlocksField(name, schema, value, fullPath, idPrefix = '') {
       <div class="blocks-header">
         <label class="form-label">${getFieldLabel(name, schema)}</label>
         <div class="blocks-actions">
-          <select id="add-block-type" class="form-input form-input-sm">
+          <select class="form-input form-input-sm add-block-type" aria-label="Block type to add">
             <option value="">Add block...</option>
             ${availableTypes.map(type => `
               <option value="${escapeHtml(type)}">${escapeHtml(formatBlockType(type, blockTypes[type]))}</option>
@@ -1261,7 +1261,8 @@ const COLOUR_PLACEHOLDER = 'e.g. #1b2a4a';
  * the swatch cannot show (`var(--brand)`), renders a swatch marked
  * `data-no-colour` (drawn as "no colour" in ui/input.css) rather than a colour
  * the site may not be using: blank often means "the site's default". The
- * swatch has no name; only the text box is saved.
+ * swatch has no name; only the text box is saved. Nor an id: an id with no
+ * name is not moved when a block is reindexed, so a later block repeated it.
  */
 function generateColorField(name, schema, value, fullPath, id, nullableAttributes = '') {
   const colorValue = value === null || value === undefined ? '' : String(value);
@@ -1273,7 +1274,7 @@ function generateColorField(name, schema, value, fullPath, id, nullableAttribute
       <div class="color-picker-wrapper">
         <input
           type="color"
-          id="${id}_picker"
+          aria-label="Pick a colour for ${escapeHtml(fieldLabelText(name, schema))}"
           ${colourSwatchAttributes(colorValue)}
           class="color-picker-input"
         >
@@ -2310,7 +2311,9 @@ function setupBlockHandlers(formElement, onBlockChange) {
   formElement.addEventListener('click', (e) => {
     if (e.target.classList.contains('add-block-btn')) {
       const container = e.target.closest('.blocks-container');
-      const select = container.querySelector('#add-block-type');
+      // A class, not an id: every block list has one (a nested list, the item
+      // modal's), and ids must not repeat in the document.
+      const select = container.querySelector(':scope > .blocks-header .add-block-type');
       const blockType = select.value;
 
       if (!blockType) {

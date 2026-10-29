@@ -198,7 +198,7 @@ export const collections = {
         setValue(form, 'blocks[3].heading', 'No literal, edited');
       },
       'a new block added and left empty': (form) => {
-        form.querySelector('#add-block-type').value = 'note';
+        form.querySelector('.add-block-type, #add-block-type').value = 'note';
         form.querySelector('.add-block-btn').click();
         setValue(form, 'blocks[4].heading', 'New');
       },
