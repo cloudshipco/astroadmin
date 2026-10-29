@@ -146,7 +146,8 @@ over-redaction in every version of "show the output with server paths removed or
 
 Tests are standalone scripts under `tests/`, each run as its own process.
 `npm run test:unit` (`bun tests/run-unit.js [word...]`) runs the fast server-less
-ones in turn and prints a summary (~45 s); a new fast test goes in its list. The
+ones in turn and prints a summary (~95 s, 77 files, measured 2026-10-29); a new fast test
+goes in its list, and its header names every file it leaves out. The
 slow ones (full Astro builds, a browser) are run by name before a release, and the
 shelved SQLite store's are `npm run test:db`. Most run server-less and need env vars:
 
@@ -264,33 +265,34 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   `Bad Page`), and the site's own `node_modules/.astro` is byte-identical afterwards. Takes
   ~1-2 min (each publish runs a full `astro build`).
 - `bun tests/publish-sync.test.js` — publishing onto a site repo someone else also pushes to
-  (#57), over HTTP through the real app with a trivial check (~5 s): the commit route
+  (#57), over HTTP through the real app with a trivial check: the commit route
   (autoPush) rebases unstaged saves onto a moved remote and reports the rebased hash; a
   conflicting rebase is aborted and refused (409) on both routes, with no path or git text
   anywhere in the body; a rebase (stopped, or its state left on an attached branch), merge or
   unmerged files left by someone else are refused (409, `committed: false`) before anything
   is staged and left as they were (aborting an earlier rebase reset the branch to ITS start
   and dropped the new commit); an inherited `rebase.autoStash` leaves no markers; and a save
-  arriving mid-rebase waits, so the abort's hard reset cannot discard an acknowledged save;
+  arriving while a publish commits and moves the checkout waits, so it cannot land between
+  the commit and the move to the rebased commit (`reset --keep`), where it would be lost;
   likewise a save during `/api/git/pull` and an image-details update during publish's commit
   (the details the rebase brings in survive); `/api/git/pull` waits for a publish's check
   (the git lock, #59), and the commit route's refused check is a 422 that keeps the commit
   local. Timed by a `git` wrapper first on the server's PATH (before/after one subcommand)
   and an armable `build.check` the test releases, never by git hooks (the server disables
-  them) or sleeps, and each asserts the waiting request is still pending (~20 s). An upload in progress is
+  them) or sleeps, and each asserts the waiting request is still pending (~25 s). An upload in progress is
   never in the site (publish commits none of it; the finished image is installed whole; its
   staging folder is removed), and an abandoned upload leaves nothing and holds up nothing. Each check was seen red on the unfixed code.
 - `bun tests/git-paths-commit.test.js` — Publish and the commit route stage only git paths
   strictly inside the site (`getAllowedGitPaths`, server/utils/git-paths.js; one staging
   helper, `commitConfiguredPaths`): `'./'`, `'.'`, `''`, `'src/..'` commit nothing outside
   the real entries and `'../other'` commits no sibling, for a site in a subdirectory of its
-  repo (#84). ~2 s.
+  repo (#84). ~6 s.
 - `bun tests/publish-dirty-checkout.test.js` — publishing from a checkout holding someone's
   uncommitted changes outside what the editor commits (#83), both routes: an unrelated
   modified file no longer blocks a publish onto a moved remote and stays byte-identical; a
   modified file the remote also changes, or an untracked file where the remote adds one, is
   a fixed path-free 409 (`localChangesBody`) leaving the branch, the local commit and the
-  file as they were. Red with `reset --hard` in place of `--keep`. ~15 s, not in test:unit.
+  file as they were. Red with `reset --hard` in place of `--keep`. ~17 s, in test:unit.
 - `bun tests/git-environment.test.js` — git's environment (#64), through a real publish:
   `GIT_AUTHOR_*`/`GIT_COMMITTER_*` set the commit identity over the repo's user.name,
   `GIT_SSH_COMMAND` carries the push (an ssh:// remote whose "ssh" is a script), and an
@@ -299,7 +301,7 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   runs (#67): seven hooks, fsmonitor, a smudge/clean filter, textconv, diff.external, gpg
   signing and an ext:: push URL each write a marker; the control shows each fires under
   plain git; save, status, diff, show, revert, publish (including both worktrees), pull and
-  the commit route leave none. ~10 s.
+  the commit route leave none. ~14 s.
 - `bun tests/check-linked-styles.test.js` — the publish check builds a site whose packages
   ship `.astro` components with a `<style>` and a `<script>` (the real CmsVideo, and one a
   directory down), with the site and the check's TMPDIR under different top directories
@@ -534,9 +536,12 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
 - `bun tests/api-basics.test.js` — the basic HTTP surface on the real `createServer()` app:
   health, `/api/config` (no credential in it), 401s without a session, a wrong login sets
   no session, sign-in, collection listing, sign-out ends the session (#2). <1 s.
-- `bun tests/login-browser.test.js` — the sign-in pages in real Chromium (#77). ~2 s. Browser
-  tests take their Chromium from `tests/chromium-path.js` (CHROMIUM_PATH, else the newest
-  downloaded headless shell); playwright-core is pinned at 1.57.0 because 1.64.1 never exits
+- `bun tests/login-browser.test.js` — the sign-in pages in real Chromium (#77). ~2-3 s. Browser
+  tests take their Chromium from `tests/chromium-path.js` (CHROMIUM_PATH, else a headless
+  shell in Playwright's cache on macOS or Linux: the revision playwright-core's
+  browsers.json pins, else the newest). `image-serving` is in test:unit and FAILS without
+  one (`launchChromium` says how to get it: `npx playwright-core install
+  chromium-headless-shell`), never skips its security checks. playwright-core is pinned at 1.57.0 because 1.64.1 never exits
   after `browser.close()` with the downloaded shell.
 - `bun tests/dev-toolbar.test.js` — the integration hides Astro's dev toolbar in the
   preview AstroAdmin runs (ASTROADMIN_PROJECT_ROOT naming the site: `astroadmin dev`, the
@@ -746,7 +751,10 @@ queue, so the old body is never written back.
   `astro dev` (the preview), run from the directory above the site with `--root`, where a
   video and poster uploaded after start are found in the site's public/; with `base: '/blog'`
   local paths are served under it; a value that is not an .mp4/.webm path or URL (a typed
-  bare name, a YouTube page) fails the build by name. ~20 s.
+  bare name, a YouTube page) fails the build by name. A video is found on disk
+  (`existsInPublicExactCase` in `components/site-files.js`, case-exact even on macOS), never
+  through `import.meta.glob`, whose entries made Vite emit every video again under
+  `_astro/` (#90): the build's `_astro/` holds no `.mp4`/`.webm`. ~20 s.
 
 `tests/git-api.test.js` used to be a known red; it passes as of 2026-10-08 (checked at
 `74609bd` in a clean worktree).
@@ -757,7 +765,9 @@ queue, so the old body is never written back.
 `doctor-cli` (exit codes, `--json`, `--build`, the site's installed astro and never a fetched
 one; a failed build's details point at the output above, never a server log; the doctor
 builds under `<site>/node_modules/.cache`, since Astro 6.3 loses src/assets images when
-outDir is outside the root, #73; ~10 s), `doctor-publish` (the editor scans the publish check's own build in a child
+outDir is outside the root, #73, or in a self-ignoring `.astroadmin-doctor/` in a site with
+no node_modules of its own; SIGINT/SIGTERM during the build kill its process group, remove
+its folder and exit 130/143, never the CLI's global exit 0; ~20 s), `doctor-publish` (the editor scans the publish check's own build in a child
 process rooted at the check's worktree, so it reads the commit's entries; a scan stuck in a
 synchronous loop is killed at its cap; an error is "unavailable" with a fixed reason and the
 error in the server log, never a failed publish; `unoptimised-images` is command-line
@@ -765,7 +775,10 @@ only, absent from the editor scan but reported by `runDoctor`; ~15 s),
 `doctor-notice` (the editor notice, happy-dom) and `doctor-images` (unoptimised `/images/`
 originals in built HTML; CmsImage's prerequisites: the SITE's sharp, found by walking up
 `node_modules` from the site root, never Astro's nested copy, Astro >= 7, `cssTarget`; a
-`publicDir` other than `./public`, or unreadable, warns for CmsImage and CmsVideo, #86). Run each with `bun tests/doctor-<name>.test.js`.
+`publicDir` other than `./public`, or unreadable, warns for CmsImage and CmsVideo, #86; a
+template literal and `new URL('./public', import.meta.url)`, bare or in `fileURLToPath`,
+are read, and a config the doctor cannot read at all says so rather than "not a plain
+string"). Run each with `bun tests/doctor-<name>.test.js`.
 
 **The doctor and the publish check use synchronous fs, never `fs/promises`.** Under Bun 1.3.4
 on macOS an `fs/promises` call made while child processes start and exit can lose its completion
@@ -783,9 +796,11 @@ before imports), since `files` is now the default.
 `npm test` and `npm run test:unit` both run `bun tests/run-unit.js`. The live-server
 `tests/api.test.js` is gone (#2); its uncovered checks are `tests/api-basics.test.js`.
 
-**Every git process goes through `server/utils/git-exec.js`.** simple-git clients come from
-`createGitClient` (or `gitClientAt` for another worktree of the repo: simple-git refuses
-`-C`); anything else uses `runGit`/`runGitSync`; never `execFile('git')`. Both apply
+**Every git process goes through `server/utils/git-exec.js`'s settings.** simple-git
+clients come from `createGitClient` in `server/api/publish.js` (which builds them with
+git-exec's settings; its private `gitClientAt` opens another worktree of the repo, since
+simple-git refuses `-C`); anything else uses git-exec's `runGit`/`runGitSync`; never
+`execFile('git')`. Both apply
 `HARDENING_CONFIG` (`core.hooksPath=/dev/null`, `core.fsmonitor=false`,
 `commit.gpgSign=false`, `protocol.ext.allow=never`) and `filterDriverOverrides` (every
 configured `filter.<name>` set to empty commands, `required=false`; LFS files are committed
@@ -816,8 +831,8 @@ Two layers, deliberately unequal:
    reset or checkout there. The commit and the rebase run in ONE exclusive
    checkout hold (`server/utils/checkout-lock.js`, `commitInCheckout`): every write to the
    checkout (content store writes, revert/restore, image writes) takes a shared hold, so a
-   save waits rather than landing between the commit and the pull or mid-rebase, where
-   `rebase --abort`'s hard reset would discard it. Inside the hold, an unfinished rebase,
+   save waits rather than landing between the commit and the move to the rebased commit
+   (`reset --keep`), or after HEAD is read (a moved HEAD aborts the publish). Inside the hold, an unfinished rebase,
    merge or unmerged files refuse the publish (409) before anything is staged: they are
    someone else's, and aborting an earlier rebase resets to ITS starting point. Only our own
    conflicting rebase is aborted (409). `/api/git/pull` takes the exclusive hold too. Multer
@@ -864,7 +879,8 @@ octals, object-shaped `file()` JSON, `reference()`, locale variants). Astro is e
 construction. Any NEW route that pushes must go through `pushIfAstroAccepts`; there is
 deliberately no bare push endpoint.
 
-The worktree gets its own `node_modules` (a symlink per package) WITHOUT dot-directories
+The worktree gets its own `node_modules` (a symlink per package, or for a package shipping
+`.astro` files a real directory tree; see below) WITHOUT dot-directories
 other than `.bin`: Astro writes its content data store into `node_modules/.astro`, so
 linking the whole directory would let the check overwrite the running preview's store. A
 custom `cacheDir` inside `node_modules` that does NOT start with a dot would still be
