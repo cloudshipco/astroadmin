@@ -22,7 +22,7 @@
  * git (commit, checkout, worktree add, status, diff, pull, push), so a clean
  * result below is not a dead plant. Then through the real createServer() app:
  * save, status, diff, show, revert, publish (whose check runs `git worktree
- * add`), pull and the commit route, with markers asserted absent after each.
+ * add`) and the commit route, with markers asserted absent after each.
  * No --no-verify anywhere: hooks must be off because git is told so.
  *
  *   bun tests/git-hardening.test.js
@@ -384,20 +384,14 @@ try {
   await step('a push over HTTP asking for credentials (credential.helper, core.askPass)', () => publishVia(authUrl), notPublished);
   await step('a fetch and push over git:// (core.gitProxy)', () => publishVia('git://127.0.0.1:1/site.git', { fetchToo: true }), notPublished);
 
-  await step('pull', async () => {
+  await step('the commit route (commit, rebase onto a moved remote, push)', async () => {
     developerPushes('src/content/pages/about.md', page('About (developer 2)'));
-    return request('POST', '/api/git/pull', {});
-  }, ({ status, body }) => {
-    assert.equal(status, 200, JSON.stringify(body));
-    assert.match(fs.readFileSync(path.join(projectRoot, 'src/content/pages/about.md'), 'utf-8'), /About \(developer 2\)/);
-  });
-
-  await step('the commit route (commit and push)', async () => {
     assert.equal((await save('home', 'Home (committed)')).status, 200);
     return request('POST', '/api/git/commit', { message: 'Content commit' });
   }, ({ status, body }) => {
     assert.equal(status, 200, JSON.stringify(body));
     assert.match(git(remoteDir, 'show', 'main:src/content/pages/home.md'), /Home \(committed\)/);
+    assert.match(git(remoteDir, 'show', 'main:src/content/pages/about.md'), /About \(developer 2\)/, 'rebased onto the developer');
   });
 
   await step('a push to an ext:: URL the site config allows', async () => {

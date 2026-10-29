@@ -21,8 +21,8 @@ import {
   commitConfiguredPaths,
 } from './publish.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
-import { withCheckoutExclusive, withCheckoutWrite } from '../utils/checkout-lock.js';
-import { FETCH_PROGRAMS, NO_DIFF_PROGRAMS } from '../utils/git-exec.js';
+import { withCheckoutWrite } from '../utils/checkout-lock.js';
+import { NO_DIFF_PROGRAMS } from '../utils/git-exec.js';
 
 const router = express.Router();
 
@@ -146,53 +146,6 @@ export function scopeStatusRenames(renamed, repoPrefix, allowedGitPaths) {
 /** The configured git paths as literal pathspecs (relative to projectRoot). */
 function allowedPathspecs(allowedGitPaths) {
   return allowedGitPaths.filter(Boolean).map(literalPathspec);
-}
-
-/**
- * The files that changed between two commits, as the editor may see them:
- * projectRoot-relative and within the configured git paths, with line counts.
- * Asked of git with `--relative` and the git-path pathspecs rather than parsed
- * from a pull's diffstat, which names repo-root paths, writes a rename as
- * `{other => site/...}/x.md` and shortens a long path to `.../x.md`.
- * `--no-renames`: a rename across the site's edge is then an add or a delete
- * of the site's own file, and one within it both.
- * @returns {Promise<{files: string[], insertions: Record<string, number>, deletions: Record<string, number>, summary: {changes: number, insertions: number, deletions: number}}>}
- */
-export async function scopedChangesBetween(git, fromCommit, toCommit, allowedGitPaths) {
-  const changes = {
-    files: [],
-    insertions: {},
-    deletions: {},
-    summary: { changes: 0, insertions: 0, deletions: 0 },
-  };
-  const pathspecs = allowedPathspecs(allowedGitPaths);
-  if (pathspecs.length === 0 || fromCommit === toCommit) return changes;
-
-  const output = await git.raw([
-    'diff', ...NO_DIFF_PROGRAMS, '--numstat', '-z', '--no-renames', '--relative', fromCommit, toCommit, '--', ...pathspecs,
-  ]);
-  for (const record of output.split('\0')) {
-    const match = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(record);
-    if (!match) continue;
-    const [, added, removed, file] = match;
-    // A binary file is `-\t-`: listed, with no line counts.
-    const addedLines = added === '-' ? 0 : Number(added);
-    const removedLines = removed === '-' ? 0 : Number(removed);
-    changes.files.push(file);
-    changes.insertions[file] = addedLines;
-    changes.deletions[file] = removedLines;
-    changes.summary.insertions += addedLines;
-    changes.summary.deletions += removedLines;
-  }
-  changes.summary.changes = changes.files.length;
-  return changes;
-}
-
-/** The commit HEAD names, or the empty tree on an unborn branch. */
-async function headOrEmptyTree(git) {
-  const head = (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
-  if (head) return head;
-  return (await git.raw(['hash-object', '-t', 'tree', '/dev/null'])).trim();
 }
 
 /** A file path or commit the request named that the git API refuses (400). */
@@ -496,41 +449,6 @@ router.get('/log', async (req, res) => {
       success: false,
       error: 'Failed to get git log',
       message: 'The history could not be read; see the server log.',
-    });
-  }
-});
-
-/**
- * POST /api/git/pull
- * Pull latest changes from remote
- */
-router.post('/pull', async (req, res) => {
-  try {
-    const fullConfig = await getConfig();
-    const git = createGitClient(fullConfig);
-    // Under the git lock: a pull that moved HEAD during a publish's check would
-    // make the pushed commit differ from the checked one.
-    // And the checkout to itself: a save landing mid-merge could be overwritten.
-    // The files are read from git between the HEADs either side of the pull,
-    // never from the pull's own report, which names the whole repository.
-    const changes = await withGitLock(() => withCheckoutExclusive(async () => {
-      const before = await headOrEmptyTree(git);
-      await git.pull([...FETCH_PROGRAMS]);
-      const after = await headOrEmptyTree(git);
-      return scopedChangesBetween(git, before, after, getAllowedGitPaths(fullConfig));
-    }));
-
-    res.json({
-      success: true,
-      result: changes,
-      message: 'Pulled latest changes successfully',
-    });
-  } catch (error) {
-    console.error('Error pulling changes:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to pull changes',
-      message: 'The latest changes could not be pulled; see the server log.',
     });
   }
 });

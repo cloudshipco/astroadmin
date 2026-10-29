@@ -146,25 +146,10 @@ async function post(url, payload = {}) {
 console.log('\n🧪 Git routes with the site in a subdirectory (#68)\n' + '='.repeat(40));
 
 try {
-  await check('POST /api/git/pull lists only the site\'s files, site-relative', async () => {
-    const { status, body } = await post('/api/git/pull');
-    assert.equal(status, 200, JSON.stringify(body));
-    // The pull really happened (the instrument is not blind).
-    assert.ok(fs.readFileSync(path.join(repoRoot, 'other/notes.md'), 'utf-8').includes('edited upstream'));
-    assertNoLeak('pull', body);
-    const { files, insertions, deletions, summary } = body.result;
-    assert.deepEqual(sorted(files), sorted([
-      'src/content/pages/home.md',
-      `src/content/pages/${LONG_NAME}`,
-      'src/content/pages/pulled-in.md',
-      'src/content/pages/pulled-out.md',
-    ]));
-    for (const file of [...Object.keys(insertions), ...Object.keys(deletions)]) {
-      assert.ok(files.includes(file), `${file} counted but not listed`);
-    }
-    assert.ok(insertions['src/content/pages/home.md'] > 0, JSON.stringify(insertions));
-    assert.equal(summary.changes, files.length, JSON.stringify(summary));
-  });
+  // The upstream commits arrive as a person on the server would bring them
+  // in (the editor has no pull route; publishing rebases onto the upstream).
+  git(repoRoot, 'pull', '-q');
+  assert.ok(fs.readFileSync(path.join(repoRoot, 'other/notes.md'), 'utf-8').includes('edited upstream'), 'pulled');
 
   // Local changes: siblings and site files, staged renames both ways.
   writeFile(repoRoot, 'README.md', '# repository, SIBLING edit\n');

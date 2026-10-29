@@ -10,8 +10,9 @@
  *   - an inherited rebase.autoStash never leaves conflict markers behind;
  *   - a save that arrives while publish is committing and rebasing waits for
  *     it, so the abort's reset cannot discard it;
- *   - /api/git/pull waits for a publish's check (the git lock, #59), and the
- *     commit route's refused check is a 422 that keeps the commit local.
+ *   - the commit route waits for a publish's check (the git lock, #59), and
+ *     its own refused check is a 422 that keeps the commit local;
+ *   - there is no pull route (publishing rebases onto the upstream itself).
  *
  * Timed by barriers (a `git` wrapper on PATH, an armed check command), never
  * by git hooks, which the server disables.
@@ -407,48 +408,43 @@ try {
     }
   });
 
-  await check('a save made while /api/git/pull is merging waits for it', async () => {
-    developerPushes('src/content/pages/about.md', page('About (developer pull)'));
-    const barrier = installBarrier(['after', 'pull']);
-    try {
-      const pulling = post('/api/git/pull', {});
-      await barrier.reached();
-      const saving = save('home', 'Home (during pull)');
-      assert.ok(await stillPending(saving), 'the save waits for the pull');
-      barrier.release();
-      const [saved, pulled] = await Promise.all([saving, pulling]);
-      assert.equal(pulled.status, 200, JSON.stringify(pulled.body));
-      assert.equal(saved.status, 200);
-      assert.match(readSite('src/content/pages/about.md'), /About \(developer pull\)/, 'control: the pull landed');
-      assert.match(readSite('src/content/pages/home.md'), /Home \(during pull\)/);
-    } finally {
-      barrier.remove();
-      resetSite();
-    }
-  });
-
   // #59: the check runs outside the checkout hold (it builds in its own
-  // worktree), so only the git lock keeps a pull from moving HEAD between
-  // the commit that was checked and the push.
-  await check("/api/git/pull waits for a publish's check, so the commit checked is the one pushed", async () => {
+  // worktree), so only the git lock keeps another commit from moving HEAD
+  // between the commit that was checked and the push.
+  await check("the commit route waits for a publish's check, so the commit checked is the one pushed", async () => {
     assert.equal((await save('home', 'Home (checked)')).status, 200);
     const barrier = installBarrier(['check']);
     try {
       const publishing = publish();
       await barrier.reached();
       const checkedHead = localHead();
-      const pulling = post('/api/git/pull', {});
-      assert.ok(await stillPending(pulling), 'the pull waits for the publish');
+      assert.equal((await save('about', 'About (committed meanwhile)')).status, 200);
+      const committing = commitRoute();
+      assert.ok(await stillPending(committing), 'the commit waits for the publish');
       assert.equal(localHead(), checkedHead, 'HEAD has not moved under the check');
       barrier.release();
-      const [published, pulled] = await Promise.all([publishing, pulling]);
+      const published = await publishing;
       assert.equal(published.status, 200, JSON.stringify(published.body));
-      assert.equal(pulled.status, 200, JSON.stringify(pulled.body));
-      assert.equal(remoteHead(), checkedHead, 'the checked commit is what was pushed');
+      assert.equal(published.body.commit.hash, checkedHead, 'the checked commit is what was pushed');
+      const committed = await committing;
+      assert.equal(committed.status, 200, JSON.stringify(committed.body));
+      assert.equal(remoteHead(), localHead(), 'then the commit route pushed its own');
+      assert.ok(isAncestor(checkedHead, remoteHead()), 'on top of the published one');
     } finally {
       barrier.remove();
       resetSite();
     }
+  });
+
+  await check('there is no pull route: publishing rebases onto the upstream itself', async () => {
+    const response = await fetch(`${base}/api/git/pull`, {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json', ...sameOrigin },
+      body: '{}',
+    });
+    assert.equal(response.status, 404, await response.text());
+    // Control: the same router answers a route it has.
+    assert.equal((await commitRoute()).status, 400, 'the commit route is there (nothing to commit)');
   });
 
   await check('the commit route: a commit the check refuses is kept local and reported (422)', async () => {
