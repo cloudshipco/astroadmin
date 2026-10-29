@@ -11,21 +11,23 @@
  *
  * For a site on zod 4 and one on zod 3 (a child process each), through the
  * real app (its schema parser and block enrichment, its PUT and file writer),
- * a block holding .min(1).optional(), .optional(), .default('x'),
- * z.literal('').optional(), z.enum(['', 'a']).optional(), z.coerce.number()
- * .optional(), .min(1).catch('c').optional() and an optional object is saved
- * four ways by three renderers:
+ * a page and a block, each holding .min(1).optional(), .optional(),
+ * .default('x'), z.literal('').optional(), z.enum(['', 'a']).optional(),
+ * z.coerce.number().optional(), .min(1).catch('c').optional() and an optional
+ * object, are saved by three renderers:
  *   - base: ui/ at BLANK_OPTIONAL_BASE (`git archive`), unchanged
  *   - this checkout's ui/
  *   - a mutant: this checkout with the block exemption removed, so every
  *     optional "" in a block is dropped (the reverted change)
  * Scenarios: nothing edited (a positive control: no version can differ, since
  * every untouched value is restored), a sibling field in the block edited, a
- * new block added and left empty, and every matrix field cleared. Each file
- * this checkout writes must equal the base's, except for the changes listed
- * in DELIBERATE (each naming its path, the base's value and the new one).
- * The mutant must differ
- * somewhere, so the comparison is known to be able to fail.
+ * new block added and left empty, every block matrix field cleared, and every
+ * top-level matrix field cleared (#69: the top-level rule, every optional ""
+ * and {} the form produced left out, is kept, and pinned by name as well as
+ * by the base's bytes). Each file this checkout writes must equal the base's,
+ * except for the changes listed in DELIBERATE (each naming its path, the
+ * base's value and the new one). The mutant must differ somewhere, so the
+ * comparison is known to be able to fail.
  *
  *   bun tests/blank-optional-round-trip.test.js
  */
@@ -81,9 +83,7 @@ try {
   writeFile(path.join(projectRoot, 'package.json'), JSON.stringify({ type: 'module' }));
   writeFile(path.join(projectRoot, 'src/content.config.ts'), `import { defineCollection, z } from 'astro:content';
 import { glob } from 'astro/loaders';
-const note = z.object({
-  type: z.literal('note'),
-  heading: z.string(),
+const matrix = {
   minOpt: z.string().min(1).optional(),
   opt: z.string().optional(),
   defaulted: z.string().default('x'),
@@ -92,20 +92,22 @@ const note = z.object({
   meta: z.object({ note: z.string().optional() }).optional(),
   coerced: z.coerce.number().optional(),
   caught: z.string().min(1).catch('c').optional(),
-});
+};
+const note = z.object({ type: z.literal('note'), heading: z.string(), ...matrix });
 const spacer = z.object({ type: z.literal('spacer') });
 export const collections = {
   pages: defineCollection({
     loader: glob({ pattern: '**/*.json', base: './src/content/pages' }),
-    schema: z.object({ title: z.string(), blocks: z.array(z.discriminatedUnion('type', [note, spacer])) }),
+    schema: z.object({ title: z.string(), ...matrix, blocks: z.array(z.discriminatedUnion('type', [note, spacer])) }),
   }),
 };
 `);
 
-  // A filled block, a block stored with every optional empty or absent, and a
-  // block of another type.
+  // The same fields filled at the top level; a filled block, a block stored
+  // with every optional empty or absent, and a block of another type.
   const STORED = {
     title: 'Page',
+    minOpt: 'm', opt: 'o', defaulted: 'y', choice: 'a', meta: { note: 'n' }, coerced: 3, caught: 'k',
     blocks: [
       { type: 'note', heading: 'Full', minOpt: 'm', opt: 'o', defaulted: 'y', lit: '', choice: 'a', meta: { note: 'n' }, coerced: 3, caught: 'k' },
       { type: 'note', heading: 'Empties', opt: '', defaulted: '', lit: '', choice: '', meta: {} },
@@ -192,7 +194,19 @@ export const collections = {
           setValue(form, `blocks[0].${field}`, '');
         }
       },
+      // #69: at the top level every optional "" (and {}) the form produced is
+      // left out, `.default('x')` and z.coerce included: absent is the one
+      // value every optional key accepts (a template's `navLabel ?? title`
+      // reads it as unset). Pinned against the base AND by name (TOP_CLEARED).
+      'every top-level matrix field cleared': (form) => {
+        for (const field of MATRIX) {
+          if (field === 'lit') continue;
+          setValue(form, field, '');
+        }
+      },
     };
+    // What the top-level scenario must write, whatever the base did.
+    const TOP_CLEARED = { absent: ['minOpt', 'opt', 'defaulted', 'lit', 'choice', 'meta', 'coerced', 'caught'], kept: {} };
 
     // Where this checkout deliberately writes other bytes than the base: each
     // change names the path, the value the base wrote there (asserted, so a
@@ -244,6 +258,12 @@ export const collections = {
       try {
         if (scenario === 'nothing edited') {
           assert.equal(head.text, STORED_TEXT, 'control: the base writes an unedited entry back byte for byte');
+        }
+        if (scenario === 'every top-level matrix field cleared') {
+          const saved = JSON.parse(current.text);
+          for (const key of TOP_CLEARED.absent) assert.ok(!(key in saved), `a cleared optional ${key} at the top level is absent, not ${JSON.stringify(saved[key])}`);
+          for (const [key, value] of Object.entries(TOP_CLEARED.kept)) assert.deepStrictEqual(saved[key], value, `the stored ${key} is kept`);
+          assert.deepStrictEqual(saved.blocks, STORED.blocks, 'control: the blocks are untouched');
         }
         expected = expectedText(scenario, head.text);
         assert.equal(current.text, expected, DELIBERATE[scenario]
