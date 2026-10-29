@@ -43,9 +43,11 @@ export function generateForm(schema, data = {}) {
 
   const formHtml = [];
   const hiddenHtml = [];
+  const carriedAlts = carriedOverAlts(schema.properties || {}, data || {});
 
   for (const [fieldName, fieldSchema] of Object.entries(schema.properties || {})) {
-    const value = data[fieldName];
+    const carried = carriedAlts.get(fieldName);
+    const value = carried ? carried.value : data[fieldName];
 
     // Hidden fields are rendered as hidden inputs to preserve data. JSON-encode
     // every value, not just objects: a hidden input has no type to read back, so a
@@ -60,6 +62,7 @@ export function generateForm(schema, data = {}) {
     const fieldHtml = generateField(fieldName, fieldSchema, value, '', {
       siblingData: data,
       siblingProps: schema.properties,
+      originalPath: carried?.from ?? null,
     });
     formHtml.push(fieldHtml);
   }
@@ -88,15 +91,48 @@ export function generateFields(properties, data = {}, options = {}) {
   const { path = '', idPrefix = '', skip = [], pickerVariant = '' } = options;
   if (!properties) return '';
 
+  const carriedAlts = carriedOverAlts(properties, data || {});
   return Object.entries(properties)
     .filter(([key]) => !skip.includes(key))
-    .map(([key, schema]) => generateField(key, schema, data?.[key], path, {
-      siblingData: data || {},
-      siblingProps: properties,
-      idPrefix,
-      pickerVariant,
-    }))
+    .map(([key, schema]) => {
+      const carried = carriedAlts.get(key);
+      return generateField(key, schema, carried ? carried.value : data?.[key], path, {
+        siblingData: data || {},
+        siblingProps: properties,
+        idPrefix,
+        pickerVariant,
+        originalPath: carried ? (path ? `${path}.${carried.from}` : carried.from) : null,
+      });
+    })
     .join('\n');
+}
+
+/**
+ * Alt text an entry holds under the image picker's old built-in key
+ * (`bannerImageAlt`), for an image whose alt the schema now declares under
+ * another name (`bannerAlt`, #88). The built-in box is gone for such an
+ * image, so the text had no control and the next save dropped it. While the
+ * declared alt is empty, its control shows the old text and is bound to the
+ * old key (data-original-path): left alone it saves that text, so the first
+ * save moves it to the declared key.
+ * @returns {Map<string, {value: string, from: string}>} declared alt key ->
+ *   the text and the key it was stored under
+ */
+function carriedOverAlts(properties, data) {
+  const carried = new Map();
+  for (const [name, schema] of Object.entries(properties)) {
+    const fieldSchema = unwrapNullable(schema || {});
+    if (fieldSchema.type === 'object' || fieldSchema.type === 'array' || !isImageField(name, fieldSchema)) continue;
+    const declared = findAltProperty(name, properties);
+    const builtinKey = `${name}Alt`;
+    if (!declared || declared === builtinKey || carried.has(declared)) continue;
+    const oldText = data[builtinKey];
+    const current = data[declared];
+    if (typeof oldText !== 'string' || oldText === '') continue;
+    if (current !== undefined && current !== null && current !== '') continue;
+    carried.set(declared, { value: oldText, from: builtinKey });
+  }
+  return carried;
 }
 
 /**
@@ -282,7 +318,10 @@ function displayText(value) {
  * @param {string} [ctx.idPrefix] - Prefix for the element id
  */
 function generateField(name, rawSchema, value, path = '', ctx = {}) {
-  const { siblingData = {}, siblingProps = null, idPrefix = '', pickerVariant = '' } = ctx;
+  const { siblingData = {}, siblingProps = null, idPrefix = '', pickerVariant = '', originalPath = null } = ctx;
+  // Where this control's stored value lives, when not at its own path (see
+  // carriedOverAlts): what an untouched control saves.
+  const originalPathAttribute = originalPath ? `data-original-path="${escapeHtml(originalPath)}"` : '';
   const schema = unwrapNullable(rawSchema);
   const fullPath = path ? `${path}.${name}` : name;
   const id = idPrefix + fullPath.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
@@ -632,6 +671,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
             rows="${initialRows}"
             class="form-input textarea-autogrow"
             ${nullableAttributes}
+            ${originalPathAttribute}
             ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
             ${schema.required ? 'required' : ''}
           >${escapeHtml(content)}</textarea>
@@ -659,6 +699,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
         value="${escapeHtml(displayText(value))}"
         class="form-input"
         ${nullableAttributes}
+        ${originalPathAttribute}
         ${schema.placeholder ? `placeholder="${escapeHtml(schema.placeholder)}"` : ''}
         ${schema.required ? 'required' : ''}
       >
