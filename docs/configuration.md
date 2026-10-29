@@ -176,14 +176,24 @@ editor address in `ALLOWED_ORIGINS`.
 Publish runs these steps, in order:
 
 1. stage and commit the paths in `git.paths`;
-2. `git pull --rebase`, so the commit goes on top of anything pushed to the
-   site repo since (skipped when the branch has no upstream, and logged if it
-   fails for another reason). If someone else changed the same content, the
-   rebase is undone and the editor is told the changes were committed but
-   not published; someone with access to the checkout combines the two.
-   If the checkout is already in the middle of a rebase or merge (someone
-   left one unfinished on the server), publishing is refused before
-   anything is committed, and the editor's saves stay as they are;
+2. fetch the branch's upstream and rebase the commit onto what has been
+   pushed to the site repo since (skipped when the branch has no upstream;
+   a fetch that fails is logged, and a push onto a remote that moved on is
+   then refused and reported). The rebase runs in a throwaway worktree, and
+   the checkout is then moved to the result with `git reset --keep`, so
+   changes someone made on the server outside the editor, in files the
+   incoming commits do not touch, neither stop the publish nor are lost. If
+   someone else changed the same content, the rebase is undone and the
+   editor is told the changes were committed but not published; someone
+   with access to the checkout combines the two. If an incoming change
+   touches a file that has uncommitted changes on the server, or an
+   untracked file is in its way, nothing in the checkout moves and the
+   publish is refused (409) with the commit kept local: someone with access
+   to the checkout sorts those files out, then publishes again. If the
+   checkout is already in the middle of a rebase or merge (someone left one
+   unfinished on the server), publishing is refused before anything is
+   committed, and the editor's saves stay as they are. A repository that
+   uses Git LFS is refused;
 3. build the resulting commit with the site's Astro (the pre-push check,
    below);
 4. push that commit to the current branch's upstream;
