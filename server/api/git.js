@@ -14,6 +14,7 @@ import {
   checkRefusalBody,
   pushFailureBody,
   conflictBody,
+  localChangesBody,
   blockedBody,
   commitInCheckout,
   createGitClient,
@@ -426,6 +427,9 @@ router.post('/commit', async (req, res) => {
 
     if (outcome.conflict) {
       return res.status(409).json(conflictBody({ committed: true, commitResult: result }));
+    }
+    if (outcome.localChanges) {
+      return res.status(409).json(localChangesBody({ committed: true, commitResult: result }));
     }
     if (outcome.check && !outcome.check.success) {
       return res.status(422).json(await checkRefusalBody(outcome.check, { committed: true, commitResult: result }));

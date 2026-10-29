@@ -271,15 +271,16 @@ try {
 
   await check('POST /api/publish reports nothing outside the site', async () => {
     writeFile(repoRoot, `${PAGES}/home.md`, page('Home', 'Edited for publish.'));
-    // Siblings are left as they are by publishing, so clear them first: a
-    // rebase refuses a checkout with unstaged changes anywhere in the repo.
-    git(repoRoot, 'reset', '-q', '--', 'other', 'README.md', 'src');
-    git(repoRoot, 'checkout', '-q', '--', 'README.md', 'other', 'src');
-    git(repoRoot, 'clean', '-fdq', '--', 'other', 'src');
+    // The siblings' uncommitted changes stay where they are: the rebase runs
+    // in its own worktree (#83), so they no longer stop the publish.
+    const siblingsBefore = git(repoRoot, 'status', '--porcelain', '--', 'other', 'README.md', 'src');
+    assert.notEqual(siblingsBefore, '', 'control: siblings have uncommitted changes');
     const { status, body } = await post('/api/publish', { message: 'Editor publish' });
     assert.equal(status, 200, JSON.stringify(body));
     assert.equal(body.pushed, true, JSON.stringify(body));
     assertNoLeak('publish', body);
+    assert.equal(git(repoRoot, 'status', '--porcelain', '--', 'other', 'README.md', 'src'), siblingsBefore,
+      "the siblings' changes are untouched");
   });
 } finally {
   server.close();

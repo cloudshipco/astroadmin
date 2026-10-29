@@ -6,7 +6,7 @@
  * assets in files mode, assets only in db mode), and never the binary content
  * DB unless config.git.includeDb.
  *
- * Pipeline: [git commit/pull/push if enabled] -> build -> deploy (if adapter).
+ * Pipeline: [git commit/rebase/check/push if enabled] -> build -> deploy (if adapter).
  *
  * Mounted at /api/publish. The handler is also re-exported and aliased at
  * /api/git/publish (git.js) for backwards compatibility when git is enabled.
@@ -14,6 +14,7 @@
 
 import express from 'express';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import simpleGit from 'simple-git';
 import { recordDoctorAfterCheck } from '../doctor/editor.js';
@@ -76,32 +77,37 @@ export function withGitLock(task) {
  *
  * `commit` (optional) stages and commits, returning git's commit result or
  * null when there was nothing to commit; with `onlyIfCommitted`, nothing is
- * pulled, checked or pushed after a null. The commit and the pull run in ONE
- * exclusive checkout hold (commitInCheckout): the editor's saves are unstaged
- * edits until committed, and git refuses to pull over them (#57), so saves
- * wait rather than land in between or mid-rebase. The check runs after the
- * pull, outside the hold (it builds in its own worktree), so the combined
- * result is what is checked and pushed. A failed check leaves the commit
- * local and unpushed.
+ * rebased, checked or pushed after a null. The commit and the rebase run in
+ * ONE exclusive checkout hold (commitInCheckout): the editor's saves are
+ * unstaged edits until committed (#57), so saves wait rather than land in
+ * between or while the checkout moves. The rebase itself runs in a throwaway
+ * worktree and the checkout is then moved to it (rebaseOntoUpstream), so
+ * someone's uncommitted changes elsewhere in the repository do not stop it
+ * (#83). The check runs after that, outside the hold (it builds in its own
+ * worktree), so the combined result is what is checked and pushed. A failed
+ * check leaves the commit local and unpushed.
  *
  * Outcomes besides the check: `blocked` when the checkout already holds an
  * unfinished rebase or merge (nothing staged or committed; left as it was);
  * `conflict` when OUR rebase conflicted (it is aborted; the commit stays
+ * local); `localChanges` when the incoming changes touch files with
+ * uncommitted changes in the checkout (nothing moved; the commit stays
  * local); `pushError` when there IS somewhere to push and the push failed (a
  * site with no upstream simply is not pushed, which is not an error).
  * `commitResult.commit` is the commit's hash after the rebase.
  * @param {object} fullConfig
  * @param {import('simple-git').SimpleGit} git
  * @param {{commit?: () => Promise<object|null>, onlyIfCommitted?: boolean}} [options]
- * @returns {Promise<{blocked: boolean, conflict: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
+ * @returns {Promise<{blocked: boolean, conflict: boolean, localChanges: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
  */
 export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyIfCommitted = false } = {}) {
-  const outcome = { blocked: false, conflict: false, commitResult: null, pushed: false, pushError: null, check: null };
+  const outcome = { blocked: false, conflict: false, localChanges: false, commitResult: null, pushed: false, pushError: null, check: null };
   const prepared = await commitInCheckout(git, commit, {
     rebase: (commitResult) => !(onlyIfCommitted && !commitResult),
   });
   outcome.blocked = prepared.blocked;
   outcome.conflict = prepared.conflict;
+  outcome.localChanges = prepared.localChanges;
   outcome.commitResult = prepared.commitResult;
   if (!prepared.ready) return outcome;
   const { upstream } = prepared;
@@ -135,11 +141,11 @@ export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyI
  * (when `commit` is given) and, when `rebase(commitResult)` says so, rebase
  * onto the upstream. `ready` means go on to check and push. Also the commit
  * route's path when it does not push.
- * @returns {Promise<{blocked: boolean, conflict: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
+ * @returns {Promise<{blocked: boolean, conflict: boolean, localChanges: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
  */
 export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
   return withCheckoutExclusive(async () => {
-    const prepared = { blocked: false, conflict: false, ready: false, commitResult: null, upstream: null };
+    const prepared = { blocked: false, conflict: false, localChanges: false, ready: false, commitResult: null, upstream: null };
     const unfinished = await unfinishedOperation(git);
     if (unfinished) {
       // Someone else's (an interrupted publish, or a person on the box): not
@@ -151,8 +157,13 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
     if (commit) prepared.commitResult = await commit();
     if (!rebase(prepared.commitResult)) return prepared;
     prepared.upstream = await findUpstream(git);
-    if (prepared.upstream && !(await rebaseOntoUpstream(git))) {
+    const synced = prepared.upstream ? await rebaseOntoUpstream(git, prepared.upstream) : 'synced';
+    if (synced === 'conflict') {
       prepared.conflict = true;
+      return prepared;
+    }
+    if (synced === 'local-changes') {
+      prepared.localChanges = true;
       return prepared;
     }
     prepared.ready = true;
@@ -178,36 +189,102 @@ async function gitPath(git, name) {
 }
 
 /**
- * `git pull --rebase` onto the branch's upstream. Returns false when the
- * rebase stopped on a conflict, after aborting it, so the checkout is back on
- * its branch with the local commits intact (only ever OUR rebase: an earlier
- * one refuses the publish first). Any other failure (an unreachable remote,
- * uncommitted edits outside git.paths) is logged and the publish goes on: if
- * the remote has moved, the push is then rejected and reported.
- * `--no-autostash` overrides an inherited rebase.autoStash: popping the stash
- * can conflict after the rebase has succeeded, leaving markers in the site.
+ * Bring the checkout's branch onto its upstream: fetch the upstream branch,
+ * rebase the local commits onto it in a THROWAWAY worktree, then move the
+ * live checkout to the result with `git reset --keep`.
+ *
+ * `git pull --rebase` in the live checkout refused whenever ANY file had an
+ * unstaged change (a hand edit of README.md outside the site, or of the
+ * site's package.json outside git.paths), so a publish onto a remote that had
+ * moved on was always rejected at the push (#83). In the worktree nothing is
+ * modified, and `reset --keep` carries such changes across: it updates only
+ * the files that differ between the two commits, and refuses, changing
+ * nothing, when one of those has a local change or an untracked file is in
+ * the way. Unlike a hard reset or a checkout it cannot clobber local work.
+ *
+ * Returns 'synced' (also when there was nothing to bring in), 'conflict' when
+ * the rebase stopped (aborted in the worktree; the live checkout was never
+ * touched, so it is on its branch with the local commits intact), or
+ * 'local-changes' when the incoming changes touch files with uncommitted
+ * changes in the checkout (nothing moved; the commit stays local). A fetch
+ * that fails (an unreachable remote, a branch not on the remote yet) is
+ * logged and the publish goes on: if the remote has moved, the push is then
+ * rejected and reported. Runs inside the exclusive checkout hold, so no save
+ * lands while the checkout moves.
+ * @param {import('simple-git').SimpleGit} git
+ * @param {{remote: string, ref: string}} upstream
+ * @returns {Promise<'synced'|'conflict'|'local-changes'>}
  */
-async function rebaseOntoUpstream(git) {
+async function rebaseOntoUpstream(git, upstream) {
+  const localHead = (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
+  if (!localHead) return 'synced'; // an unborn branch has nothing to rebase
+  let upstreamHead;
   try {
-    await git.pull(['--rebase', '--no-autostash']);
-    console.log('✅ Pulled latest changes');
-    return true;
-  } catch (pullError) {
-    if (await rebaseInProgress(git)) {
-      console.error('Pull conflicted; aborting the rebase:', pullError.message);
-      await git.raw(['rebase', '--abort']);
-      return false;
-    }
-    console.log('Pull skipped:', pullError.message);
-    return true;
+    await git.raw(['fetch', '--no-tags', '--quiet', upstream.remote, upstream.ref]);
+    upstreamHead = (await git.raw(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])).trim();
+  } catch (fetchError) {
+    console.log('Fetch skipped:', fetchError.message);
+    return 'synced';
   }
+  if (await isAncestor(git, upstreamHead, localHead)) return 'synced';
+
+  const rebased = await rebaseInWorktree(git, localHead, upstreamHead);
+  if (rebased === null) return 'conflict';
+
+  // The exclusive hold keeps the editor out; this keeps a person's commit
+  // made meanwhile from being reset away.
+  const headNow = (await git.raw(['rev-parse', 'HEAD'])).trim();
+  if (headNow !== localHead) throw new Error(`HEAD moved from ${localHead} to ${headNow} during the rebase`);
+  try {
+    await git.raw(['reset', '--quiet', '--keep', rebased]);
+  } catch (resetError) {
+    console.error('Publish refused: uncommitted changes in the checkout are in files the upstream changes:', resetError.message);
+    return 'local-changes';
+  }
+  console.log('✅ Rebased onto the latest changes');
+  return 'synced';
 }
 
-async function rebaseInProgress(git) {
-  for (const name of ['rebase-merge', 'rebase-apply']) {
-    if (fs.existsSync(await gitPath(git, name))) return true;
+/**
+ * Whether `ancestor` is reachable from `descendant`. Not `merge-base
+ * --is-ancestor`: it answers by exit code alone, and simple-git does not
+ * reject a failing command that printed nothing to stderr, so it read as
+ * true every time.
+ */
+async function isAncestor(git, ancestor, descendant) {
+  const mergeBase = (await git.raw(['merge-base', ancestor, descendant]).catch(() => '')).trim();
+  return mergeBase === ancestor;
+}
+
+/**
+ * Rebase `localHead` onto `upstreamHead` in a throwaway detached worktree.
+ * Returns the rebased commit, or null when the rebase stopped on a conflict
+ * (after aborting it). The worktree is removed either way.
+ * `--no-autostash` and `--no-update-refs` override inherited config: the
+ * worktree has nothing to stash, and update-refs would move the live
+ * checkout's branch (it points at `localHead`) without its files.
+ */
+async function rebaseInWorktree(git, localHead, upstreamHead) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-rebase-'));
+  const worktreeDir = path.join(tempDir, 'worktree');
+  try {
+    await git.raw(['worktree', 'add', '--quiet', '--detach', worktreeDir, localHead]);
+    try {
+      await git.raw(['-C', worktreeDir, 'rebase', '--quiet', '--no-autostash', '--no-update-refs', upstreamHead]);
+    } catch (rebaseError) {
+      // Stopped on a conflict when there is a rebase to abort; any other
+      // failure (a refusing pre-rebase hook) is not the editor's clash.
+      const stopped = await git.raw(['-C', worktreeDir, 'rebase', '--abort']).then(() => true, () => false);
+      if (!stopped) throw rebaseError;
+      console.error('The rebase onto the upstream conflicted; aborted it:', rebaseError.message);
+      return null;
+    }
+    return (await git.raw(['-C', worktreeDir, 'rev-parse', 'HEAD'])).trim();
+  } finally {
+    await git.raw(['worktree', 'remove', '--force', worktreeDir]).catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    await git.raw(['worktree', 'prune']).catch(() => {});
   }
-  return false;
 }
 
 /**
@@ -261,6 +338,24 @@ export function conflictBody({ committed = false, commitResult = null } = {}) {
     error: 'Your changes clash with newer changes to the site',
     message: 'Your changes are saved and committed, but someone else has since changed the same content, '
       + 'so they were not published. Contact your site administrator to combine the two.',
+  };
+}
+
+/**
+ * Response body for newer changes to the site that touch files someone has
+ * changed on the server outside the editor (uncommitted, or new and
+ * untracked). Names no file: which ones is for the server log.
+ */
+export function localChangesBody({ committed = false, commitResult = null } = {}) {
+  return {
+    success: false,
+    committed,
+    pushed: false,
+    commit: commitInfo(commitResult),
+    error: 'Changes made on the server are in the way',
+    message: `${committed ? 'Your changes are saved and committed' : 'Your changes are saved'}, but were not published: `
+      + 'newer changes to the site touch files that were also changed directly on the server, outside the editor. '
+      + 'Contact your site administrator to sort those files out, then publish again.',
   };
 }
 
@@ -426,6 +521,9 @@ export async function publishHandler(req, res) {
       }
       if (outcome.conflict) {
         return res.status(409).json(conflictBody({ committed, commitResult }));
+      }
+      if (outcome.localChanges) {
+        return res.status(409).json(localChangesBody({ committed, commitResult }));
       }
       if (!outcome.check.success) {
         return res.status(422).json(await checkRefusalBody(outcome.check, { committed, commitResult }));
