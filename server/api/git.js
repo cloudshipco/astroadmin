@@ -22,7 +22,7 @@ import {
 } from './publish.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
 import { withCheckoutExclusive, withCheckoutWrite } from '../utils/checkout-lock.js';
-import { NO_DIFF_PROGRAMS } from '../utils/git-exec.js';
+import { FETCH_PROGRAMS, NO_DIFF_PROGRAMS } from '../utils/git-exec.js';
 
 const router = express.Router();
 
@@ -515,7 +515,7 @@ router.post('/pull', async (req, res) => {
     // never from the pull's own report, which names the whole repository.
     const changes = await withGitLock(() => withCheckoutExclusive(async () => {
       const before = await headOrEmptyTree(git);
-      await git.pull();
+      await git.pull([...FETCH_PROGRAMS]);
       const after = await headOrEmptyTree(git);
       return scopedChangesBetween(git, before, after, getAllowedGitPaths(fullConfig));
     }));

@@ -28,7 +28,7 @@ import { resolveLiveUrl } from '../../ui/live-url.js';
 import { buildProblems } from '../utils/build-failure.js';
 import { withCheckoutExclusive } from '../utils/checkout-lock.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
-import { GIT_ENVIRONMENT, SIMPLE_GIT_UNSAFE, hardenedConfig } from '../utils/git-exec.js';
+import { FETCH_PROGRAMS, GIT_PASSED_ENVIRONMENT, PUSH_PROGRAMS, SIMPLE_GIT_UNSAFE, gitEnvironment, hardenedConfig } from '../utils/git-exec.js';
 
 const router = express.Router();
 // (Helpers are exported for reuse by api/git.js — keep one definition.)
@@ -36,11 +36,13 @@ const router = express.Router();
 /**
  * Every simple-git client the admin uses, with the rules the execFile
  * helpers share (utils/git-exec.js): the hardening `-c` overrides, so no
- * hook, fsmonitor, filter, gpg or ext:: command the repository names runs
- * (#67), with the simple-git opt-ins that let them through its argument
- * guard; and only GIT_ENVIRONMENT's ambient variables (simple-git 4 drops
- * the other GIT_* ones). The filter overrides are read when the client is
- * made, so make a client per request, not one for the process.
+ * hook, fsmonitor, filter, merge driver, ssh command, credential helper,
+ * pack program, gpg or ext:: command the repository names runs (#67), with
+ * the simple-git opt-ins that let them through its argument guard; and the
+ * environment gitEnvironment() makes (only GIT_ENVIRONMENT's ambient GIT_*
+ * variables, GIT_TERMINAL_PROMPT=0). The named-command overrides are read
+ * when the client is made, so make a client per request, not one for the
+ * process.
  */
 export function createGitClient(fullConfig) {
   return gitClientAt(fullConfig.paths.projectRoot);
@@ -55,8 +57,8 @@ function gitClientAt(dir) {
   return simpleGit(dir, {
     config: hardenedConfig(dir),
     unsafe: { ...SIMPLE_GIT_UNSAFE },
-    allowEnvironment: [...GIT_ENVIRONMENT],
-  });
+    allowEnvironment: [...GIT_PASSED_ENVIRONMENT],
+  }).env(gitEnvironment());
 }
 
 async function getStagedFilesForPaths(git, gitPaths) {
@@ -243,7 +245,7 @@ async function rebaseOntoUpstream(git, upstream) {
   if (!localHead) return 'synced'; // an unborn branch has nothing to rebase
   let upstreamHead;
   try {
-    await git.raw(['fetch', '--no-tags', '--quiet', upstream.remote, upstream.ref]);
+    await git.raw(['fetch', ...FETCH_PROGRAMS, '--no-tags', '--quiet', upstream.remote, upstream.ref]);
     upstreamHead = (await git.raw(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])).trim();
   } catch (fetchError) {
     console.log('Fetch skipped:', fetchError.message);
@@ -360,7 +362,7 @@ async function findUpstream(git) {
  * refspec, push.default=matching, followTags), none of which were checked.
  */
 async function pushCheckedCommit(git, commit, upstream) {
-  await git.raw(['push', '--no-follow-tags', upstream.remote, `${commit}:${upstream.ref}`]);
+  await git.raw(['push', ...PUSH_PROGRAMS, '--no-follow-tags', upstream.remote, `${commit}:${upstream.ref}`]);
 }
 
 /** Response body for a checkout left mid-rebase or mid-merge by someone else. */

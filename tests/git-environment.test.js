@@ -70,6 +70,7 @@ git(tempRoot, 'init', '-q', '-b', 'main', decoyRepo);
 // git runs `$GIT_SSH_COMMAND [options] <host> "<git command> '<path>'"`.
 writeFile(tempRoot, 'fake-ssh.sh', `#!/bin/sh
 echo "$*" >> "${sshLog}"
+echo "env: GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-unset} GIT_ASKPASS=\${GIT_ASKPASS-unset} GIT_PROXY_COMMAND=\${GIT_PROXY_COMMAND-unset}" >> "${sshLog}"
 for last in "$@"; do :; done
 exec sh -c "$last"
 `);
@@ -88,6 +89,11 @@ process.env.GIT_AUTHOR_NAME = 'Hosted Author';
 process.env.GIT_AUTHOR_EMAIL = 'author@example.com';
 process.env.GIT_COMMITTER_NAME = 'Hosted Committer';
 process.env.GIT_COMMITTER_EMAIL = 'committer@example.com';
+// An HTTPS site's credentials come from the operator's askpass program (the
+// repository's credential helpers are not run); a prompt git would wait on
+// is never shown, whatever the ambient setting.
+process.env.GIT_ASKPASS = '/operator/askpass';
+process.env.GIT_TERMINAL_PROMPT = '1';
 
 const { createServer } = await import('../server/index.js');
 const { app } = await createServer();
@@ -143,6 +149,14 @@ try {
     const calls = fs.readFileSync(sshLog, 'utf-8');
     assert.match(calls, /git\.example\.invalid .*git-receive-pack/, calls);
     assert.equal(git(remoteDir, 'rev-parse', 'main'), git(projectRoot, 'rev-parse', 'HEAD'), 'the commit reached the remote');
+  });
+
+  await check("git never prompts on a terminal, and the operator's GIT_ASKPASS reaches it", async () => {
+    const envLines = fs.readFileSync(sshLog, 'utf-8').split('\n').filter((line) => line.startsWith('env: '));
+    assert.ok(envLines.length >= 2, `control: the fetch and the push were recorded: ${envLines.length}`);
+    for (const line of envLines) {
+      assert.equal(line, 'env: GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/operator/askpass GIT_PROXY_COMMAND=', line);
+    }
   });
 
   // Ambient GIT_* variables that are nobody's intent for the site: a stray

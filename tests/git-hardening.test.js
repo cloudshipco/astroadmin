@@ -10,6 +10,12 @@
  *     pre-push, reference-transaction;
  *   - core.fsmonitor, a smudge/clean filter driver (on *.md), a textconv
  *     driver (on *.md), diff.external, commit.gpgSign with a gpg.program;
+ *   - a merge driver (on *.md, from .git/info/attributes), the remote's
+ *     uploadpack and receivepack programs (git keeps the first value, so
+ *     these are overridden on the fetch and push command lines), and
+ *     core.sshCommand, credential.helper, core.askPass and core.gitProxy,
+ *     each reached by a push or fetch to an ssh://, http:// (a server that
+ *     asks for credentials) or git:// URL;
  *   - (last phase) protocol.ext.allow=always and an ext:: push URL.
  *
  * CONTROL first: the same plants in a copy of the fixture fire under plain
@@ -23,7 +29,7 @@
  */
 
 import assert from 'assert';
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -68,6 +74,15 @@ plant('gpg', `cat > /dev/null
 printf '\\n[GNUPG:] SIG_CREATED D 1 8 00 0 X\\n' >&2
 printf -- '-----BEGIN PGP SIGNATURE-----\\n\\nx\\n-----END PGP SIGNATURE-----\\n'`);
 plant('ext-transport', 'exit 1');
+// Called as `<driver> %A %O %B`: a working three-way merge, so the control's rebase goes on.
+plant('merge-driver', '/usr/bin/git merge-file "$1" "$2" "$3"');
+// Called through a shell as `<program> '<repository path>'`: the real thing.
+plant('upload-pack', 'exec /usr/bin/git upload-pack "$@"');
+plant('receive-pack', 'exec /usr/bin/git receive-pack "$@"');
+plant('ssh-command', 'exit 1');
+plant('credential-helper', 'cat > /dev/null; exit 0');
+plant('askpass', 'echo planted');
+plant('git-proxy', 'exit 1');
 
 /** Plant everything in a site checkout (its .git/hooks and .git/config). */
 function plantInto(checkout, tag = '') {
@@ -90,7 +105,37 @@ function plantInto(checkout, tag = '') {
   git(checkout, 'config', 'diff.external', wrap('external-diff'));
   git(checkout, 'config', 'commit.gpgSign', 'true');
   git(checkout, 'config', 'gpg.program', wrap('gpg'));
+  // A merge driver named by an attribute the repository keeps out of its tree.
+  writeFile(git(checkout, 'rev-parse', '--path-format=absolute', '--git-path', 'info'), 'attributes', '*.md merge=planted\n');
+  git(checkout, 'config', 'merge.planted.driver', `${wrap('merge-driver')} %A %O %B`);
+  // The programs run for a fetch and a push over a local path (or ssh).
+  git(checkout, 'config', 'remote.origin.uploadpack', wrap('upload-pack'));
+  git(checkout, 'config', 'remote.origin.receivepack', wrap('receive-pack'));
+  // ssh, HTTP credentials and the git:// proxy.
+  git(checkout, 'config', 'core.sshCommand', wrap('ssh-command'));
+  git(checkout, 'config', 'credential.helper', wrap('credential-helper'));
+  git(checkout, 'config', 'core.askPass', wrap('askpass'));
+  git(checkout, 'config', 'core.gitProxy', wrap('git-proxy'));
 }
+
+// An HTTPS remote that asks for credentials (and never accepts any). Its own
+// process: the control runs git synchronously, which would block a server here.
+const authServer = Bun.spawn(['bun', '-e', `
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('no', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="planted"' } }) });
+  console.log(server.port);
+`], { stdout: 'pipe' });
+const authPort = await (async () => {
+  const reader = authServer.stdout.getReader();
+  let text = '';
+  while (!text.includes('\n')) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error('the HTTP server did not start');
+    text += new TextDecoder().decode(value);
+  }
+  reader.releaseLock();
+  return Number(text.trim());
+})();
+const authUrl = `http://127.0.0.1:${authPort}/site.git`;
 const fired = (tag = '') => fs.readdirSync(markers).filter((name) => (tag ? name.startsWith(tag) : !name.startsWith('control-'))).map((name) => name.slice(tag.length)).sort();
 const clearMarkers = () => {
   for (const name of fs.readdirSync(markers)) fs.rmSync(path.join(markers, name));
@@ -115,6 +160,10 @@ export const collections = {
 `);
 writeFile(projectRoot, 'src/content/pages/home.md', page('Home'));
 writeFile(projectRoot, 'src/content/pages/about.md', page('About'));
+// Long enough that a title edit and a last-line edit merge cleanly.
+const MERGE_BODY = 'One.\n\nTwo.\n\nThree.\n\nFour.\n';
+const mergePage = (title, body = MERGE_BODY) => `---\ntitle: ${title}\n---\n${body}`;
+writeFile(projectRoot, 'src/content/pages/merge.md', mergePage('Merge'));
 git(projectRoot, 'init', '-q', '-b', 'main');
 git(projectRoot, 'config', 'user.name', 'Editor');
 git(projectRoot, 'config', 'user.email', 'editor@example.com');
@@ -165,7 +214,26 @@ async function check(name, fn) {
   plain('commit', '-q', '-m', 'control');
   plain('worktree', 'add', '-q', '--detach', path.join(tempRoot, 'control-worktree'), 'HEAD');
   developerPushes('src/content/pages/about.md', page('About (for control)'));
+  // Both sides change merge.md, so the rebase merges it (the merge driver).
+  writeFile(controlSite, 'src/content/pages/merge.md', mergePage('Merge (control)'));
+  plain('commit', '-qam', 'control merge');
+  developerPushes('src/content/pages/merge.md', mergePage('Merge', MERGE_BODY.replace('Four.', 'Four (developer).')));
   plain('pull', '-q', '--rebase');
+  assert.match(fs.readFileSync(path.join(controlSite, 'src/content/pages/merge.md'), 'utf-8'), /Merge \(control\)[^]*Four \(developer\)/,
+    'control: the planted merge driver merged both sides');
+  // Transports that run a command of the repository's choosing.
+  const failing = (...args) => {
+    try {
+      plain(...args);
+    } catch {
+      // each fails after its plant has run
+    }
+  };
+  failing('push', '-q', 'ssh://127.0.0.1:1/site.git', 'HEAD:refs/heads/control');
+  failing('fetch', '-q', 'git://127.0.0.1:1/site.git');
+  // Async: the HTTP server is a child process, but a prompt must not block this one.
+  await new Promise((resolve) => execFile('/usr/bin/git', ['push', '-q', authUrl, 'HEAD:refs/heads/control'],
+    { cwd: controlSite, env: { ...cleanEnv(), GIT_TERMINAL_PROMPT: '0' } }, () => resolve()));
   plain('push', '-q', 'origin', 'HEAD:refs/heads/control');
   developerPushes('src/content/pages/about.md', page('About (for control, 2)'));
   plain('fetch', '-q');
@@ -180,6 +248,7 @@ async function check(name, fn) {
   await check('control: every plant fires under plain git', async () => {
     const expected = [
       ...HOOKS.map((hook) => `hook-${hook}`), 'fsmonitor', 'smudge', 'clean', 'textconv', 'external-diff', 'gpg', 'ext-transport',
+      'merge-driver', 'upload-pack', 'receive-pack', 'ssh-command', 'credential-helper', 'askpass', 'git-proxy',
     ].sort();
     assert.deepEqual(fired("control-"), expected, `fired: ${fired("control-").join(", ")}`);
   });
@@ -282,6 +351,39 @@ try {
     assert.match(git(remoteDir, 'show', 'main:src/content/pages/about.md'), /About \(developer\)/, 'rebased onto the developer');
   });
 
+  await step('publish with a three-way merge in the rebase (merge driver)', async () => {
+    const mergeFile = 'src/content/pages/merge.md';
+    git(developerClone, 'pull', '-q', '--rebase');
+    developerPushes(mergeFile, fs.readFileSync(path.join(developerClone, mergeFile), 'utf-8').replace('One.', 'One (developer).'));
+    // The editor keeps the body it has and changes the title.
+    const body = fs.readFileSync(path.join(projectRoot, mergeFile), 'utf-8').split('---\n').slice(2).join('---\n');
+    const saved = await request('POST', '/api/content/pages/merge', { data: { title: 'Merge (editor)' }, body, type: 'content' });
+    assert.equal(saved.status, 200);
+    return request('POST', '/api/publish', { message: 'Merge update' });
+  }, ({ status, body }) => {
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.match(git(remoteDir, 'show', 'main:src/content/pages/merge.md'), /Merge \(editor\)[^]*One \(developer\)/,
+      'both sides merged, by git itself');
+  });
+
+  /** Publish with the remote at `url` (push only, or fetch and push), then put it back. */
+  const publishVia = async (url, { fetchToo = false } = {}) => {
+    const key = fetchToo ? 'remote.origin.url' : 'remote.origin.pushurl';
+    git(projectRoot, 'config', key, url);
+    try {
+      assert.equal((await save('home', `Home (${url})`)).status, 200);
+      return await request('POST', '/api/publish', { message: `Push to ${url}` });
+    } finally {
+      if (fetchToo) git(projectRoot, 'config', key, remoteDir);
+      else git(projectRoot, 'config', '--unset', key);
+    }
+  };
+  const notPublished = ({ status, body }) => assert.equal(status, 502, JSON.stringify(body));
+
+  await step('a push over ssh (core.sshCommand)', () => publishVia('ssh://127.0.0.1:1/site.git'), notPublished);
+  await step('a push over HTTP asking for credentials (credential.helper, core.askPass)', () => publishVia(authUrl), notPublished);
+  await step('a fetch and push over git:// (core.gitProxy)', () => publishVia('git://127.0.0.1:1/site.git', { fetchToo: true }), notPublished);
+
   await step('pull', async () => {
     developerPushes('src/content/pages/about.md', page('About (developer 2)'));
     return request('POST', '/api/git/pull', {});
@@ -314,6 +416,7 @@ try {
   failed++;
 } finally {
   server.close();
+  authServer.kill();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 process.exitCode = failed > 0 ? 1 : 0;
