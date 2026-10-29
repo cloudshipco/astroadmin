@@ -385,9 +385,11 @@ try {
   await check('a save made while publish is rebasing waits, so the abort cannot discard it', async () => {
     developerPushes('src/content/pages/home.md', page('Home (developer 4)'));
     assert.equal((await save('home', 'Home (first save)')).status, 200);
-    // `git pull --rebase` has stopped on the conflict (the rebase in
-    // progress, not yet aborted): the barrier holds publish there.
-    const barrier = installBarrier(['after', 'pull']);
+    // The rebase (in its throwaway worktree, #83) has stopped on the
+    // conflict and is not yet aborted: the barrier holds publish there. The
+    // abort is a `rebase` too; it passes, since the barrier is released by
+    // then.
+    const barrier = installBarrier(['after', 'rebase']);
     try {
       const publishing = publish();
       await barrier.reached();

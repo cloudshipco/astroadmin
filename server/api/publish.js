@@ -43,9 +43,17 @@ const router = express.Router();
  * made, so make a client per request, not one for the process.
  */
 export function createGitClient(fullConfig) {
-  const projectRoot = fullConfig.paths.projectRoot;
-  return simpleGit(projectRoot, {
-    config: hardenedConfig(projectRoot),
+  return gitClientAt(fullConfig.paths.projectRoot);
+}
+
+/**
+ * A client rooted at `dir` with the same rules. A command for another
+ * working tree of the repository (the rebase's throwaway worktree) gets its
+ * own client: simple-git refuses `-C` without an unsafe opt-in.
+ */
+function gitClientAt(dir) {
+  return simpleGit(dir, {
+    config: hardenedConfig(dir),
     unsafe: { ...SIMPLE_GIT_UNSAFE },
     allowEnvironment: [...GIT_ENVIRONMENT],
   });
@@ -284,17 +292,18 @@ async function rebaseInWorktree(git, localHead, upstreamHead) {
   const worktreeDir = path.join(tempDir, 'worktree');
   try {
     await git.raw(['worktree', 'add', '--quiet', '--detach', worktreeDir, localHead]);
+    const worktreeGit = gitClientAt(worktreeDir);
     try {
-      await git.raw(['-C', worktreeDir, 'rebase', '--quiet', '--no-autostash', '--no-update-refs', upstreamHead]);
+      await worktreeGit.raw(['rebase', '--quiet', '--no-autostash', '--no-update-refs', upstreamHead]);
     } catch (rebaseError) {
       // Stopped on a conflict when there is a rebase to abort; any other
       // failure (a refusing pre-rebase hook) is not the editor's clash.
-      const stopped = await git.raw(['-C', worktreeDir, 'rebase', '--abort']).then(() => true, () => false);
+      const stopped = await worktreeGit.raw(['rebase', '--abort']).then(() => true, () => false);
       if (!stopped) throw rebaseError;
       console.error('The rebase onto the upstream conflicted; aborted it:', rebaseError.message);
       return null;
     }
-    return (await git.raw(['-C', worktreeDir, 'rev-parse', 'HEAD'])).trim();
+    return (await worktreeGit.raw(['rev-parse', 'HEAD'])).trim();
   } finally {
     await git.raw(['worktree', 'remove', '--force', worktreeDir]).catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
