@@ -180,6 +180,50 @@ const home = await getEntry('pages', 'home');
     assert.match(byId['click-to-edit-coverage'].message, /1 of 1/);
   });
 
+  // A site whose installed "astro" is a script that fails as told: what the
+  // report says about a failed build, without a real Astro.
+  const failingBuildSite = (name, script) => {
+    const site = makeSite(name, HOSTED);
+    fs.rmSync(path.join(site, 'node_modules'));
+    writeFile(site, 'node_modules/astro/package.json', JSON.stringify({ name: 'astro', version: '7.0.0', type: 'module', bin: { astro: 'fail.js' } }));
+    writeFile(site, 'node_modules/astro/fail.js', script);
+    return site;
+  };
+
+  await checkAsync('a failed build\'s details point at the output above, never a server log (#73)', async () => {
+    const noCode = failingBuildSite('build-fails-no-code', "console.error('something went wrong'); process.exit(1);\n");
+    const withCode = failingBuildSite('build-fails-unknown-code', "console.error('[SomethingOddHappened] it broke'); process.exit(1);\n");
+    for (const site of [noCode, withCode]) {
+      const run = doctorBuilding(site);
+      const build = JSON.parse(run.stdout).results.find((result) => result.id === 'build-runs');
+      assert.equal(build.severity, 'fail', JSON.stringify(build));
+      // Positive control: the doctor ran this site's script and printed its output.
+      assert.match(run.stderr, /something went wrong|\[SomethingOddHappened\]/, run.stderr);
+      assert.ok(build.details.length > 0, JSON.stringify(build));
+      assert.doesNotMatch(JSON.stringify(build), /server log/i, JSON.stringify(build));
+      assert.match(build.details.join(' '), /output is above/, JSON.stringify(build));
+      // The build's output folder is cleaned up.
+      const cache = path.join(site, 'node_modules', '.cache');
+      const leftovers = fs.existsSync(cache) ? fs.readdirSync(cache).filter((entry) => entry.startsWith('astroadmin-doctor-')) : [];
+      assert.deepEqual(leftovers, []);
+    }
+    // The editor's wording is unchanged (the publish refusal has no output to point at).
+    const { buildProblems } = await import('../server/utils/build-failure.js');
+    assert.match(buildProblems('nothing useful').map((problem) => problem.message).join(' '), /see the server log/);
+    assert.match(buildProblems('[SomethingOddHappened] x').map((problem) => problem.message).join(' '), /see the server log/);
+  });
+
+  await checkAsync('the doctor builds into a folder inside the site (node_modules/.cache), even when the temp directory is on its filesystem (#73)', async () => {
+    // A proxy for #73: Astro 6.3 loses src/assets images when outDir is
+    // outside the project root, which this repo's Astro 7 does not reproduce.
+    const { doctorOutDirParent } = await import('../server/doctor/checks.js');
+    const site = failingBuildSite('out-dir-parent', 'process.exit(1);\n');
+    const sameFilesystemTemp = fs.mkdtempSync(path.join(path.dirname(site), 'same-fs-temp-'));
+    assert.equal(fs.statSync(sameFilesystemTemp).dev, fs.statSync(site).dev, 'the condition under test');
+    assert.equal(doctorOutDirParent(site, sameFilesystemTemp), path.join(site, 'node_modules', '.cache'));
+    assert.equal(doctorOutDirParent(site), path.join(site, 'node_modules', '.cache'));
+  });
+
   await checkAsync('an --build directory with no HTML fails, and the built checks do not pass', async () => {
     const site = makeSite('empty-build', HOSTED);
     fs.mkdirSync(path.join(site, 'empty-dist'));

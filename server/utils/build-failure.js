@@ -44,6 +44,7 @@ const execFileAsync = promisify(execFile);
 
 /** What the editor is told when the output carries no error code. */
 export const NO_CODE_MESSAGE = "The site's build failed without naming an error; see the server log.";
+const SERVER_LOG_HINT = 'see the server log';
 
 /** The most entries a refusal lists (and validates). */
 const MAX_ENTRIES = 20;
@@ -115,22 +116,26 @@ export function findErrorCodes(output) {
 /**
  * The sentence for one code.
  * @param {string} code - an identifier from findErrorCodes
+ * @param {string} [outputHint] - where the reader finds the output
  */
-export function describeCode(code) {
+export function describeCode(code, outputHint = SERVER_LOG_HINT) {
   if (Object.hasOwn(CODE_SENTENCES, code)) return CODE_SENTENCES[code];
-  return `Astro refused the build (${code}); see the server log.`;
+  return `Astro refused the build (${code}); ${outputHint}.`;
 }
 
 /**
  * The problems an editor is shown for a failed build's output: one per code,
  * or one fixed sentence when there is none. Never any text of the output.
+ * `outputHint` says where the output is: the server log for the editor, the
+ * terminal for the doctor (which prints the output to its own stderr).
  * @param {string} output
+ * @param {string} [outputHint]
  * @returns {Array<{code: string|null, message: string}>}
  */
-export function buildProblems(output) {
+export function buildProblems(output, outputHint = SERVER_LOG_HINT) {
   const codes = findErrorCodes(output);
-  if (codes.length === 0) return [{ code: null, message: NO_CODE_MESSAGE }];
-  return codes.map((code) => ({ code, message: describeCode(code) }));
+  if (codes.length === 0) return [{ code: null, message: `The site's build failed without naming an error; ${outputHint}.` }];
+  return codes.map((code) => ({ code, message: describeCode(code, outputHint) }));
 }
 
 /**

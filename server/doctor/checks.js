@@ -25,7 +25,6 @@
 // hanging the process at 0% CPU. These paths run git and builds, so they use
 // the sync calls (small files, bounded walks).
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import {
   buildEnvironment,
@@ -70,6 +69,9 @@ const MIN_ASTRO = '7.0.0';
 // The formats CmsImage optimises; a plain <img> of one of them is fixable.
 const OPTIMISABLE_IMAGE = /\.(jpe?g|png|webp|avif)$/i;
 const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
+// The doctor prints a failed build's output to its own stderr, just above the
+// report: there is no server log to send the site's owner to.
+const DOCTOR_OUTPUT_HINT = 'its output is above (stderr)';
 // Below this share of text fields reachable by a click, coverage warns.
 export const COVERAGE_PASS_SHARE = 0.8;
 const MAX_LISTED = 10;
@@ -79,23 +81,20 @@ const percent = (part, whole) => `${Math.round((part / whole) * 100)}%`;
 const listSome = (items) => items.slice(0, MAX_LISTED).concat(items.length > MAX_LISTED ? [`… and ${items.length - MAX_LISTED} more`] : []);
 
 /**
- * Where the doctor's build output goes: the system temp directory when it is on
- * the site's filesystem, else a directory inside the site's node_modules.
- * Astro moves prerendered assets from the site's .astro into the outDir with
- * rename(), which fails with EXDEV across filesystems (a tmpfs /tmp on Linux,
- * a VM's shared folder). Exported for the tests.
+ * Where the doctor's build output goes: a directory inside the site's
+ * node_modules (.cache), as the publish check builds inside its checkout.
+ * Never the system temp directory, for two reasons: Astro 6.3 loses a site's
+ * src/assets images when the outDir is outside the project root (ENOENT
+ * under .astro/_astro, #73), and Astro moves prerendered assets from the
+ * site's .astro into the outDir with rename(), which fails with EXDEV across
+ * filesystems (a tmpfs /tmp on Linux, a VM's shared folder).
+ * Every site ignores node_modules, and .cache is where tools (Vite among
+ * them) keep their scratch files. A node_modules symlinked onto another
+ * filesystem, or none at all, falls back to the site's root. The build check
+ * removes the directory when the doctor finishes. Exported for the tests.
  * @param {string} projectRoot
- * @param {string} [tempDir]
  */
-export function doctorOutDirParent(projectRoot, tempDir = os.tmpdir()) {
-  try {
-    if (fs.statSync(tempDir).dev === fs.statSync(projectRoot).dev) return tempDir;
-  } catch {
-    // fall through to the site's own directory
-  }
-  // Every site ignores node_modules, and .cache is where tools (Vite among
-  // them) keep their scratch files.
-  // A symlinked node_modules may itself be elsewhere: then the site's root.
+export function doctorOutDirParent(projectRoot) {
   const parent = path.join(projectRoot, 'node_modules', '.cache');
   try {
     fs.mkdirSync(parent); // throws without node_modules: never create one
@@ -327,7 +326,7 @@ export const CHECKS = [
           message: result.timedOut
             ? `The build did not finish within ${BUILD_TIMEOUT_MS / 1000} seconds; its output is above (stderr).`
             : 'The build failed; its output is above (stderr).',
-          details: result.timedOut ? [] : buildProblems(result.output).map((problem) => problem.message),
+          details: result.timedOut ? [] : buildProblems(result.output, DOCTOR_OUTPUT_HINT).map((problem) => problem.message),
         };
       }
       if ((await listBuiltPagePaths(outDir)).length === 0) {

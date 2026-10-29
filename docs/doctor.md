@@ -233,12 +233,17 @@ with target `esnext`, so Vite's CSS minifier strips vendor prefixes such as
 
 *Since 1.4.8. Fails when the build fails.*
 
-The CLI builds the site into a temporary directory (unless `--build` is
-given) and fails if the build does, or if it writes no HTML pages. When the
-system temp directory is on another filesystem from the site (a tmpfs `/tmp`,
-a VM's shared folder), the build goes under the site's
-`node_modules/.cache/` instead. The
-built-HTML checks below need that build.
+The CLI builds the site into a temporary directory under the site's
+`node_modules/.cache/` (unless `--build` is given), removed when the doctor
+finishes, and fails if the build does, or if it writes no HTML pages. The
+build stays inside the site, as the publish check's does: Astro 6.3 loses a
+site's `src/assets` images when the output directory is outside the project
+(`ENOENT` under `.astro/_astro/`), and a system temp directory on another
+filesystem (a tmpfs `/tmp`, a VM's shared folder) breaks Astro's move of
+prerendered assets. A site with no `node_modules` of its own (a monorepo with
+hoisted packages) builds into a temporary directory in its root instead. When
+the build fails, its output is printed to the doctor's stderr, above the
+report. The built-HTML checks below need that build.
 
 It runs the site's own installed Astro: the `bin` of `node_modules/astro` in
 the site's directory, or in a directory above it up to the repository root
