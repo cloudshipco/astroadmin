@@ -104,7 +104,8 @@ export const collections = {
 `);
 
   // The same fields filled at the top level; a filled block, a block stored
-  // with every optional empty or absent, and a block of another type.
+  // with every optional empty or absent, a block of another type, and a block
+  // with only its required fields (no literal).
   const STORED = {
     title: 'Page',
     minOpt: 'm', opt: 'o', defaulted: 'y', choice: 'a', meta: { note: 'n' }, coerced: 3, caught: 'k',
@@ -112,6 +113,7 @@ export const collections = {
       { type: 'note', heading: 'Full', minOpt: 'm', opt: 'o', defaulted: 'y', lit: '', choice: 'a', meta: { note: 'n' }, coerced: 3, caught: 'k' },
       { type: 'note', heading: 'Empties', opt: '', defaulted: '', lit: '', choice: '', meta: {} },
       { type: 'spacer' },
+      { type: 'note', heading: 'No literal' },
     ],
   };
   const STORED_TEXT = `${JSON.stringify(STORED, null, 2)}\n`;
@@ -182,11 +184,12 @@ export const collections = {
       'a sibling field in each block edited': (form) => {
         setValue(form, 'blocks[0].heading', 'Full, edited');
         setValue(form, 'blocks[1].heading', 'Empties, edited');
+        setValue(form, 'blocks[3].heading', 'No literal, edited');
       },
       'a new block added and left empty': (form) => {
         form.querySelector('#add-block-type').value = 'note';
         form.querySelector('.add-block-btn').click();
-        setValue(form, 'blocks[3].heading', 'New');
+        setValue(form, 'blocks[4].heading', 'New');
       },
       'every matrix field cleared': (form) => {
         for (const field of MATRIX) {
@@ -213,6 +216,15 @@ export const collections = {
     // split is never a silent widening) and the value written now (undefined:
     // the key is absent). Everything else in the file must still be the base's.
     const DELIBERATE = {
+      // #69: the const input's value (the schema's) is written only where the
+      // key is required. The base wrote an absent optional z.literal('') in a
+      // block as "".
+      'a sibling field in each block edited': [
+        { path: ['blocks', 3, 'lit'], base: '', now: undefined },
+      ],
+      'a new block added and left empty': [
+        { path: ['blocks', 4, 'lit'], base: '', now: undefined },
+      ],
       'every matrix field cleared': [
         // #61: a cleared number is absent. The base wrote "" (which
         // z.coerce.number() reads as 0, and every z.number() refuses).

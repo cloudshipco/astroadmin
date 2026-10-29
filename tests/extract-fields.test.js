@@ -398,18 +398,34 @@ check('a stored optional literal "" in a block is kept when a sibling field in t
   equal(extractFormData(form, literalSchema), { title: 'T', blocks: [{ type: 'note', heading: 'After', caption: '' }] });
 });
 
-check('an absent optional literal is saved as HEAD saved it when a sibling changes (absent at the top, "" in a block)', () => {
-  // Unchanged by this rule, and pinned so a change to it is deliberate: the
-  // const input carries '', which the top level drops as an optional '' and a
-  // block keeps ('' is a valid value of z.literal('')). Whether an absent
-  // optional key should ever be written is the open blank/absent question
-  // (#69).
+check('an absent optional literal stays absent when a sibling changes, at the top and in a block (#69)', () => {
+  // The const input carries the schema's value, which is not the editor's:
+  // it is written only where the key is REQUIRED (or a value is stored
+  // there). A block used to keep it, so an absent optional z.literal('')
+  // came back as caption: ''.
   const top = render(literalSchema, { title: 'T', blocks: [] });
   top.querySelector('[name="title"]').value = 'After';
   equal(extractFormData(top, literalSchema), { title: 'After', blocks: [] });
   const form = render(literalSchema, { title: 'T', blocks: [{ type: 'note', heading: 'Before' }] });
   form.querySelector('[name="blocks[0].heading"]').value = 'After';
-  equal(extractFormData(form, literalSchema), { title: 'T', blocks: [{ type: 'note', heading: 'After', caption: '' }] });
+  equal(extractFormData(form, literalSchema), { title: 'T', blocks: [{ type: 'note', heading: 'After' }] });
+});
+
+check('an optional literal that is not "" is not written where nothing is stored; a new block gets none either', () => {
+  const schema = {
+    ...literalSchema,
+    properties: { ...literalSchema.properties, version: { type: 'string', const: 'v2' } },
+  };
+  const form = render(schema, { title: 'T', blocks: [] });
+  setupFormHandlers(form, () => {});
+  form.querySelector('[name="title"]').value = 'After';
+  form.querySelector('#add-block-type').value = 'note';
+  form.querySelector('.add-block-btn').click();
+  form.querySelector('[name="blocks[0].heading"]').value = 'New';
+  equal(extractFormData(form, schema), { title: 'After', blocks: [{ type: 'note', heading: 'New' }] });
+  const stored = render(schema, { title: 'T', version: 'v2', blocks: [] });
+  stored.querySelector('[name="title"]').value = 'After';
+  equal(extractFormData(stored, schema), { title: 'After', version: 'v2', blocks: [] }, 'control: a stored optional literal is kept');
 });
 
 check('control: a required literal missing from the stored entry is still written (an id is never lost)', () => {

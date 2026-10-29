@@ -1578,10 +1578,17 @@ function extractValues(container, schema) {
     });
   });
 
+  // A const input the stored value was not put back for carries the schema's
+  // value, not the editor's: cleanup writes it only where the key is required.
+  const constants = new Set();
+  container.querySelectorAll('input[name][data-schema-const]').forEach((input) => {
+    if (!kept.has(input.name)) constants.add(input.name);
+  });
+
   // Strip empty optional fields, but keep required ones (see cleanEmptyValues) —
   // walking the schema so this holds at every level, not just the top.
   const before = Object.keys(data);
-  cleanEmptyValues(data, schema, false, kept);
+  cleanEmptyValues(data, schema, false, kept, '', { constants });
   return { data, removed: before.filter((key) => !(key in data)) };
 }
 
@@ -2051,8 +2058,14 @@ function toNumber(value) {
  *   values that are not the DOM's to clean: stored values put back as they
  *   were, and items an item editor already settled. Each is left whole.
  * @param {string} [path] - The path of `obj` itself ('' at the top).
+ * @param {object} [extras]
+ * @param {?Set<string>} [extras.constants] - Paths of const (z.literal)
+ *   values the DOM produced, i.e. the schema's value with nothing stored
+ *   there. Each is removed where the schema proves its key optional, at every
+ *   level, blocks included: an optional literal the entry did not have is
+ *   not the editor's to add (#69). A required one is always written.
  */
-export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = null, path = '') {
+export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = null, path = '', extras = {}) {
   // A nullable node ({anyOf: [<node>, {type: 'null'}]} or type: [x, 'null'])
   // has no `properties`/`items` of its own: read through it, or nothing inside
   // a nullable object or array could be proven optional. No schema stays none.
@@ -2079,7 +2092,7 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = nu
       const blockSchema = schemaSaysBlock && item && typeof item === 'object'
         ? schemaNode.blockTypes[item.type]
         : undefined;
-      cleanEmptyValues(item, blockSchema || itemSchema, itemIsBlock, kept, itemPath);
+      cleanEmptyValues(item, blockSchema || itemSchema, itemIsBlock, kept, itemPath, extras);
     });
     return;
   }
@@ -2096,11 +2109,15 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = nu
     if (kept?.has(keyPath)) continue;
     const value = obj[key];
     const isRequired = required.has(key);
+    if (extras.constants?.has(keyPath)) {
+      if (schemaKnown && !isRequired) delete obj[key];
+      continue;
+    }
     if (value === '') {
       // Only ever drop a value the schema proves optional.
       if (!isBlockItem && schemaKnown && !isRequired) delete obj[key];
     } else if (value && typeof value === 'object') {
-      cleanEmptyValues(value, props ? props[key] : undefined, isBlockItem, kept, keyPath);
+      cleanEmptyValues(value, props ? props[key] : undefined, isBlockItem, kept, keyPath, extras);
       // Drop a now-empty object only when we can prove that key is optional.
       if (
         !isBlockItem && schemaKnown && !isRequired &&
