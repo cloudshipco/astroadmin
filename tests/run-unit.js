@@ -4,8 +4,9 @@
  * NODE_ENV=test for every spawned astro build; see CLAUDE.md), and prints
  * one line per file plus a summary. Exits non-zero if any file fails.
  *
- * Not listed: the tests that need a running server (api.test.js), the
- * shelved SQLite store (`npm run test:db`), and the slow ones that run full
+ * `npm test` and `npm run test:unit` both run this.
+ *
+ * Not listed: the shelved SQLite store (`npm run test:db`), and the slow ones that run full
  * Astro builds or a browser (publish-check, publish-refusal-*, cms-*-packed,
  * component-preview, dev-toolbar, cli-dev, doctor-*, video-picker-browser,
  * dashboard-layout-browser,
@@ -34,7 +35,7 @@ const FAST_TESTS = [
   'content-traversal', 'glob-files', 'file-collection-listing', 'live-url', 'live-status', 'preview-live-link',
   'preview-click', 'preview-cache-bust', 'preview-routes',
   'markdown-transforms', 'markdown-body-not-named', 'focus-editor-field',
-  'api-response', 'login-log', 'rate-limit', 'cross-origin', 'auth',
+  'api-basics', 'api-response', 'login-log', 'rate-limit', 'cross-origin', 'auth',
   'error-paths', 'image-serving', 'image-symlink', 'image-picker-astro',
   'video-upload', 'git-api', 'git-subdir', 'git-subdir-routes',
   'git-paths-scope', 'git-paths-commit', 'git-log-limit', 'checkout-lock', 'publish-sync',
