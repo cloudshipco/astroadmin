@@ -48,9 +48,11 @@ says why, before it commits or builds anything:
   project, and the build output itself or anything inside it. A relative
   `path` is resolved against the project, as rsync resolves it, and symlinks
   are followed;
-- for a remote host: `/`, the remote user's home (`~`, `.`, an empty path)
-  and anything above it (`..`). A relative remote path is relative to that
-  home.
+- for a remote host: `/`, the remote user's home (`~`, `.`, an empty path),
+  any other user's home (`~deploy`, `~root/`: the remote shell expands
+  them) and anything above one (`..`). A relative remote path is relative
+  to the remote user's home; `~deploy/www` is a folder inside that home and
+  is accepted.
 
 If the destination really is one of these, set `allowDestructivePath: true`
 (the boolean) to skip the check.

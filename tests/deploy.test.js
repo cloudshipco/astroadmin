@@ -150,7 +150,10 @@ await check('validate: allowDestructivePath accepts a refused destination', () =
   assert.equal(validateLocal(guardProject, { allowDestructivePath: 'yes' }).valid, false, 'only the boolean true');
 });
 
-const REFUSED_REMOTE = ['/', '//', '~', '~/', '.', './', '', '..', '~/..', 'www/../..'];
+const REFUSED_REMOTE = ['/', '//', '~', '~/', '.', './', '', '..', '~/..', 'www/../..',
+  // Another user's home: the remote shell expands `~name` (rsync sends it
+  // unescaped), so it is that home, alone, with a slash or climbing.
+  '~deploy', '~deploy/', '~root/', '~deploy/.', '~deploy/www/..', '~deploy/..', '~www-data'];
 for (const destination of REFUSED_REMOTE) {
   await check(`validate: a remote destination of ${JSON.stringify(destination)} is refused`, () => {
     const result = validateDeployConfig({ adapter: 'rsync', rsync: { host: 'h', user: 'u', path: destination } }, guardContext);
@@ -159,7 +162,7 @@ for (const destination of REFUSED_REMOTE) {
 }
 
 await check('validate: an ordinary remote destination is accepted (positive control)', () => {
-  for (const destination of ['/var/www/site-a', 'www', '~/www']) {
+  for (const destination of ['/var/www/site-a', 'www', '~/www', '~deploy/www', '/srv/~deploy']) {
     assert.deepEqual(validateDeployConfig({ adapter: 'rsync', rsync: { host: 'h', user: 'u', path: destination } }, guardContext), { valid: true, errors: [] }, destination);
   }
 });

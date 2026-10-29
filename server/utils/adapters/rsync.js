@@ -81,13 +81,16 @@ function localDestinationProblem(destination, { projectRoot, distDir }) {
 
 /**
  * Why a REMOTE destination must not be synced with --delete, or null. Only
- * its spelling can be judged here: the filesystem root, the remote user's
- * home (a relative path is relative to it) and anything above it.
+ * its spelling can be judged here: the filesystem root, a home directory and
+ * anything above it. A relative path is relative to the remote user's home;
+ * a leading `~` or `~name` (rsync sends it unescaped and the remote shell
+ * expands it) is the remote user's or that user's home, so what follows it
+ * is judged as home-relative too.
  */
 function remoteDestinationProblem(destination) {
   const posix = path.posix;
   const isHomeRelative = !destination.startsWith('/');
-  const withoutTilde = destination === '~' ? '' : destination.replace(/^~\//, '');
+  const withoutTilde = destination.replace(/^~[^/]*(?:\/|$)/, '');
   const normalized = isHomeRelative
     ? posix.normalize(withoutTilde === '' ? '.' : withoutTilde)
     : posix.normalize(destination);
