@@ -497,9 +497,10 @@ runner aggregating them). Most run server-less and need env vars:
   reference chosen then cleared saves null; a stored invalid `[]` on an optional key is
   left unset by adding an item and deleting it (inline list and cards), and the warning
   says so only when the key is optional. Each check was seen red by mutating its fix. ~2 s.
-- `bun tests/primitive-top-level-array.test.js` — an entry that is one list of primitives
-  (`z.array(z.string())`, `z.array(z.number())`, zod 3 `.int()`) is drawn as the inline
-  primitive list a field is (`generateField` under `TOP_LEVEL_LIST_KEY`), not object cards,
+- `bun tests/primitive-top-level-array.test.js` — an entry that is one list of non-objects
+  (`z.array(z.string())`, `z.array(z.number())`, zod 3 `.int()`, a `string | number`
+  union) is drawn as the inline list a field is (`generateField` under
+  `TOP_LEVEL_LIST_KEY`); only a list of objects is cards,
   whose modal showed nothing and saved `"foo"` as `{0:'f',...}` (#34). Through the real app:
   each item a control of its type, untouched list byte-identical, one edit changes one line,
   add, delete, delete all. ~1 s.

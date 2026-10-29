@@ -73,7 +73,12 @@ const legacyScores = defineCollection({
   schema: z3.array(z3.number().int()),
 });
 
-export const collections = { words, scores, legacyScores };
+const mixed = defineCollection({
+  loader: glob({ pattern: '**/*.json', base: './src/content/mixed' }),
+  schema: z.array(z.union([z.string(), z.number()])),
+});
+
+export const collections = { words, scores, legacyScores, mixed };
 `);
 
 const WORDS_FILE = 'src/content/words/main.json';
@@ -102,6 +107,17 @@ const LEGACY_TEXT = `[
 ]
 `;
 writeProjectFile(LEGACY_FILE, LEGACY_TEXT);
+
+// A union item is not an object either, so it is edited inline as a field's
+// union list is; as cards, Done saved "alpha" as {"0":"a",...}.
+const MIXED_FILE = 'src/content/mixed/main.json';
+const MIXED_TEXT = `[
+  "alpha",
+  1,
+  "gamma"
+]
+`;
+writeProjectFile(MIXED_FILE, MIXED_TEXT);
 
 let passed = 0;
 const failures = [];
@@ -202,6 +218,11 @@ try {
       label: 'integers (zod 3)', collection: 'legacyScores', file: LEGACY_FILE, text: LEGACY_TEXT,
       stored: [4, 5, 6], inputType: 'number',
       editedText: '50', edited: 50, addedText: '7', added: 7,
+    },
+    {
+      label: 'string | number union (zod 4)', collection: 'mixed', file: MIXED_FILE, text: MIXED_TEXT,
+      stored: ['alpha', 1, 'gamma'], inputType: 'text',
+      editedText: 'beta', edited: 'beta', addedText: 'zeta', added: 'zeta',
     },
   ];
 
