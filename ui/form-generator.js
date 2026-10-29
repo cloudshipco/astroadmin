@@ -8,7 +8,7 @@
  * widget added here shows up on all three.
  */
 
-import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, isPreviewableVideo, setWidgetValue, CLEARED_ATTRIBUTE } from './field-widgets.js';
+import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, isPreviewableVideo, setWidgetValue, CLEARED_ATTRIBUTE, colorToHex, colourSwatchTitle, COLOUR_NONE_ATTRIBUTE, COLOUR_CLEAR_BUTTON } from './field-widgets.js';
 
 import { escapeHtml } from './escape-html.js';
 // The keywords the schema parser marks a real date, a file() entry's id and
@@ -344,7 +344,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     return `
       <div class="mb-6">
         <fieldset class="nested-fieldset" data-object-field="${fullPath}">
-          <legend class="text-sm font-semibold text-gray-700 mb-3">${formatLabel(name)}</legend>
+          <legend class="text-sm font-semibold text-gray-700 mb-3">${getFieldLabel(name, schema)}</legend>
           <div class="space-y-4">
             ${generateFields(schema.properties, nestedData, { path: fullPath, idPrefix, pickerVariant })}
           </div>
@@ -375,16 +375,16 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
 
       return `
         <div class="form-group">
-          <label class="form-label">${formatLabel(name)}</label>
+          <label class="form-label">${getFieldLabel(name, schema)}</label>
           <div class="array-cards"
                data-array-cards
                data-field="${fullPath}"
-               data-field-name="${formatLabel(name)}"
+               data-field-name="${getFieldLabel(name, schema)}"
                data-schema="${jsonAttr(schema.items || {})}">
             ${items.map((item, index) => generateArrayCard(item, index, schema.items)).join('')}
           </div>
           <button type="button" class="btn btn-secondary btn-sm array-cards-add" data-add-array-card>
-            + Add ${formatLabel(name).replace(/s$/, '')}
+            + Add ${escapeHtml(fieldLabelText(name, schema).replace(/s$/, ''))}
           </button>
           <input type="hidden" name="${fullPath}" data-array-data value="${jsonAttr(items)}">
         </div>
@@ -396,7 +396,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     const singularName = name.endsWith('s') ? name.slice(0, -1) : name;
     return `
       <div class="form-group">
-        <label class="form-label">${formatLabel(name)}</label>
+        <label class="form-label">${getFieldLabel(name, schema)}</label>
         <div class="array-field" data-field="${fullPath}" data-array-items data-schema="${jsonAttr(schema.items || {})}">
           ${items.map((item, index) => `
             <div class="array-item" data-index="${index}" draggable="true">
@@ -421,7 +421,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
             </div>
           `).join('\n')}
           <button type="button" class="btn btn-secondary btn-sm add-array-item w-full text-center" data-field="${fullPath}">
-            + Add ${formatLabel(singularName)}
+            + Add ${schema.label ? escapeHtml(fieldLabelText(name, schema).replace(/s$/, '')) : formatLabel(singularName)}
           </button>
         </div>
       </div>
@@ -449,7 +449,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
             id="${id}"
             ${value ? 'checked' : ''}
           >
-          <span>${formatLabel(name)}</span>
+          <span>${getFieldLabel(name, schema)}</span>
         </label>
       </div>
     `;
@@ -688,7 +688,7 @@ function generateBlocksField(name, schema, value, fullPath) {
   return `
     <div class="form-group blocks-container" data-field="${fullPath}">
       <div class="blocks-header">
-        <label class="form-label">${formatLabel(name)}</label>
+        <label class="form-label">${getFieldLabel(name, schema)}</label>
         <div class="blocks-actions">
           <select id="add-block-type" class="form-input form-input-sm">
             <option value="">Add block...</option>
@@ -1103,7 +1103,8 @@ function generateImageField(name, schema, value, fullPath, id, altValue = '', hi
 
   // Special labels and help text for known fields
   const fieldInfo = getImageFieldInfo(name);
-  const label = fieldInfo.label || getFieldLabel(name, schema);
+  // The site's own label beats our guess for a known name.
+  const label = schema.label ? getFieldLabel(name, schema) : (fieldInfo.label || getFieldLabel(name, schema));
   const helpHtml = fieldInfo.help ? `<span class="form-help">${fieldInfo.help}</span>` : '';
 
   // Only show built-in alt field if not hidden (e.g., parent object doesn't have its own alt field)
@@ -1180,11 +1181,24 @@ function isColorField(name, schema) {
 }
 
 /**
- * Generate a color picker field
+ * The colour box's hint when the site sets none (`.meta({ placeholder })`):
+ * a hex code, the one form every colour schema accepts. It used to say "or
+ * color name", which a hex-only schema then refused on save.
+ */
+const COLOUR_PLACEHOLDER = 'e.g. #1b2a4a';
+
+/**
+ * Generate a color picker field.
+ *
+ * A native colour input always holds SOME colour, so a blank value, or one
+ * the swatch cannot show (`var(--brand)`), renders a swatch marked
+ * `data-no-colour` (drawn as "no colour" in ui/input.css) rather than a colour
+ * the site may not be using: blank often means "the site's default". The
+ * swatch has no name; only the text box is saved.
  */
 function generateColorField(name, schema, value, fullPath, id, nullableAttributes = '') {
-  // Convert named colors or other formats to hex for the picker
-  const colorValue = value || '';
+  const colorValue = value === null || value === undefined ? '' : String(value);
+  const placeholder = typeof schema.placeholder === 'string' ? schema.placeholder : COLOUR_PLACEHOLDER;
 
   return `
     <div class="form-group">
@@ -1193,7 +1207,7 @@ function generateColorField(name, schema, value, fullPath, id, nullableAttribute
         <input
           type="color"
           id="${id}_picker"
-          value="${escapeHtml(colorToHex(colorValue) || '#ffffff')}"
+          ${colourSwatchAttributes(colorValue)}
           class="color-picker-input"
         >
         <input
@@ -1203,53 +1217,20 @@ function generateColorField(name, schema, value, fullPath, id, nullableAttribute
           value="${escapeHtml(colorValue)}"
           class="form-input color-picker-text"
           ${nullableAttributes}
-          placeholder="#ffffff or color name"
+          placeholder="${escapeHtml(placeholder)}"
           ${schema.required ? 'required' : ''}
         >
-        ${colorValue ? `<button type="button" class="color-picker-clear" data-clear-color title="Clear color">&times;</button>` : ''}
+        ${colorValue ? COLOUR_CLEAR_BUTTON : ''}
       </div>
     </div>
   `;
 }
 
-/**
- * Convert color value to hex (best effort)
- */
-function colorToHex(color) {
-  if (!color) return '';
-
-  // Already hex
-  if (color.startsWith('#')) {
-    // Expand shorthand (#fff -> #ffffff)
-    if (color.length === 4) {
-      return '#' + color[1] + color[1] + color[2] + color[2] + color[3] + color[3];
-    }
-    return color;
-  }
-
-  // Named colors - common ones
-  const namedColors = {
-    'white': '#ffffff',
-    'black': '#000000',
-    'red': '#ff0000',
-    'green': '#008000',
-    'blue': '#0000ff',
-    'yellow': '#ffff00',
-    'orange': '#ffa500',
-    'purple': '#800080',
-    'pink': '#ffc0cb',
-    'gray': '#808080',
-    'grey': '#808080',
-    'transparent': '#ffffff',
-  };
-
-  const lowerColor = color.toLowerCase();
-  if (namedColors[lowerColor]) {
-    return namedColors[lowerColor];
-  }
-
-  // Default to white if we can't parse
-  return '#ffffff';
+/** The swatch's value, or its no-colour mark (the same rule showColourSwatch applies as the value changes). */
+function colourSwatchAttributes(colorValue) {
+  const hex = colorToHex(colorValue);
+  if (hex !== '') return `value="${hex}"`;
+  return `${COLOUR_NONE_ATTRIBUTE} title="${colourSwatchTitle(colorValue)}"`;
 }
 
 /**
@@ -1281,7 +1262,7 @@ function generateGalleryField(name, schema, value, fullPath, id) {
 
   return `
     <div class="form-group">
-      <label>${formatLabel(name)}</label>
+      <label>${getFieldLabel(name, schema)}</label>
       <div class="gallery-field" data-field="${fullPath}" data-gallery-value="${encodedValue}" data-gallery-encoded="true">
         <div class="gallery-field-preview">
           ${previewImages.length > 0 ? previewImages.map(img => `
@@ -1364,8 +1345,9 @@ function generateReferenceField(name, schema, value, fullPath, id, collectionNam
       .filter((item) => item.itemId !== '');
   const singularName = collectionName.endsWith('s') ? collectionName.slice(0, -1) : collectionName;
   // A `testimonialIds` list is labelled by its collection ("Testimonials", not
-  // "Testimonial Ids"); any other name is the field's own label.
-  const label = /Ids?$/.test(name) ? formatLabel(collectionName) : getFieldLabel(name, schema);
+  // "Testimonial Ids"), unless the site gave it a label; any other name is the
+  // field's own label. Text here: it is escaped below.
+  const label = /Ids?$/.test(name) && !schema.label ? formatLabel(collectionName) : fieldLabelText(name, schema);
 
   return `
     <div class="form-group">
@@ -1450,10 +1432,18 @@ export function formatLabel(name) {
 }
 
 /**
- * Get label for a field (uses schema.label if provided, otherwise formats the name)
+ * A field's label as text: the site's own (`label` in its JSON Schema, which a
+ * zod 4 `.meta({ label: '...' })` puts there; docs/content-collections.md),
+ * otherwise the key in title case.
+ * @returns {string}
  */
+function fieldLabelText(name, schema) {
+  return typeof schema?.label === 'string' && schema.label !== '' ? schema.label : formatLabel(name);
+}
+
+/** A field's label as HTML (escaped), for every field kind's heading. */
 function getFieldLabel(name, schema) {
-  return schema.label || formatLabel(name);
+  return escapeHtml(fieldLabelText(name, schema));
 }
 
 /**

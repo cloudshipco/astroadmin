@@ -287,6 +287,13 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   header's "View live site" link and the server's live-status check: base paths, query/hash,
   and escape attempts (`//host`, `/\host`, `javascript:`, and paths that only normalise to
   `//host`, such as `/.//host`) falling back to the site root.
+- `bun tests/colour-field.test.js` — the colour field and field labels (happy-dom, real
+  widget wiring): a blank colour, or one the swatch cannot draw, is a `data-no-colour`
+  swatch, never white; the hint is a hex code unless the schema sets `placeholder`; an
+  untouched blank saves as stored; a pick saves its hex and offers ×; × or an emptied box
+  saves null for a nullable, in a new entry too (`data-cleared`). A zod 4
+  `.meta({ label })` labels every field kind (checkbox, object, lists, cards, gallery,
+  blocks, image, references, `<x>Ids`), escaped.
 - `bun tests/clean-nullable.test.js` — `cleanEmptyValues` reads through a nullable wrapper
   (both converters' shapes), so an emptied optional array inside a nullable object is dropped.
 - `bun tests/modal-escape.test.js` — Escape closes only the topmost modal (happy-dom, the real

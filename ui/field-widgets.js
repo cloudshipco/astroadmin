@@ -336,9 +336,74 @@ function updateGalleryFieldPreview(galleryField, images) {
   editBtn.textContent = images.length > 0 ? `Edit ${images.length} images` : 'Add images';
 }
 
+/** Marks a colour swatch that has no colour to show (a blank value, or one it cannot draw). */
+export const COLOUR_NONE_ATTRIBUTE = 'data-no-colour';
+
+export const COLOUR_CLEAR_BUTTON = '<button type="button" class="color-picker-clear" data-clear-color title="Clear color">&times;</button>';
+
+/**
+ * A colour as a native swatch can show it (`#rrggbb`), or '' when it cannot:
+ * a blank value, or anything but a 3- or 6-digit hex code or one of a few
+ * names. Never a stand-in colour: white for "unknown" read as "white is set".
+ * @param {string} color
+ * @returns {string}
+ */
+export function colorToHex(color) {
+  if (typeof color !== 'string') return '';
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return color.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(color)) {
+    return `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`.toLowerCase();
+  }
+  const namedColors = {
+    white: '#ffffff',
+    black: '#000000',
+    red: '#ff0000',
+    green: '#008000',
+    blue: '#0000ff',
+    yellow: '#ffff00',
+    orange: '#ffa500',
+    purple: '#800080',
+    pink: '#ffc0cb',
+    gray: '#808080',
+    grey: '#808080',
+  };
+  return Object.hasOwn(namedColors, color.toLowerCase()) ? namedColors[color.toLowerCase()] : '';
+}
+
+/** The no-colour swatch's tooltip: nothing set, or a value it cannot draw. */
+export function colourSwatchTitle(colorValue) {
+  return colorValue === '' ? 'No colour set' : 'No preview for this value';
+}
+
+/**
+ * Show a colour field's value: the swatch draws it (or no colour), and the
+ * clear button is offered while there is something to clear.
+ */
+function showColour(wrapper, colorValue) {
+  const swatch = wrapper.querySelector('.color-picker-input');
+  if (swatch) {
+    const hex = colorToHex(colorValue);
+    if (hex !== '') {
+      swatch.value = hex;
+      swatch.removeAttribute(COLOUR_NONE_ATTRIBUTE);
+      swatch.removeAttribute('title');
+    } else {
+      swatch.setAttribute(COLOUR_NONE_ATTRIBUTE, '');
+      swatch.title = colourSwatchTitle(colorValue);
+    }
+  }
+  const clearButton = wrapper.querySelector('[data-clear-color]');
+  if (colorValue === '') clearButton?.remove();
+  else if (!clearButton) wrapper.insertAdjacentHTML('beforeend', COLOUR_CLEAR_BUTTON);
+}
+
 /**
  * Colour picker: swatch and text input mirror each other.
  * Both live in the same .color-picker-wrapper, so we never need an id lookup.
+ * The text box is the saved control. A pick sets it through setWidgetValue,
+ * and emptying it by hand records a clear as the × button does (as the video
+ * picker's typed box does), so a picked-then-cleared nullable in a new entry
+ * saves null: its defaultValue is '' as well, so nothing else tells them apart.
  */
 function setupColorPickers(container, onChange) {
   container.addEventListener('input', (e) => {
@@ -348,17 +413,16 @@ function setupColorPickers(container, onChange) {
     if (e.target.matches('.color-picker-input')) {
       const textInput = wrapper.querySelector('.color-picker-text');
       if (textInput) {
-        textInput.value = e.target.value;
+        setWidgetValue(textInput, e.target.value);
+        showColour(wrapper, e.target.value);
         if (onChange) onChange();
       }
       return;
     }
 
     if (e.target.matches('.color-picker-text')) {
-      const swatch = wrapper.querySelector('.color-picker-input');
-      if (swatch && /^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
-        swatch.value = e.target.value;
-      }
+      e.target.toggleAttribute(CLEARED_ATTRIBUTE, e.target.value === '');
+      showColour(wrapper, e.target.value);
     }
   });
 
@@ -368,12 +432,9 @@ function setupColorPickers(container, onChange) {
 
     const wrapper = clearBtn.closest('.color-picker-wrapper');
     const textInput = wrapper?.querySelector('.color-picker-text');
-    const swatch = wrapper?.querySelector('.color-picker-input');
 
     if (textInput) setWidgetValue(textInput, '');
-    if (swatch) swatch.value = '#ffffff';
-
-    clearBtn.remove();
+    showColour(wrapper, '');
     if (onChange) onChange();
   });
 }

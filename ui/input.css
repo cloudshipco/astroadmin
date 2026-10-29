@@ -1312,6 +1312,17 @@
     border-radius: 4px;
   }
 
+  /* No colour set (or none the swatch can draw): a struck-through empty
+     swatch, never a colour the site may not be using. The browser paints the
+     swatch's colour itself, hence !important. */
+  .color-picker-input[data-no-colour]::-webkit-color-swatch {
+    background: linear-gradient(to top right, transparent calc(50% - 1px), #9ca3af calc(50% - 1px), #9ca3af calc(50% + 1px), transparent calc(50% + 1px)), #ffffff !important;
+  }
+
+  .color-picker-input[data-no-colour]::-moz-color-swatch {
+    background: linear-gradient(to top right, transparent calc(50% - 1px), #9ca3af calc(50% - 1px), #9ca3af calc(50% + 1px), transparent calc(50% + 1px)), #ffffff !important;
+  }
+
   .color-picker-text {
     @apply flex-1;
   }

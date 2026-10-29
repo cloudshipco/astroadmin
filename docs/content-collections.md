@@ -101,8 +101,34 @@ export const collections = { posts, testimonials };
 | `z.literal(...)` | Nothing visible; the value is kept on save |
 | `z.discriminatedUnion(...)` in an array | A block editor (see [blocks](./blocks.md)) |
 
-Labels come from field names: `heroImage` is shown as "Hero Image". Choose
-names an editor will understand.
+### Labels and placeholders
+
+A field's label comes from its name: `heroImage` is shown as "Hero Image",
+`ctaHref` as "Cta Href". To show something else, give the field a `label`
+with zod's `.meta()`:
+
+```typescript
+ctaHref: z.string().meta({ label: 'Button link' }),
+textColour: z.string().optional().meta({ label: 'Text colour' }),
+```
+
+`.meta()` puts its keys into the JSON Schema AstroAdmin reads, and
+AstroAdmin uses `label` for every kind of field: inputs, checkboxes, lists,
+cards, nested objects, blocks, image and reference pickers. It works before
+or after `.optional()` and `.nullable()`. It changes only what the editor
+sees; the saved key is still `ctaHref`.
+
+`placeholder` works the same way, for text inputs, text areas, number
+inputs and colour fields:
+
+```typescript
+ctaHref: z.string().meta({ label: 'Button link', placeholder: '/contact' }),
+```
+
+`.meta()` needs zod 4, which `astro/zod` is on Astro 6 and later. zod 3 has
+no `.meta()` and its `.describe()` sets a description, not a label, so on
+zod 3 the label is always the formatted name: choose names an editor will
+understand.
 
 ### Optional text fields
 
@@ -142,7 +168,22 @@ described as one:
 title: z.string().describe('textarea'),
 ```
 
-A field whose name contains `color` or `colour` gets a colour picker.
+### Colours
+
+A string field whose name contains `color`, `colour` or `background` gets a
+colour picker: a swatch and a text box, which is what is saved. Picking from
+the swatch writes a hex code (`#1b2a4a`). The text box takes whatever is
+typed, so validate the format your site accepts, for example
+`z.string().regex(/^#[0-9a-fA-F]{6}$/)`. The box's hint is a hex code; if
+your schema accepts other forms, say so with a `placeholder` (above).
+
+A blank colour shows an empty, struck-through swatch, as does a value the
+swatch cannot draw (`var(--brand)`, most colour names), so an editor is not
+shown a colour the site is not using. A blank the editor leaves alone is
+saved as it was stored; one they empty follows the rules for
+[optional text fields](#optional-text-fields) (inside a block it can be
+`""`), so let your template fall back to its default for both `""` and a
+missing value.
 
 ### Dates
 
