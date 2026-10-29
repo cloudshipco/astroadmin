@@ -228,6 +228,38 @@ try {
         }
       });
     }
+
+    // `git pull --rebase` used the remote-tracking branch's reflog
+    // (--fork-point): a commit that was pushed and then force-pushed away
+    // upstream is not replayed. A rebase onto the fetched head alone replays
+    // everything since the merge-base, and the push would put it back.
+    await check(`${route}: a commit the upstream force-pushed away is not brought back`, async () => {
+      const removedFile = `other/removed-${route.length}.md`;
+      writeFile(repoRoot, removedFile, 'pushed by mistake\n');
+      git(repoRoot, 'add', removedFile);
+      git(repoRoot, 'commit', '-qm', 'pushed by mistake');
+      const removedCommit = localHead();
+      git(repoRoot, 'push', '-q', 'origin', 'main');
+      assert.equal(remoteHead(), removedCommit, 'control: the commit reached the remote');
+
+      git(developerClone, 'fetch', '-q');
+      git(developerClone, 'reset', '-q', '--hard', `${removedCommit}~1`);
+      writeFile(developerClone, `other/dev-${route.length}.md`, 'developer work\n');
+      git(developerClone, 'add', '-A');
+      git(developerClone, 'commit', '-qm', 'developer work');
+      git(developerClone, 'push', '-q', '--force', 'origin', 'main');
+      const developerCommit = git(developerClone, 'rev-parse', 'HEAD');
+
+      assert.equal((await save(`Home (${route}, force-push)`)).status, 200);
+      const { status, body } = await send();
+      assert.equal(status, 200, JSON.stringify(body));
+      assert.equal(remoteHead(), localHead(), 'published');
+      assert.ok(isAncestor(developerCommit, remoteHead()), "the developer's commit is underneath");
+      assert.equal(isAncestor(removedCommit, remoteHead()), false, 'the removed commit is not an ancestor');
+      assert.equal(tryGit(remoteDir, 'cat-file', '-e', `main:${removedFile}`), null,
+        `the removed file is not on the remote: ${git(remoteDir, 'log', '--format=%s', 'main')}`);
+      assert.match(git(remoteDir, 'show', 'main:site-a/src/content/pages/home.md'), /force-push/, "the editor's change is on the remote");
+    });
   }
 } finally {
   server.close();

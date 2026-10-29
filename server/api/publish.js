@@ -251,7 +251,7 @@ async function rebaseOntoUpstream(git, upstream) {
   }
   if (await isAncestor(git, upstreamHead, localHead)) return 'synced';
 
-  const rebased = await rebaseInWorktree(git, localHead, upstreamHead);
+  const rebased = await rebaseInWorktree(git, localHead, upstreamHead, await forkPointRef(git, upstreamHead));
   if (rebased === null) return 'conflict';
 
   // The exclusive hold keeps the editor out; this keeps a person's commit
@@ -280,24 +280,48 @@ async function isAncestor(git, ancestor, descendant) {
 }
 
 /**
+ * The branch's remote-tracking ref (refs/remotes/<remote>/<branch>) when the
+ * fetch just moved it to `upstreamHead`, else null. Its reflog is what lets
+ * the rebase tell the editor's commits from ones the upstream has since
+ * dropped (a force-push): see rebaseInWorktree. A fetch naming the branch
+ * updates the tracking ref only when the remote's fetch refspec maps it.
+ * @returns {Promise<string|null>}
+ */
+async function forkPointRef(git, upstreamHead) {
+  const trackingRef = (await git.raw(['rev-parse', '--symbolic-full-name', '@{upstream}']).catch(() => '')).trim();
+  if (!trackingRef.startsWith('refs/')) return null;
+  const trackingHead = (await git.raw(['rev-parse', '--verify', '--quiet', `${trackingRef}^{commit}`]).catch(() => '')).trim();
+  return trackingHead === upstreamHead ? trackingRef : null;
+}
+
+/**
  * Rebase `localHead` onto `upstreamHead` in a throwaway detached worktree.
  * Returns the rebased commit, or null when the rebase stopped on a conflict
  * (after aborting it). The worktree is removed either way.
+ *
+ * With a `trackingRef` (pointing at `upstreamHead`) the rebase is
+ * `--fork-point`, as `git pull --rebase` was: the commits replayed are those
+ * after the newest commit the tracking ref ever pointed at that `localHead`
+ * contains, so a commit that was pushed and then force-pushed away upstream
+ * is dropped, not replayed and pushed back. With no reflog entry to use, git
+ * falls back to the merge-base; with no tracking ref, so do we.
+ *
  * `--no-autostash` and `--no-update-refs` override inherited config: the
  * worktree has nothing to stash, and update-refs would move the live
  * checkout's branch (it points at `localHead`) without its files.
  */
-async function rebaseInWorktree(git, localHead, upstreamHead) {
+async function rebaseInWorktree(git, localHead, upstreamHead, trackingRef = null) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-rebase-'));
   const worktreeDir = path.join(tempDir, 'worktree');
   try {
     await git.raw(['worktree', 'add', '--quiet', '--detach', worktreeDir, localHead]);
     const worktreeGit = gitClientAt(worktreeDir);
     try {
-      await worktreeGit.raw(['rebase', '--quiet', '--no-autostash', '--no-update-refs', upstreamHead]);
+      const onto = trackingRef ? ['--fork-point', trackingRef] : [upstreamHead];
+      await worktreeGit.raw(['rebase', '--quiet', '--no-autostash', '--no-update-refs', ...onto]);
     } catch (rebaseError) {
       // Stopped on a conflict when there is a rebase to abort; any other
-      // failure (a refusing pre-rebase hook) is not the editor's clash.
+      // failure (the worktree could not be written) is not the editor's clash.
       const stopped = await worktreeGit.raw(['rebase', '--abort']).then(() => true, () => false);
       if (!stopped) throw rebaseError;
       console.error('The rebase onto the upstream conflicted; aborted it:', rebaseError.message);
