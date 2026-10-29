@@ -182,48 +182,111 @@ async function git(cwd, args) {
   return stdout.trim();
 }
 
+// How long a command's output pipes may stay open after its shell exited and
+// its process group was killed: only a descendant that left the group can
+// still hold them, and it is not waited for.
+const EXITED_PIPE_GRACE_MS = 2000;
+
 /**
- * Run a shell command in its own process group. On timeout, kill the WHOLE
- * group (the shell, astro and anything they started) and settle at once:
- * a descendant that left the group can keep the output pipes open, and waiting
- * for them to close would hold the git lock forever.
+ * A command's output, capped at `maxLength` characters: the first half and
+ * the last half are kept, with a line saying how much was left out between
+ * them. The start says what ran; the end is where a build prints its error.
+ * @param {number} maxLength
+ */
+function cappedOutput(maxLength) {
+  const half = Math.floor(maxLength / 2);
+  let head = '';
+  let tail = '';
+  let omitted = 0;
+  return {
+    add(chunk) {
+      let text = String(chunk);
+      if (head.length < half) {
+        const room = half - head.length;
+        head += text.slice(0, room);
+        text = text.slice(room);
+      }
+      if (text === '') return;
+      tail += text;
+      // Trimmed in batches, so a long log is not copied on every chunk.
+      if (tail.length > 2 * half) {
+        omitted += tail.length - half;
+        tail = tail.slice(-half);
+      }
+    },
+    text() {
+      const extra = Math.max(0, tail.length - half);
+      const left = omitted + extra;
+      const kept = extra > 0 ? tail.slice(extra) : tail;
+      return left > 0 ? `${head}\n[... ${left} characters of output left out ...]\n${kept}` : head + kept;
+    },
+  };
+}
+
+/**
+ * Run a shell command in its own process group, and leave nothing of it
+ * running. On timeout, kill the WHOLE group (the shell, astro and anything
+ * they started) and settle at once: a descendant that left the group can keep
+ * the output pipes open, and waiting for them to close would hold the git
+ * lock forever. When the shell exits, kill the group too (a daemon the build
+ * started would otherwise outlive it, and one holding the output pipe would
+ * hold the build open until the timeout), then read what is left in the pipes
+ * and settle when they close, or after EXITED_PIPE_GRACE_MS.
  * @returns {Promise<{exitCode: number|null, output: string, timedOut: boolean}>}
  */
 export function runCommand(command, cwd, timeoutMs, env) {
   return new Promise((resolve, reject) => {
     const child = spawn('/bin/sh', ['-c', command], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '';
+    const output = cappedOutput(MAX_OUTPUT_BYTES);
     let settled = false;
+    let exitCode = null;
+    let graceTimer = null;
     const settle = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
       resolve(result);
     };
-    const collect = (chunk) => {
-      if (output.length < MAX_OUTPUT_BYTES) output += chunk;
-    };
-    child.stdout.on('data', collect);
-    child.stderr.on('data', collect);
-
-    const timer = setTimeout(() => {
+    const killGroup = () => {
       try {
         process.kill(-child.pid, 'SIGKILL');
       } catch {
-        // already gone
+        // the group is already empty
       }
+    };
+    const stopReading = () => {
       child.stdout.destroy();
       child.stderr.destroy();
-      settle({ exitCode: null, output, timedOut: true });
+    };
+    child.stdout.on('data', output.add);
+    child.stderr.on('data', output.add);
+
+    const timer = setTimeout(() => {
+      killGroup();
+      stopReading();
+      settle({ exitCode: null, output: output.text(), timedOut: true });
     }, timeoutMs);
 
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
       reject(error);
     });
-    child.on('close', (exitCode) => settle({ exitCode, output, timedOut: false }));
+    child.on('exit', (code) => {
+      if (settled) return;
+      exitCode = code;
+      // The command is over. What it wrote is still in the pipes and is read
+      // to the end; only writers left in the group are stopped.
+      killGroup();
+      graceTimer = setTimeout(() => {
+        stopReading();
+        settle({ exitCode, output: output.text(), timedOut: false });
+      }, EXITED_PIPE_GRACE_MS);
+    });
+    child.on('close', (code) => settle({ exitCode: code ?? exitCode, output: output.text(), timedOut: false }));
   });
 }
 

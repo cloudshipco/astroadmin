@@ -9,11 +9,17 @@
  *   with a custom DB path built empty collections without it);
  * - with a time limit (`build.productionTimeoutMs`): a build that never ends
  *   is killed, its whole process group with it, and reported as failed,
- *   instead of holding Publish open forever.
+ *   instead of holding Publish open forever;
+ * - leaving nothing running: when the build exits, what it started in its
+ *   process group is killed (a daemon used to outlive it, and one holding
+ *   the output pipe held a finished build open until the time limit), and a
+ *   descendant that left the group is waited for two seconds at most;
+ * - with output past the 10 MB cap keeping its start AND its end, where a
+ *   build prints its error.
  *
  * Real /bin/sh build scripts through runProductionBuildIn.
  *
- *   bun tests/production-build.test.js     (~2 s)
+ *   bun tests/production-build.test.js     (~6 s)
  */
 
 import assert from 'assert';
@@ -104,6 +110,84 @@ await check('a build that never ends is killed at the time limit, with its proce
     if (alive) await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.equal(alive, false, `the build's child ${childPid} outlived the timeout`);
+});
+
+/** Wait up to a second for `pid` to be gone; return whether it still lives. */
+async function stillAliveAfterWaiting(pid) {
+  let alive = true;
+  for (let attempt = 0; attempt < 20 && alive; attempt++) {
+    alive = isAlive(pid);
+    if (alive) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return alive;
+}
+
+await check('a child a build leaves running is killed when the build exits', async () => {
+  // A build that starts a daemon (here a sleep with its output elsewhere)
+  // and exits 0 used to leave it running for good.
+  const pidFile = path.join(scratch, 'daemon.pid');
+  const command = buildCommand('daemon', `sleep 60 > /dev/null 2>&1 &\necho $! > '${pidFile}'\necho built`);
+  const result = await runProductionBuildIn({ build: { production: command } }, site);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.match(result.output, /built/, 'the output was collected');
+  const childPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  assert.ok(childPid > 0, 'positive control: the daemon started');
+  assert.equal(await stillAliveAfterWaiting(childPid), false, `the build's child ${childPid} outlived the build`);
+});
+
+await check('a child holding the output pipe does not hold a finished build open', async () => {
+  // Its stdout is the build's: the pipe stays open while it lives, so the
+  // build waited for the time limit and was reported as timed out.
+  const pidFile = path.join(scratch, 'holder.pid');
+  const command = buildCommand('holder', `sleep 60 &\necho $! > '${pidFile}'\necho built`);
+  const started = Date.now();
+  const result = await runProductionBuildIn({ build: { production: command, productionTimeoutMs: 20000 } }, site);
+  const elapsed = Date.now() - started;
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.ok(elapsed < 10000, `settled after ${elapsed} ms`);
+  assert.match(result.output, /built/);
+  const childPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  assert.equal(await stillAliveAfterWaiting(childPid), false, `the build's child ${childPid} outlived the build`);
+});
+
+await check('a descendant that left the process group holds a finished build for two seconds at most', async () => {
+  // setsid: out of reach of the group kill, still holding the output pipe.
+  const pidFile = path.join(scratch, 'setsid.pid');
+  const readyFile = path.join(scratch, 'setsid.ready');
+  // The shell waits until the child has left the group, or the group kill
+  // would race its setsid().
+  const command = buildCommand('setsid', `perl -MPOSIX -e 'POSIX::setsid() or die; open(my $f, ">", $ARGV[0]); close($f); sleep 30' '${readyFile}' &\necho $! > '${pidFile}'\nwhile [ ! -e '${readyFile}' ]; do sleep 0.05; done\necho built`);
+  const started = Date.now();
+  const result = await runProductionBuildIn({ build: { production: command, productionTimeoutMs: 20000 } }, site);
+  const elapsed = Date.now() - started;
+  const childPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  try {
+    assert.ok(isAlive(childPid), 'positive control: it survived the group kill');
+    assert.equal(result.success, true, JSON.stringify(result));
+    assert.ok(elapsed >= 1500 && elapsed < 6000, `settled after ${elapsed} ms`);
+    assert.match(result.output, /built/);
+  } finally {
+    try { process.kill(childPid, 'SIGKILL'); } catch { /* gone */ }
+  }
+});
+
+await check('a build whose output passes the cap keeps its start and its end', async () => {
+  // Astro prints the error that matters LAST; keeping only the first 10 MB
+  // lost it behind a long log.
+  const command = buildCommand('long', `echo FIRST-LINE\nhead -c 12000000 /dev/zero | tr '\\0' 'x'\necho\necho THE-ERROR-AT-THE-END >&2\nexit 1`);
+  const originalError = console.error;
+  console.error = () => {};
+  let result;
+  try {
+    result = await runProductionBuildIn({ build: { production: command } }, site);
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(result.success, false);
+  assert.match(result.output, /^FIRST-LINE/, 'the start');
+  assert.match(result.output, /THE-ERROR-AT-THE-END\n?$/, 'the end');
+  assert.match(result.output, /characters of output left out/, 'says what was left out');
+  assert.ok(result.output.length <= 10 * 1024 * 1024 + 200, `${result.output.length} characters`);
 });
 
 await check('a successful and a failing build report as before', async () => {
