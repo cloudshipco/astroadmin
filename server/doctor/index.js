@@ -18,6 +18,39 @@ export const DOCTOR_CHECKS = CHECKS.map((definition) => ({ ...definition, docs: 
 
 const PHASES = ['static', 'build', 'built'];
 
+/** runDoctor's rejection when its signal aborts (the CLI exits 128 + signal). */
+export class DoctorInterrupted extends Error {
+  constructor() {
+    super('The doctor was interrupted.');
+    this.name = 'DoctorInterrupted';
+  }
+}
+
+/**
+ * SIGKILL each process group, then wait (up to 2 s) until none of its
+ * members is left, so nothing writes after the caller removes its folder.
+ * @param {number[]} groupIds
+ */
+async function killProcessGroups(groupIds) {
+  const alive = (groupId) => {
+    try {
+      process.kill(-groupId, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const groupId of groupIds) {
+    try {
+      process.kill(-groupId, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
+  const deadline = Date.now() + 2000;
+  while (groupIds.some(alive) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
 /**
  * One check's outcome.
  * @typedef {Object} DoctorResult
@@ -41,9 +74,12 @@ const PHASES = ['static', 'build', 'built'];
  *   leave out the checks marked commandLineOnly
  * @param {() => Promise<{entries: Array}>} [options.loadEntries] - entries with page paths
  *   (default: the editor's store, via ./entries.js)
+ * @param {AbortSignal} [options.signal] - aborting it (the CLI does on SIGINT
+ *   and SIGTERM) kills the build's process group, removes the build folder
+ *   and rejects with DoctorInterrupted
  * @returns {Promise<{version: string, projectRoot: string, ok: boolean, counts: Object, results: DoctorResult[]}>}
  */
-export async function runDoctor({ projectRoot, distDir = null, build = true, phases = PHASES, loadEntries = null, editor = false }) {
+export async function runDoctor({ projectRoot, distDir = null, build = true, phases = PHASES, loadEntries = null, editor = false, signal = null }) {
   const memo = new Map();
   const remember = (key, compute) => {
     if (!memo.has(key)) memo.set(key, compute());
@@ -55,6 +91,8 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
     build,
     buildSkippedReason: null,
     cleanups: [],
+    // Process groups the checks started (the build): killed on interrupt.
+    processGroups: [],
     astroConfig: () => remember('astroConfig', () => readAstroConfigFacts(projectRoot)),
     built: () => remember('built', async () => {
       // A build with no HTML (an empty or missing directory) has nothing to
@@ -70,6 +108,16 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
     }),
   };
 
+  // Settles (rejects) only when the signal aborts: raced against each check,
+  // since a build whose descendants hold its pipes open may never settle.
+  const interrupted = signal
+    ? new Promise((resolve, reject) => {
+      if (signal.aborted) reject(new DoctorInterrupted());
+      else signal.addEventListener('abort', () => reject(new DoctorInterrupted()), { once: true });
+    })
+    : null;
+  interrupted?.catch(() => {}); // handled where it is raced
+
   const results = [];
   try {
     for (const definition of DOCTOR_CHECKS) {
@@ -77,8 +125,9 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
       if (editor && definition.commandLineOnly) continue;
       let outcome;
       try {
-        outcome = await definition.run(context);
+        outcome = await (interrupted ? Promise.race([definition.run(context), interrupted]) : definition.run(context));
       } catch (error) {
+        if (error instanceof DoctorInterrupted) throw error;
         outcome = { severity: 'warn', title: `${definition.title} (could not run)`, message: `The check could not run: ${error.message}` };
       }
       // A warn or fail is reported by a title that states the problem (the
@@ -96,6 +145,9 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
       });
     }
   } finally {
+    // Stop a build still running before removing its folder, or it writes
+    // into the site after the doctor has gone.
+    if (signal?.aborted) await killProcessGroups(context.processGroups);
     for (const cleanup of context.cleanups) await cleanup().catch(() => {});
   }
 

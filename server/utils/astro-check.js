@@ -232,11 +232,15 @@ function cappedOutput(maxLength) {
  * started would otherwise outlive it, and one holding the output pipe would
  * hold the build open until the timeout), then read what is left in the pipes
  * and settle when they close, or after EXITED_PIPE_GRACE_MS.
+ * @param {(child: import('child_process').ChildProcess) => void} [onSpawn] - given the
+ *   shell once started (its pid is the group's id): the doctor kills the group
+ *   when it is interrupted
  * @returns {Promise<{exitCode: number|null, output: string, timedOut: boolean}>}
  */
-export function runCommand(command, cwd, timeoutMs, env) {
+export function runCommand(command, cwd, timeoutMs, env, onSpawn = null) {
   return new Promise((resolve, reject) => {
     const child = spawn('/bin/sh', ['-c', command], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (onSpawn && child.pid !== undefined) onSpawn(child);
     const output = cappedOutput(MAX_OUTPUT_BYTES);
     let settled = false;
     let exitCode = null;

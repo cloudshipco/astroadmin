@@ -91,8 +91,11 @@ const listSome = (items) => items.slice(0, MAX_LISTED).concat(items.length > MAX
  * filesystems (a tmpfs /tmp on Linux, a VM's shared folder).
  * Every site ignores node_modules, and .cache is where tools (Vite among
  * them) keep their scratch files. A node_modules symlinked onto another
- * filesystem, or none at all, falls back to the site's root. The build check
- * removes the directory when the doctor finishes. Exported for the tests.
+ * filesystem, or none at all (a site whose packages are hoisted above it),
+ * falls back to DOCTOR_FALLBACK_DIR in the site's root, which ignores itself
+ * (a `.gitignore` of `*`), so a `git add -A` during a build commits none of
+ * it. The build check removes its directory when the doctor finishes or is
+ * interrupted. Exported for the tests.
  * @param {string} projectRoot
  */
 export function doctorOutDirParent(projectRoot) {
@@ -107,7 +110,29 @@ export function doctorOutDirParent(projectRoot) {
   } catch {
     // no writable node_modules
   }
-  return projectRoot;
+  const fallback = path.join(projectRoot, DOCTOR_FALLBACK_DIR);
+  fs.mkdirSync(fallback, { recursive: true });
+  fs.writeFileSync(path.join(fallback, '.gitignore'), '*\n');
+  return fallback;
+}
+
+/** The doctor's build folder in a site with no node_modules of its own. */
+export const DOCTOR_FALLBACK_DIR = '.astroadmin-doctor';
+
+/**
+ * Remove a build folder made under doctorOutDirParent, and the fallback
+ * folder around it once only its .gitignore is left.
+ * @param {string} outDir
+ */
+function removeDoctorOutDir(outDir) {
+  fs.rmSync(outDir, { recursive: true, force: true });
+  const parent = path.dirname(outDir);
+  if (path.basename(parent) !== DOCTOR_FALLBACK_DIR) return;
+  try {
+    if (fs.readdirSync(parent).every((name) => name === '.gitignore')) fs.rmSync(parent, { recursive: true, force: true });
+  } catch {
+    // already gone
+  }
 }
 
 /**
@@ -343,9 +368,11 @@ export const CHECKS = [
         return { severity: 'fail', message: 'astro is not installed in the site (no node_modules/astro in its directory or above it in the repository); run the site\'s install first.' };
       }
       const outDir = fs.mkdtempSync(path.join(doctorOutDirParent(context.projectRoot), 'astroadmin-doctor-'));
-      context.cleanups.push(async () => fs.rmSync(outDir, { recursive: true, force: true }));
+      context.cleanups.push(async () => removeDoctorOutDir(outDir));
       const command = [bunExecutable(), '--no-install', '--bun', astroBin, 'build', '--outDir', outDir].map(shellQuote).join(' ');
-      const result = await runCommand(command, context.projectRoot, BUILD_TIMEOUT_MS, buildEnvironment());
+      // The build runs in its own process group, so a Ctrl-C reaches the
+      // doctor only: runDoctor kills the group when it is interrupted.
+      const result = await runCommand(command, context.projectRoot, BUILD_TIMEOUT_MS, buildEnvironment(), (child) => context.processGroups.push(child.pid));
       if (result.timedOut || result.exitCode !== 0) {
         context.buildSkippedReason = 'The build failed, so the built HTML could not be checked.';
         // The raw output goes to the terminal of whoever ran the doctor (the

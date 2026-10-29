@@ -242,13 +242,17 @@ cannot read statically: both components find `/images/...` files only in
 
 The CLI builds the site into a temporary directory under the site's
 `node_modules/.cache/` (unless `--build` is given), removed when the doctor
-finishes, and fails if the build does, or if it writes no HTML pages. The
+finishes, including when it is interrupted (Ctrl-C or SIGTERM stops the build
+and removes the directory; the doctor then exits 130 or 143), and fails if the
+build does, or if it writes no HTML pages. The
 build stays inside the site, as the publish check's does: Astro 6.3 loses a
 site's `src/assets` images when the output directory is outside the project
 (`ENOENT` under `.astro/_astro/`), and a system temp directory on another
 filesystem (a tmpfs `/tmp`, a VM's shared folder) breaks Astro's move of
 prerendered assets. A site with no `node_modules` of its own (a monorepo with
-hoisted packages) builds into a temporary directory in its root instead. When
+hoisted packages) builds into a temporary directory in `.astroadmin-doctor/` in
+its root instead; that folder ignores itself (a `.gitignore` of `*`), so a
+commit made during the build picks up none of it. When
 the build fails, its output is printed to the doctor's stderr, above the
 report. The built-HTML checks below need that build.
 

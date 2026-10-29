@@ -7,7 +7,7 @@
  */
 
 import assert from 'assert';
-import { spawnSync, execFileSync } from 'child_process';
+import { spawn, spawnSync, execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -190,9 +190,13 @@ const home = await getEntry('pages', 'home');
     return site;
   };
 
+  // A failing script that first records the --outDir it was given, so the
+  // clean-up check below has a positive control (the folder existed).
+  const recordOutDir = (name) => `import fs from 'fs';\nfs.writeFileSync(${JSON.stringify(path.join(tempRoot, `${name}.outdir`))}, process.argv[process.argv.indexOf('--outDir') + 1]);\n`;
+
   await checkAsync('a failed build\'s details point at the output above, never a server log (#73)', async () => {
-    const noCode = failingBuildSite('build-fails-no-code', "console.error('something went wrong'); process.exit(1);\n");
-    const withCode = failingBuildSite('build-fails-unknown-code', "console.error('[SomethingOddHappened] it broke'); process.exit(1);\n");
+    const noCode = failingBuildSite('build-fails-no-code', `${recordOutDir('build-fails-no-code')}console.error('something went wrong'); process.exit(1);\n`);
+    const withCode = failingBuildSite('build-fails-unknown-code', `${recordOutDir('build-fails-unknown-code')}console.error('[SomethingOddHappened] it broke'); process.exit(1);\n`);
     for (const site of [noCode, withCode]) {
       const run = doctorBuilding(site);
       const build = JSON.parse(run.stdout).results.find((result) => result.id === 'build-runs');
@@ -202,10 +206,14 @@ const home = await getEntry('pages', 'home');
       assert.ok(build.details.length > 0, JSON.stringify(build));
       assert.doesNotMatch(JSON.stringify(build), /server log/i, JSON.stringify(build));
       assert.match(build.details.join(' '), /output is above/, JSON.stringify(build));
-      // The build's output folder is cleaned up.
+      // The build's output folder was inside node_modules/.cache (positive
+      // control: the build was given it) and is cleaned up.
       const cache = path.join(site, 'node_modules', '.cache');
-      const leftovers = fs.existsSync(cache) ? fs.readdirSync(cache).filter((entry) => entry.startsWith('astroadmin-doctor-')) : [];
-      assert.deepEqual(leftovers, []);
+      const outDir = fs.readFileSync(path.join(tempRoot, `${path.basename(site)}.outdir`), 'utf-8');
+      assert.equal(path.dirname(outDir), cache, outDir);
+      assert.match(path.basename(outDir), /^astroadmin-doctor-/);
+      assert.equal(fs.existsSync(outDir), false, `${outDir} was left behind`);
+      assert.deepEqual(fs.readdirSync(cache).filter((entry) => entry.startsWith('astroadmin-doctor-')), []);
     }
     // The editor's wording is unchanged (the publish refusal has no output to point at).
     const { buildProblems } = await import('../server/utils/build-failure.js');
@@ -217,11 +225,95 @@ const home = await getEntry('pages', 'home');
     // A proxy for #73: Astro 6.3 loses src/assets images when outDir is
     // outside the project root, which this repo's Astro 7 does not reproduce.
     const { doctorOutDirParent } = await import('../server/doctor/checks.js');
-    const site = failingBuildSite('out-dir-parent', 'process.exit(1);\n');
+    const site = failingBuildSite('out-dir-parent', `${recordOutDir('out-dir-parent')}process.exit(1);\n`);
     const sameFilesystemTemp = fs.mkdtempSync(path.join(path.dirname(site), 'same-fs-temp-'));
     assert.equal(fs.statSync(sameFilesystemTemp).dev, fs.statSync(site).dev, 'the condition under test');
-    assert.equal(doctorOutDirParent(site, sameFilesystemTemp), path.join(site, 'node_modules', '.cache'));
+    spawnSync('bun', [path.join(repoRoot, 'bin/cli.js'), 'doctor', '--project', site, '--json'], { encoding: 'utf-8', timeout: 120_000, env: { ...process.env, TMPDIR: sameFilesystemTemp } });
+    const outDir = fs.readFileSync(path.join(tempRoot, 'out-dir-parent.outdir'), 'utf-8');
+    assert.equal(path.dirname(outDir), path.join(site, 'node_modules', '.cache'), outDir);
     assert.equal(doctorOutDirParent(site), path.join(site, 'node_modules', '.cache'));
+  });
+
+  // A site whose "astro" records the --outDir it was given, then, unless it
+  // is stopped, writes into it (creating it again if it was removed) after a
+  // few seconds. Ctrl-C reaches the doctor only: the build runs in its own
+  // process group.
+  const slowBuildScript = (name) => `import fs from 'fs';
+import path from 'path';
+const outDir = process.argv[process.argv.indexOf('--outDir') + 1];
+fs.writeFileSync(${JSON.stringify(path.join(tempRoot, `${name}.started`))}, outDir);
+setTimeout(() => {
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.join(outDir, 'late-marker'), 'the build outlived the doctor');
+  fs.writeFileSync(${JSON.stringify(path.join(tempRoot, `${name}.finished`))}, 'yes');
+}, 3000);
+`;
+  const waitFor = async (condition, what, timeoutMs = 30_000) => {
+    const startedAt = Date.now();
+    while (!condition()) {
+      if (Date.now() - startedAt > timeoutMs) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+  // Starts the doctor building, signals it once the build has started, and
+  // returns what happened.
+  const interruptDoctorBuild = async (name, site, signal, whileBuilding = () => null) => {
+    const startedFile = path.join(tempRoot, `${name}.started`);
+    const child = spawn('bun', [path.join(repoRoot, 'bin/cli.js'), 'doctor', '--project', site, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    const exited = new Promise((resolve) => child.on('exit', (code, exitSignal) => resolve({ code, exitSignal })));
+    await waitFor(() => fs.existsSync(startedFile), 'the build to start');
+    const outDir = fs.readFileSync(startedFile, 'utf-8');
+    // Positive control: the folder the build writes to exists while it runs.
+    assert.ok(fs.existsSync(outDir), `${outDir} exists during the build`);
+    const duringBuild = whileBuilding(outDir);
+    child.kill(signal);
+    const exit = await exited;
+    // Longer than the build's own delay: a build still running writes now.
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    return { outDir, exit, output, duringBuild, finished: fs.existsSync(path.join(tempRoot, `${name}.finished`)) };
+  };
+
+  await checkAsync('Ctrl-C during the doctor\'s build stops the build and removes its folder, exit 130', async () => {
+    const site = failingBuildSite('interrupted-build', slowBuildScript('interrupted-build'));
+    const { outDir, exit, output, finished } = await interruptDoctorBuild('interrupted-build', site, 'SIGINT');
+    assert.equal(path.dirname(outDir), path.join(site, 'node_modules', '.cache'), outDir);
+    assert.equal(finished, false, 'the build kept running after the doctor stopped');
+    assert.equal(fs.existsSync(outDir), false, `${outDir} was left behind`);
+    assert.equal(exit.code, 130, `exit ${JSON.stringify(exit)}\n${output}`);
+  });
+
+  await checkAsync('SIGTERM during the doctor\'s build does the same, exit 143', async () => {
+    const site = failingBuildSite('terminated-build', slowBuildScript('terminated-build'));
+    const { outDir, exit, output, finished } = await interruptDoctorBuild('terminated-build', site, 'SIGTERM');
+    assert.equal(finished, false, 'the build kept running after the doctor stopped');
+    assert.equal(fs.existsSync(outDir), false, `${outDir} was left behind`);
+    assert.equal(exit.code, 143, `exit ${JSON.stringify(exit)}\n${output}`);
+  });
+
+  await checkAsync('a site with no node_modules of its own builds into an ignored .astroadmin-doctor folder, removed when interrupted', async () => {
+    // A site in a subdirectory of its repository, astro hoisted to the top.
+    const monorepo = path.join(tempRoot, 'monorepo-fallback');
+    const site = path.join(monorepo, 'apps', 'site');
+    writeFile(site, 'package.json', JSON.stringify({ type: 'module' }));
+    writeFile(site, 'astro.config.mjs', HOSTED);
+    writeFile(monorepo, 'node_modules/astro/package.json', JSON.stringify({ name: 'astro', version: '7.0.0', type: 'module', bin: { astro: 'slow.js' } }));
+    writeFile(monorepo, 'node_modules/astro/slow.js', slowBuildScript('fallback-build'));
+    writeFile(monorepo, '.gitignore', '/node_modules\n');
+    execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main'], { cwd: monorepo });
+    execFileSync('/usr/bin/git', ['add', '-A'], { cwd: monorepo });
+    execFileSync('/usr/bin/git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'initial'], { cwd: monorepo });
+    // `git add -A` during the build must pick up nothing of it.
+    const untrackedDuringBuild = () => execFileSync('/usr/bin/git', ['status', '--porcelain', '--untracked-files=all'], { cwd: monorepo, encoding: 'utf-8' });
+    const { outDir, exit, output, finished, duringBuild } = await interruptDoctorBuild('fallback-build', site, 'SIGINT', untrackedDuringBuild);
+    assert.equal(path.dirname(outDir), path.join(site, '.astroadmin-doctor'), outDir);
+    assert.equal(duringBuild, '', `untracked during the build:\n${duringBuild}`);
+    assert.equal(finished, false, 'the build kept running after the doctor stopped');
+    assert.equal(fs.existsSync(outDir), false, `${outDir} was left behind`);
+    assert.equal(exit.code, 130, `exit ${JSON.stringify(exit)}\n${output}`);
+    assert.equal(fs.existsSync(path.join(site, '.astroadmin-doctor')), false, 'the .astroadmin-doctor folder was left behind');
   });
 
   await checkAsync('an --build directory with no HTML fails, and the built checks do not pass', async () => {

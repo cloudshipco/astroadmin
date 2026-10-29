@@ -356,12 +356,30 @@ program
     // Keep stdout for the JSON alone: the store and schema loader log progress.
     const printReport = console.log;
     if (options.json) console.log = (...args) => console.error(...args);
+    // Ctrl-C or SIGTERM: the doctor stops its build (which runs in its own
+    // process group, so the signal does not reach it) and removes the build
+    // folder before exiting 128 + the signal's number, never the global
+    // handler's exit 0, which left the build writing into the site.
+    const interruption = new AbortController();
+    let exitCode = 130;
+    process.removeListener('SIGINT', cleanup);
+    process.removeListener('SIGTERM', cleanup);
+    process.on('SIGINT', () => { exitCode = 130; interruption.abort(); });
+    process.on('SIGTERM', () => { exitCode = 143; interruption.abort(); });
     try {
-      const { runDoctor, formatReport } = await import('../server/doctor/index.js');
-      const report = await runDoctor({
-        projectRoot,
-        distDir: options.build ? path.resolve(options.build) : null,
-      });
+      const { runDoctor, formatReport, DoctorInterrupted } = await import('../server/doctor/index.js');
+      let report;
+      try {
+        report = await runDoctor({
+          projectRoot,
+          distDir: options.build ? path.resolve(options.build) : null,
+          signal: interruption.signal,
+        });
+      } catch (error) {
+        if (!(error instanceof DoctorInterrupted)) throw error;
+        console.error('\nThe doctor was interrupted; its build was stopped and removed.');
+        process.exit(exitCode);
+      }
       if (options.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
       else printReport(formatReport(report));
       process.exit(report.ok ? 0 : 1);
