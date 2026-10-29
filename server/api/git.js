@@ -25,6 +25,21 @@ import { withCheckoutExclusive, withCheckoutWrite } from '../utils/checkout-lock
 
 const router = express.Router();
 
+const DEFAULT_COMMIT_LIMIT = 10;
+const MAX_COMMIT_LIMIT = 100;
+
+/**
+ * The number of commits a log route reads: `?limit=` clamped to
+ * 1..MAX_COMMIT_LIMIT, DEFAULT_COMMIT_LIMIT when absent or not a number.
+ * Unclamped, `-1` reached git as `--max-count=-1` (no limit: the whole
+ * history) and a huge value read as many commits as it named.
+ */
+function commitLimit(rawLimit) {
+  const requested = Number.parseInt(rawLimit, 10);
+  if (!Number.isFinite(requested)) return DEFAULT_COMMIT_LIMIT;
+  return Math.min(Math.max(requested, 1), MAX_COMMIT_LIMIT);
+}
+
 export async function commitConfiguredGitPaths(fullConfig, message) {
   const git = createGitClient(fullConfig);
   const gitPaths = getGitPaths(fullConfig);
@@ -470,7 +485,7 @@ router.post('/commit', async (req, res) => {
  */
 router.get('/log', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = commitLimit(req.query.limit);
     const fullConfig = await getConfig();
     const git = createGitClient(fullConfig);
 
@@ -740,7 +755,7 @@ router.post('/restore-from-commit', async (req, res) => {
 router.get('/file-history', async (req, res) => {
   try {
     const { file } = req.query;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = commitLimit(req.query.limit);
     const fullConfig = await getConfig();
     const git = createGitClient(fullConfig);
 

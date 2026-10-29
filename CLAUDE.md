@@ -383,6 +383,10 @@ runner aggregating them). Most run server-less and need env vars:
   `./`, `.`, `src/..`) are dropped by `getAllowedGitPaths`, so they scope nothing, like `[]`:
   empty changes diff, package.json refused for diff and revert, absent from status; a real
   entry beside them still works.
+- `bun tests/git-log-limit.test.js` — `?limit=` on `/api/git/log` and `/api/git/file-history`
+  is clamped to 1..100 (absent or not a number: 10), over HTTP against a repo with 106
+  commits: `-1` (git's `--max-count=-1`, the whole history), `0` and `10000` are clamped,
+  ordinary values are honoured.
 - `bun tests/git-subdir-routes.test.js` — a site in `site-a/` of its repository, with
   siblings at the repo root (one, `src/content/pages/root-only.md`, has a site-relative
   name inside the git paths) and in `other/` (#68), over HTTP through the real app: status,
