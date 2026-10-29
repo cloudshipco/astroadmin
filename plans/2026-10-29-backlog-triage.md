@@ -1,8 +1,11 @@
 # Backlog triage and the first fix wave
 
-Status: DONE on main (2026-10-29), not yet released. The next release should
-be a minor (1.10.0): the commit log is narrower, `file()` ids are read-only,
-and top-level lists are edited inline.
+Status: RELEASED as 1.10.0 (2026-10-29, tag v1.10.0 at 1748ee3; npm shasum
+04e1aeb, the tarball packed from that commit). A minor release: the commit log
+is narrower, `file()` ids are read-only, top-level lists are edited inline, and
+sites can label any field. Before publishing: #39, #54's message, #81, and a
+real-browser check of main on a copy of a real site (all collections, blocks,
+the modal stack, the Changes panel), which found the commit-dialog focus bug.
 
 ## Triage
 
