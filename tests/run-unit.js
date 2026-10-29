@@ -25,6 +25,7 @@ const FAST_TESTS = [
   'form-generator', 'extract-fields', 'untouched-fields', 'untouched-structure',
   'primitive-top-level-array', 'clean-nullable', 'blank-optional-round-trip',
   'date-round-trip', 'gallery-structural', 'modal-escape', 'ui-escaping',
+  'colour-field',
   'schema-markers', 'date-marker', 'stand-in-marks', 'schema-references',
   'schema-refinements', 'route-detection', 'content-validation',
   'content-problems', 'block-reveal', 'changes-panel-renames', 'entry-urls',
