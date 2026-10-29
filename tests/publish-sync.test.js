@@ -9,7 +9,12 @@
  *     anything is staged, and left as it was;
  *   - an inherited rebase.autoStash never leaves conflict markers behind;
  *   - a save that arrives while publish is committing and rebasing waits for
- *     it, so the abort's reset cannot discard it.
+ *     it, so the abort's reset cannot discard it;
+ *   - /api/git/pull waits for a publish's check (the git lock, #59), and the
+ *     commit route's refused check is a 422 that keeps the commit local.
+ *
+ * Timed by barriers (a `git` wrapper on PATH, an armed check command), never
+ * by git hooks, which the server disables.
  *
  * The publish check is a trivial command: tests/publish-check.test.js covers
  * the build. ~5 s.
@@ -416,6 +421,50 @@ try {
       assert.match(readSite('src/content/pages/home.md'), /Home \(during pull\)/);
     } finally {
       barrier.remove();
+      resetSite();
+    }
+  });
+
+  // #59: the check runs outside the checkout hold (it builds in its own
+  // worktree), so only the git lock keeps a pull from moving HEAD between
+  // the commit that was checked and the push.
+  await check("/api/git/pull waits for a publish's check, so the commit checked is the one pushed", async () => {
+    assert.equal((await save('home', 'Home (checked)')).status, 200);
+    const barrier = installBarrier(['check']);
+    try {
+      const publishing = publish();
+      await barrier.reached();
+      const checkedHead = localHead();
+      const pulling = post('/api/git/pull', {});
+      assert.ok(await stillPending(pulling), 'the pull waits for the publish');
+      assert.equal(localHead(), checkedHead, 'HEAD has not moved under the check');
+      barrier.release();
+      const [published, pulled] = await Promise.all([publishing, pulling]);
+      assert.equal(published.status, 200, JSON.stringify(published.body));
+      assert.equal(pulled.status, 200, JSON.stringify(pulled.body));
+      assert.equal(remoteHead(), checkedHead, 'the checked commit is what was pushed');
+    } finally {
+      barrier.remove();
+      resetSite();
+    }
+  });
+
+  await check('the commit route: a commit the check refuses is kept local and reported (422)', async () => {
+    const before = remoteHead();
+    assert.equal((await save('home', 'Home (refused)')).status, 200);
+    fs.writeFileSync(checkFails, '');
+    try {
+      const { status, body } = await commitRoute();
+      assert.equal(status, 422, JSON.stringify(body));
+      assert.equal(body.committed, true);
+      assert.equal(body.pushed, false);
+      assert.ok(body.check?.problems?.length > 0, 'the refusal says why');
+      assert.equal(body.commit?.hash, localHead(), 'the reported commit is the local HEAD');
+      assert.equal(remoteHead(), before, 'nothing was pushed');
+      assert.match(git(projectRoot, 'show', 'HEAD:src/content/pages/home.md'), /Home \(refused\)/, 'the save is committed');
+      assertNoServerPath(body);
+    } finally {
+      fs.rmSync(checkFails, { force: true });
       resetSite();
     }
   });
