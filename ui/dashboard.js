@@ -13,6 +13,7 @@ import {
   REFERENCE_EMPTY_HTML,
   formatBlockType,
   newEntryValues,
+  reindexItems,
 } from './form-generator.js';
 import { resolvePreviewTarget, previewPathToSitePath, componentPreviewPath } from './preview-routes.js';
 import {
@@ -1280,17 +1281,7 @@ function replaceReferenceItem(item, fieldPath, newId, itemData = null) {
  * Reindex reference items after removal
  */
 function reindexReferenceItems(referenceField) {
-  const fieldPath = referenceField.dataset.field;
-  const items = referenceField.querySelectorAll('.reference-card');
-
-  items.forEach((item, newIndex) => {
-    item.dataset.index = newIndex;
-
-    const input = item.querySelector('input[type="hidden"]');
-    if (input) {
-      input.name = `${fieldPath}[${newIndex}]`;
-    }
-  });
+  reindexItems(referenceField.querySelectorAll('.reference-card'), referenceField.dataset.field);
 }
 
 // Collapse all blocks by default

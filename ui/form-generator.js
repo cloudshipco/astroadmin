@@ -336,7 +336,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
 
   // Handle blocks array (discriminated union)
   if (schema.type === 'array' && schema.blockTypes) {
-    return generateBlocksField(name, schema, value, fullPath);
+    return generateBlocksField(name, schema, value, fullPath, idPrefix);
   }
 
   if (schema.type === 'object') {
@@ -397,7 +397,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     return `
       <div class="form-group">
         <label class="form-label">${getFieldLabel(name, schema)}</label>
-        <div class="array-field" data-field="${fullPath}" data-array-items data-schema="${jsonAttr(schema.items || {})}">
+        <div class="array-field" data-field="${fullPath}" data-array-items data-schema="${jsonAttr(schema.items || {})}"${idPrefixAttribute(idPrefix)}>
           ${items.map((item, index) => `
             <div class="array-item" data-index="${index}" draggable="true">
               <div class="array-item-handle" title="Drag to reorder">
@@ -408,7 +408,7 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
                 </svg>
               </div>
               <div class="array-item-content">
-                ${generateArrayItem(fullPath, schema.items, item, index)}
+                ${generateArrayItem(fullPath, schema.items, item, index, idPrefix)}
               </div>
               <div class="array-item-actions">
                 <button type="button" class="array-item-btn array-item-delete remove-array-item" title="Delete">
@@ -687,7 +687,7 @@ function nullableBooleanSelect(fullPath, value, attributes) {
 /**
  * Generate blocks field (array with discriminated union)
  */
-function generateBlocksField(name, schema, value, fullPath) {
+function generateBlocksField(name, schema, value, fullPath, idPrefix = '') {
   const blocks = Array.isArray(value) ? value : [];
   const blockTypes = schema.blockTypes || {};
   const availableTypes = Object.keys(blockTypes);
@@ -709,17 +709,28 @@ function generateBlocksField(name, schema, value, fullPath) {
         </div>
       </div>
 
-      <div class="blocks-list" data-field="${fullPath}" data-array-items data-block-types="${jsonAttr(blockTypes)}">
-        ${blocks.map((block, index) => generateBlockItem(fullPath, blockTypes, block, index)).join('\n')}
+      <div class="blocks-list" data-field="${fullPath}" data-array-items data-block-types="${jsonAttr(blockTypes)}"${idPrefixAttribute(idPrefix)}>
+        ${blocks.map((block, index) => generateBlockItem(fullPath, blockTypes, block, index, idPrefix)).join('\n')}
       </div>
     </div>
   `;
 }
 
 /**
- * Generate a single block item
+ * A list rendered with an id prefix (inside the item modal) carries it, so an
+ * item added to it later gets prefixed ids too, like the items rendered with it.
  */
-function generateBlockItem(arrayPath, blockTypes, block, index) {
+function idPrefixAttribute(idPrefix) {
+  return idPrefix ? ` data-id-prefix="${escapeHtml(idPrefix)}"` : '';
+}
+
+/**
+ * Generate a single block item
+ * @param {string} [idPrefix] - the form's id prefix (generateFields), kept for
+ *   the block's own fields: dropping it gave a block in the item modal the ids
+ *   of the form behind, so its labels focused that form's inputs
+ */
+function generateBlockItem(arrayPath, blockTypes, block, index, idPrefix = '') {
   const blockType = block?.type;
   const blockSchema = blockTypes[blockType];
   const path = `${arrayPath}[${index}]`;
@@ -735,7 +746,7 @@ function generateBlockItem(arrayPath, blockTypes, block, index) {
     `;
   }
 
-  const blockFields = generateBlockFields(path, blockSchema.properties, block);
+  const blockFields = generateBlockFields(path, blockSchema.properties, block, idPrefix);
 
   return `
     <div class="block-item" data-index="${index}" data-type="${escapeHtml(blockType)}" draggable="true">
@@ -759,9 +770,9 @@ function generateBlockItem(arrayPath, blockTypes, block, index) {
 /**
  * Generate fields for a block based on its schema
  */
-function generateBlockFields(path, properties, data) {
+function generateBlockFields(path, properties, data, idPrefix = '') {
   // 'type' is the discriminator, carried in a hidden input by generateBlockItem
-  return generateFields(properties, data || {}, { path, skip: ['type'] });
+  return generateFields(properties, data || {}, { path, idPrefix, skip: ['type'] });
 }
 
 /**
@@ -805,8 +816,10 @@ function getBlockPreview(block) {
 
 /**
  * Generate array item fields
+ * @param {string} [idPrefix] - the form's id prefix, kept for the item's fields
+ *   (see generateBlockItem)
  */
-function generateArrayItem(arrayPath, rawItemSchema, value, index) {
+function generateArrayItem(arrayPath, rawItemSchema, value, index, idPrefix = '') {
   const path = `${arrayPath}[${index}]`;
   const itemSchema = unwrapNullable(rawItemSchema);
   const itemData = value || {};
@@ -821,7 +834,7 @@ function generateArrayItem(arrayPath, rawItemSchema, value, index) {
     // as a 70px thumbnail rather than a full-width preview.
     return `
       <div class="${layoutClass}">
-        ${generateFields(properties, itemData, { path, pickerVariant: 'thumb' })}
+        ${generateFields(properties, itemData, { path, idPrefix, pickerVariant: 'thumb' })}
       </div>
     `;
   }
@@ -2198,12 +2211,13 @@ function setupBlockHandlers(formElement, onBlockChange) {
       const blocksList = container.querySelector('.blocks-list');
       const blockTypes = JSON.parse(blocksList.dataset.blockTypes || '{}');
       const fieldPath = blocksList.dataset.field;
-      const index = blocksList.querySelectorAll('.block-item').length;
+      // The list's own blocks: a nested list's items are not its items.
+      const index = directItems(blocksList, 'block-item').length;
 
       // Use createEmptyBlock to populate defaults (prevents schema validation errors)
       const blockSchema = blockTypes[blockType];
       const newBlock = createEmptyBlock(blockType, blockSchema);
-      const blockHtml = generateBlockItem(fieldPath, blockTypes, newBlock, index);
+      const blockHtml = generateBlockItem(fieldPath, blockTypes, newBlock, index, blocksList.dataset.idPrefix || '');
 
       // Add to DOM
       blocksList.insertAdjacentHTML('beforeend', blockHtml);
@@ -2420,7 +2434,10 @@ function setupArrayHandlers(formElement, onBlockChange) {
       const arrayField = e.target.closest('.array-field');
       const fieldPath = arrayField.dataset.field;
       const itemSchema = JSON.parse(arrayField.dataset.schema || '{}');
-      const index = arrayField.querySelectorAll('.array-item').length;
+      // The list's own items: counting every .array-item below it counted the
+      // items of lists inside them too, so the new item was `rows[3]` after
+      // one row holding two tags (#56).
+      const index = directItems(arrayField, 'array-item').length;
 
       const newItem = document.createElement('div');
       newItem.className = 'array-item';
@@ -2435,7 +2452,7 @@ function setupArrayHandlers(formElement, onBlockChange) {
           </svg>
         </div>
         <div class="array-item-content">
-          ${generateArrayItem(fieldPath, itemSchema, null, index)}
+          ${generateArrayItem(fieldPath, itemSchema, null, index, arrayField.dataset.idPrefix || '')}
         </div>
         <div class="array-item-actions">
           <button type="button" class="array-item-btn array-item-delete remove-array-item" title="Delete">
@@ -2777,14 +2794,28 @@ function repointItemPaths(item, arrayPath, oldIndex, newIndex) {
       : path
   );
 
+  // An id is the form's prefix plus the name with `.[]` as `_`
+  // (generateField). The prefix is kept as it is, and each label that pointed
+  // at an old id follows its control: rebuilding ids without the prefix, and
+  // rewriting the first `_<n>_` of a label (which in `rows_0_blocks_1_x` is the
+  // row, not the block), left labels focusing the wrong input (#56).
+  const idOf = (name) => name.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
+  const newIds = new Map();
   item.querySelectorAll('input, textarea, select').forEach(input => {
     if (!input.name) return;
     const newName = repoint(input.name);
     if (newName === input.name) return;
-    input.name = newName;
-    if (input.id) {
-      input.id = newName.replace(/\./g, '_').replace(/\[/g, '_').replace(/\]/g, '');
+    const oldId = input.id;
+    if (oldId && oldId.endsWith(idOf(input.name))) {
+      const newId = oldId.slice(0, oldId.length - idOf(input.name).length) + idOf(newName);
+      newIds.set(oldId, newId);
+      input.id = newId;
     }
+    input.name = newName;
+  });
+  item.querySelectorAll('label[for]').forEach(label => {
+    const newId = newIds.get(label.htmlFor);
+    if (newId) label.htmlFor = newId;
   });
 
   item.querySelectorAll('[data-field]').forEach(element => {
@@ -2806,26 +2837,28 @@ function directItems(list, className) {
 }
 
 /**
+ * Renumber a list's items in their current order: each item's `data-index`
+ * and every path inside it (repointItemPaths). Shared by inline lists, block
+ * lists and the dashboard's reference lists.
+ * @param {Iterable<HTMLElement>} items - the list's own items, in order
+ * @param {string} fieldPath - the list's path (`blocks`, `rows[0].tags`)
+ */
+export function reindexItems(items, fieldPath) {
+  Array.from(items).forEach((item, newIndex) => {
+    const oldIndex = Number(item.dataset.index);
+    item.dataset.index = newIndex;
+    repointItemPaths(item, fieldPath, oldIndex, newIndex);
+  });
+}
+
+/**
  * Reindex blocks after reordering or removal.
  * Walks every blocks list in the form (outer lists first, in document order), not
  * only the first one: a form can hold more than one, e.g. `section.blocks`.
  */
 function reindexBlocks(formElement) {
   formElement.querySelectorAll('.blocks-list').forEach(blocksList => {
-    const fieldPath = blocksList.dataset.field;
-
-    directItems(blocksList, 'block-item').forEach((block, newIndex) => {
-      const oldIndex = Number(block.dataset.index);
-      block.dataset.index = newIndex;
-      repointItemPaths(block, fieldPath, oldIndex, newIndex);
-
-      // Update labels
-      block.querySelectorAll('label[for]').forEach(label => {
-        const forAttr = label.getAttribute('for');
-        const newFor = forAttr.replace(/_\d+_/, `_${newIndex}_`);
-        label.setAttribute('for', newFor);
-      });
-    });
+    reindexItems(directItems(blocksList, 'block-item'), blocksList.dataset.field);
   });
 }
 
@@ -2833,13 +2866,7 @@ function reindexBlocks(formElement) {
  * Reindex array items after removal
  */
 function reindexArrayItems(arrayField) {
-  const fieldPath = arrayField.dataset.field;
-
-  directItems(arrayField, 'array-item').forEach((item, newIndex) => {
-    const oldIndex = Number(item.dataset.index);
-    item.dataset.index = newIndex;
-    repointItemPaths(item, fieldPath, oldIndex, newIndex);
-  });
+  reindexItems(directItems(arrayField, 'array-item'), arrayField.dataset.field);
 }
 
 /**
