@@ -163,9 +163,23 @@ async function readFileCollection(filePath, { missingOk = false } = {}) {
   return { array, raw };
 }
 
-/** Entry identity within a file() collection array: id, falling back to slug. */
+/**
+ * A file() collection item's entry id, as Astro's file() loader derives it:
+ * `(item.id ?? item.slug)?.toString()` (astro/dist/content/loaders/file.js).
+ * So a numeric `id: 1` is the entry "1", and `id: 0` is not missing. Astro
+ * skips an item whose id is empty; so does this (undefined).
+ * @param {unknown} item - one element of the collection's array
+ * @returns {string|undefined}
+ */
+export function fileEntryId(item) {
+  if (item === null || typeof item !== 'object') return undefined;
+  const entryId = (item.id ?? item.slug)?.toString();
+  return entryId === '' ? undefined : entryId;
+}
+
+/** The index of the item whose entry id (fileEntryId) is `entryId`, or -1. */
 function findEntryIndex(arr, entryId) {
-  return arr.findIndex((item) => item.id === entryId || item.slug === entryId);
+  return arr.findIndex((item) => fileEntryId(item) === entryId);
 }
 
 /**
@@ -321,7 +335,9 @@ async function writeFileCollectionEntry(filePath, entryId, entryData) {
   await withFileWriteQueue(filePath, async () => {
     const { array: arr, raw } = await readFileCollection(filePath, { missingOk: true });
     const index = findEntryIndex(arr, entryId);
-    const next = { ...entryData, id: entryId };
+    // The stored id, not the URL's text of it: `id: 1` stays the number 1.
+    const storedId = index >= 0 ? arr[index].id : undefined;
+    const next = { ...entryData, id: storedId ?? entryId };
     if (index >= 0) {
       // Preserve array order (position), and the entry's own key order: the
       // editor sends `id` last and keys in form order.
@@ -409,7 +425,7 @@ export async function listSlugs(collection) {
   if (info.isFile) {
     try {
       const arr = await readFileCollectionArray(info.filePath, { missingOk: true });
-      return arr.map((item, index) => item.id || item.slug || String(index));
+      return arr.map((item, index) => fileEntryId(item) ?? String(index));
     } catch {
       return [];
     }

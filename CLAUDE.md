@@ -547,6 +547,11 @@ queue, so the old body is never written back.
   form shows the name chosen in the "Create New" dialog (`newEntryValues`). Through the
   real parser, app and renderer, and the dashboard's `renderEditorForNewEntry`; control: a
   `glob()` entry's `id` field stays editable and its edit is saved. ~1 s.
+- `bun tests/file-entry-keys.test.js` — a `file()` item is found by the id Astro gives it,
+  `(id ?? slug)?.toString()` (`fileEntryId` in `server/utils/content-files.js`), and its
+  stored id is written back with its own type: a numeric `id: 2` is listed and opened as
+  `"2"`, and a save edits it in place (no appended duplicate), keeps it the number 2, and
+  leaves the other entries' text alone. Real parser, app and renderer. ~1 s.
 - `bun tests/schema-references.test.js` — Astro's `reference()` parses (a string id;
   `z.array(reference(c))` a list) carrying `referenceCollection`, and `<base>Ids` resolves
   against the DECLARED collections (`<base>s`, `<base>`, `<base>es`, y->ies; nothing declared
