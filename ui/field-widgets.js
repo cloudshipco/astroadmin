@@ -443,6 +443,11 @@ function setupColorPickers(container, onChange) {
  * Textareas: grow with content, and expand into a fullscreen editor
  */
 function setupTextareas(container, onChange) {
+  // Fit each one to its content now: the rows the renderer chose are a guess
+  // from the character count, and a long value wraps sooner than that on a
+  // narrow screen. One that is not laid out yet keeps its rows.
+  container.querySelectorAll('textarea.textarea-autogrow').forEach(autoGrowTextarea);
+
   container.addEventListener('input', (e) => {
     if (e.target.classList.contains('textarea-autogrow')) {
       autoGrowTextarea(e.target);
@@ -461,11 +466,21 @@ function setupTextareas(container, onChange) {
   });
 }
 
+/**
+ * Fit a textarea to its content, up to ~16 rows. The floor is its own `rows`
+ * (with `height: auto` the box is at least that tall, so scrollHeight is too),
+ * not a fixed 100px: a two-row field stays two rows until it needs more (#87).
+ */
 export function autoGrowTextarea(textarea) {
-  textarea.style.height = 'auto';
-  const minHeight = 100; // ~4 rows
   const maxHeight = 400; // ~16 rows
-  textarea.style.height = Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight)) + 'px';
+  textarea.style.height = 'auto';
+  // Not laid out (inside a collapsed block): nothing to measure, so leave it
+  // at its rows rather than setting a 0px height that outlives the collapse.
+  if (textarea.scrollHeight === 0) return;
+  // The box is border-box, and scrollHeight leaves out the borders: without
+  // them the last line is a couple of pixels short and the box scrolls.
+  const borders = textarea.offsetHeight - textarea.clientHeight;
+  textarea.style.height = Math.min(maxHeight, textarea.scrollHeight + borders) + 'px';
 }
 
 /**

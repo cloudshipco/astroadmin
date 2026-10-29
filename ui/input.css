@@ -1562,9 +1562,10 @@
     @apply absolute top-2 right-2 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors cursor-pointer;
   }
 
+  /* No min-height: the textarea's rows are its floor (two for a short value,
+     more for long text), and autoGrowTextarea grows it from there (#87). */
   .textarea-autogrow {
     @apply resize-y;
-    min-height: 100px;
   }
 
   /* Markdown body formatting toolbar */

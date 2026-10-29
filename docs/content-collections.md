@@ -125,6 +125,9 @@ inputs and colour fields:
 ctaHref: z.string().meta({ label: 'Button link', placeholder: '/contact' }),
 ```
 
+`multiline` chooses between a one-line input and a text area for a text
+field (see [text fields](#text-fields)).
+
 `.meta()` needs zod 4, which `astro/zod` is on Astro 6 and later. zod 3 has
 no `.meta()` and its `.describe()` sets a description, not a label, so on
 zod 3 the label is always the formatted name: choose names an editor will
@@ -167,6 +170,19 @@ described as one:
 ```typescript
 title: z.string().describe('textarea'),
 ```
+
+A text area is as tall as its text, two lines at least, and grows as the
+editor types. To choose for yourself, set `multiline` with `.meta()` (zod 4,
+like `label` above): `false` makes a one-line input, `true` a text area,
+whatever the field's name.
+
+```typescript
+attribution: z.string().meta({ multiline: false }),
+title: z.string().meta({ multiline: true }),
+```
+
+A stored value that holds a line break is always shown in a text area, so
+editing it cannot drop the break.
 
 ### Colours
 

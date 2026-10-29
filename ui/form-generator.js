@@ -607,13 +607,20 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   // short-named field (e.g. a long `title`). This only ever adds a textarea, so
   // it can't shrink a field that was one before.
   const wantsTextarea = /\btextarea\b/i.test(schema.description || '');
+  const guessedTextarea = wantsTextarea || (!isShortByLength && !isShortByName && !isShortByFormat) || isLongByName;
+  // The site's own say (zod 4 `.meta({ multiline })`) beats the guess, except
+  // that a stored value holding a line break stays a textarea: an input would
+  // drop the break on the first edit.
+  const content = displayText(value);
+  const multiline = typeof schema.multiline === 'boolean' ? schema.multiline : guessedTextarea;
 
-  if (wantsTextarea || (!isShortByLength && !isShortByName && !isShortByFormat) || isLongByName) {
-    // Calculate initial rows based on content length
-    const content = displayText(value);
+  if (multiline || content.includes('\n')) {
+    // Sized to the content, two rows at least (#87): a four-row floor made
+    // every short value (`Photo: A. Person`) a tall box. autoGrowTextarea
+    // grows it as the editor types.
     const lineCount = (content.match(/\n/g) || []).length + 1;
     const charBasedRows = Math.ceil(content.length / 60); // ~60 chars per line
-    const initialRows = Math.max(4, Math.min(16, Math.max(lineCount, charBasedRows)));
+    const initialRows = Math.max(2, Math.min(16, Math.max(lineCount, charBasedRows)));
 
     return `
       <div class="form-group">

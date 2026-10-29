@@ -27,7 +27,7 @@ const FAST_TESTS = [
   'primitive-top-level-array', 'clean-nullable', 'blank-optional-round-trip',
   'date-round-trip', 'gallery-structural', 'modal-escape', 'modal-scroll-lock',
   'ui-escaping',
-  'colour-field',
+  'colour-field', 'text-field-sizing',
   'schema-markers', 'date-marker', 'stand-in-marks', 'schema-references',
   'schema-refinements', 'route-detection', 'content-validation',
   'content-problems', 'block-reveal', 'changes-panel-renames', 'entry-urls',
