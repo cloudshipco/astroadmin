@@ -35,7 +35,8 @@ const FAST_TESTS = [
   'error-paths', 'image-serving', 'image-symlink', 'image-picker-astro',
   'video-upload', 'git-api', 'git-subdir', 'git-subdir-routes',
   'git-paths-scope', 'git-log-limit', 'checkout-lock', 'publish-sync',
-  'publish-message', 'publish-api', 'publish-failure', 'deploy',
+  'publish-message', 'publish-api', 'publish-failure', 'publish-live-status',
+  'deploy',
   'build-failure', 'build-deploy-responses',
 ];
 
