@@ -178,6 +178,10 @@ const defaultConfig = {
     windowMs: 15 * 60 * 1000, // 15 minutes
     // Per IP address: anyone not signed in, and every login attempt.
     max: IS_DEV ? 1000 : 100,
+    // Per IP address: failed logins only (a successful login is not
+    // counted). Ten guesses per 15 minutes; an editor who mistypes a few
+    // times is not locked out.
+    loginMax: 10,
     // Per signed-in session. Measured in the dashboard: an autosave is 2
     // requests (the POST, then git status), a page load 7 to 9, idle 0. An
     // editor saving every 1.5 s for the whole window makes 1,200; a publish

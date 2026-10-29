@@ -25,6 +25,7 @@ import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
 import { requireSameOrigin } from './utils/same-origin.js';
 import { apiRateLimiters } from './utils/rate-limit.js';
 import { sessionFingerprint } from './utils/session-fingerprint.js';
+import { authFailedLine } from './utils/auth-log.js';
 import { mediaKindOf } from '../ui/media-kinds.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,7 +86,8 @@ export async function createServer() {
 
   // Rate limiting (production only). After the session middleware: a
   // signed-in session gets its own budget, everyone else and every login
-  // attempt share the strict per-address one (server/utils/rate-limit.js).
+  // attempt share the strict per-address one, and failed logins also have
+  // their own, smaller per-address budget (server/utils/rate-limit.js).
   if (fullConfig.rateLimit.enabled) {
     app.use('/api/', ...apiRateLimiters(fullConfig.rateLimit));
   }
@@ -129,22 +131,32 @@ export async function createServer() {
     }
 
     if (ok) {
-      req.session.authenticated = true;
-      req.session.user = fullConfig.auth.username;
-
-      // Explicitly save session to ensure cookie is set
-      req.session.save((err) => {
-        if (err) {
-          console.error('[Login] Session save error:', err);
+      // A new session ID on every login, so a session ID planted or seen
+      // before login (session fixation) is never the signed-in one.
+      req.session.regenerate((regenerateError) => {
+        if (regenerateError) {
+          console.error('[Login] Session regenerate error:', regenerateError);
           return res.status(500).json({ success: false, error: 'Session error' });
         }
-        // Never the session ID itself: it is a credential, and this line goes
-        // to the system journal. A short digest still ties log lines together.
-        console.log(`[Login] Success, session ${sessionFingerprint(req.sessionID)}`);
-        res.json({ success: true, user: fullConfig.auth.username });
+        req.session.authenticated = true;
+        req.session.user = fullConfig.auth.username;
+
+        // Explicitly save session to ensure cookie is set
+        req.session.save((err) => {
+          if (err) {
+            console.error('[Login] Session save error:', err);
+            return res.status(500).json({ success: false, error: 'Session error' });
+          }
+          // Never the session ID itself: it is a credential, and this line goes
+          // to the system journal. A short digest still ties log lines together.
+          console.log(`[Login] Success, session ${sessionFingerprint(req.sessionID)}`);
+          res.json({ success: true, user: fullConfig.auth.username });
+        });
       });
     } else {
-      console.log('[Login] Failed login attempt');
+      // The fixed line a host's fail2ban matches (server/utils/auth-log.js):
+      // no username or other client text, so it cannot be forged.
+      console.log(authFailedLine(req.ip));
       res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
   });

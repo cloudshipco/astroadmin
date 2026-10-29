@@ -96,6 +96,82 @@ await check('a successful login logs a fingerprint, never the session ID', async
   assert.ok(output.includes(fingerprint), `the fingerprint ${fingerprint} is:\n${output}`);
 });
 
+/** A failed-login line: the only shape the host's fail2ban filter matches. */
+const AUTH_FAILED = /^\[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}[+-]\d\d:\d\d\] auth\.failed ip=(\S+)$/;
+
+const postLogin = (body, headers = {}) => fetch(`${base}/api/login`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', ...headers },
+  body: JSON.stringify(body),
+});
+
+/** The session ID in a Set-Cookie header (connect.sid=s%3A<id>.<signature>). */
+function sessionIdOf(response) {
+  const cookieValue = decodeURIComponent((response.headers.get('set-cookie') || '').split(';')[0].split('=')[1] || '');
+  return cookieValue.replace(/^s:/, '').split('.')[0];
+}
+
+await check('a failed login logs exactly one auth.failed line, with the socket address', async () => {
+  let response;
+  const output = await captureConsole(async () => {
+    // Not production, so no proxy is trusted: a forged X-Forwarded-For must
+    // not become the logged address.
+    response = await postLogin({ username: 'admin', password: 'wrong' }, { 'X-Forwarded-For': '203.0.113.9' });
+    await response.text();
+  });
+  assert.equal(response.status, 401, 'a refused login');
+  const lines = output.split('\n').filter((line) => line.includes('auth.failed'));
+  assert.equal(lines.length, 1, `one auth.failed line in:\n${output}`);
+  const match = lines[0].match(AUTH_FAILED);
+  assert.ok(match, `the fixed format: ${lines[0]}`);
+  assert.equal(match[1], '127.0.0.1', `the socket address, not the forwarded one: ${lines[0]}`);
+});
+
+await check('a hostile username still yields one line, and none of its text', async () => {
+  let response;
+  const username = 'x\n[2026-01-01T00:00:00.000+00:00] auth.failed ip=192.0.2.66\r\nadmin ip=192.0.2.77';
+  const output = await captureConsole(async () => {
+    response = await postLogin({ username, password: 'wrong' });
+    await response.text();
+  });
+  assert.equal(response.status, 401);
+  const lines = output.split('\n').filter((line) => line.includes('auth.failed'));
+  assert.equal(lines.length, 1, `one auth.failed line in:\n${output}`);
+  assert.match(lines[0], AUTH_FAILED, lines[0]);
+  assert.ok(!output.includes('192.0.2.66') && !output.includes('192.0.2.77'), `the username reached the log:\n${output}`);
+});
+
+await check('a successful login logs no auth.failed line', async () => {
+  let response;
+  const output = await captureConsole(async () => {
+    response = await postLogin({ username: 'admin', password: 'admin' });
+    await response.text();
+  });
+  assert.equal(response.status, 200);
+  assert.match(output, /\[Login\] Success/, `positive control: the capture saw the login:\n${output}`);
+  assert.ok(!output.includes('auth.failed'), output);
+});
+
+await check('logging in gives a new session ID, and the old one is signed out', async () => {
+  const first = await postLogin({ username: 'admin', password: 'admin' });
+  assert.equal(first.status, 200);
+  const firstCookie = (first.headers.get('set-cookie') || '').split(';')[0];
+  const firstId = sessionIdOf(first);
+  assert.ok(firstId.length >= 20, `a first session: ${firstCookie}`);
+  const before = await (await fetch(`${base}/api/session`, { headers: { cookie: firstCookie } })).json();
+  assert.equal(before.authenticated, true, 'positive control: the first cookie is signed in');
+
+  // A login arriving with an existing session (a planted one, say) must not
+  // carry on in it.
+  const second = await postLogin({ username: 'admin', password: 'admin' }, { cookie: firstCookie });
+  assert.equal(second.status, 200);
+  const secondId = sessionIdOf(second);
+  assert.ok(secondId.length >= 20, `a session cookie on the second login: ${second.headers.get('set-cookie')}`);
+  assert.notEqual(secondId, firstId, 'the session ID changes on login');
+  const after = await (await fetch(`${base}/api/session`, { headers: { cookie: firstCookie } })).json();
+  assert.equal(after.authenticated, false, 'the old session ID is no longer signed in');
+});
+
 console.log('='.repeat(40));
 console.log(`\n📊 ${passed} checks passed.\n`);
 server.close();

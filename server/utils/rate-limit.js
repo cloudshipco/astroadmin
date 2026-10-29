@@ -1,11 +1,14 @@
 /**
  * The /api rate limits (production only; server/config.js `rateLimit`).
  *
- * Two budgets per window:
+ * Three budgets per window:
  * - anyone not signed in, and every login attempt, share a strict budget per
- *   IP address (`max`). That is the brute-force guard, and on a hosted
- *   instance nginx also limits /api/login on its own (`astroadmin_login` in
- *   nixos/astroadmin-instance.nix);
+ *   IP address (`max`);
+ * - FAILED logins also have their own, much smaller budget per address
+ *   (`loginMax`; a successful login is not counted). That is the brute-force
+ *   guard, and it is the app's own: it does not rely on a proxy in front.
+ *   Each failure also logs a fixed `auth.failed ip=<address>` line
+ *   (server/utils/auth-log.js) for a host's fail2ban to act on;
  * - a signed-in session has its own, much larger budget (`sessionMax`), keyed
  *   by the session, so an editor's autosaves never use up the address's
  *   budget and cannot reach it in normal work.
@@ -48,10 +51,10 @@ function isSessionRequest(req) {
 }
 
 /**
- * @param {{windowMs: number, max: number, sessionMax: number}} limits
+ * @param {{windowMs: number, max: number, sessionMax: number, loginMax: number}} limits
  * @returns {import('express').RequestHandler[]} mount on '/api/', in order
  */
-export function apiRateLimiters({ windowMs, max, sessionMax }) {
+export function apiRateLimiters({ windowMs, max, sessionMax, loginMax }) {
   const perAddress = rateLimit({
     windowMs,
     limit: max,
@@ -66,5 +69,13 @@ export function apiRateLimiters({ windowMs, max, sessionMax }) {
     keyGenerator: (req) => `session:${createHash('sha256').update(req.sessionID).digest('hex')}`,
     handler: refuse,
   });
-  return [perAddress, perSession];
+  const failedLogins = rateLimit({
+    windowMs,
+    limit: loginMax,
+    skip: (req) => !LOGIN_PATH.test(req.path),
+    // A login answered below 400 is a success and gives its count back.
+    skipSuccessfulRequests: true,
+    handler: refuse,
+  });
+  return [perAddress, perSession, failedLogins];
 }

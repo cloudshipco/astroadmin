@@ -7,7 +7,10 @@
  *   editing session ran out of it); its own budget is sessionMax;
  * - anyone not signed in still gets 100 requests per address per window;
  * - every login attempt, even from a signed-in session, still counts against
- *   the address's 100;
+ *   the address's 100, and a FAILED one also against the address's login
+ *   budget (loginMax, 10), so password guessing stops long before the 100;
+ * - a failed login logs one `auth.failed ip=<address>` line, the address being
+ *   the one express sees through the trusted proxy;
  * - a refusal is JSON ({ error, message }) with a Retry-After header, not the
  *   plain text the dashboard failed to parse.
  *
@@ -128,15 +131,60 @@ await check('anyone not signed in gets 100 requests per address, then a JSON 429
   assert.equal(editor.status, 200, 'the signed-in session from the same address');
 });
 
-await check('login attempts get 100 per address, then a JSON 429', async () => {
-  const statuses = await burst(limits.max, () => login('10.0.0.3', 'wrong'));
+/** Capture console.log while `fn` runs; return the lines. */
+async function captureLog(fn) {
+  const original = console.log;
+  const lines = [];
+  console.log = (...args) => { lines.push(args.map(String).join(' ')); };
+  try {
+    await fn();
+  } finally {
+    console.log = original;
+  }
+  return lines;
+}
+
+await check('failed logins get 10 per address, then a JSON 429, while other requests still pass', async () => {
+  assert.equal(limits.loginMax, 10, 'the login budget');
+  const statuses = await burst(limits.loginMax, () => login('10.0.0.3', 'wrong'));
   assert.deepEqual([...new Set(statuses)], [401]);
   await assertJsonRefusal(await login('10.0.0.3', 'wrong'));
   await assertJsonRefusal(await login('10.0.0.3', 'admin'));
+  // The address's general budget is not spent: an anonymous GET still passes.
+  const anonymous = await fetch(`${base}/api/session`, { headers: via('10.0.0.3') });
+  assert.equal(anonymous.status, 200, 'an anonymous GET from the same address');
+  // Another address has its own login budget.
+  assert.equal((await login('10.0.0.30', 'wrong')).status, 401, 'another address');
 });
 
-await check('login attempts from a signed-in session still count against the address', async () => {
-  const statuses = await burst(limits.max, () => login('10.0.0.4', 'wrong', { cookie }));
+await check('successful logins do not use the login budget', async () => {
+  const statuses = await burst(limits.loginMax + 5, () => login('10.0.0.6', 'admin'));
+  assert.deepEqual([...new Set(statuses)], [200]);
+  // Failures after them still have the whole budget.
+  const failures = await burst(limits.loginMax, () => login('10.0.0.6', 'wrong'));
+  assert.deepEqual([...new Set(failures)], [401]);
+  await assertJsonRefusal(await login('10.0.0.6', 'wrong'));
+});
+
+await check('every login attempt still counts against the address\'s general budget', async () => {
+  // A successful login skips the login budget but not the general one.
+  const statuses = await burst(limits.max, () => login('10.0.0.7', 'admin'));
+  assert.deepEqual([...new Set(statuses)], [200]);
+  await assertJsonRefusal(await login('10.0.0.7', 'admin'));
+});
+
+await check('a failed login logs the address express sees behind the proxy', async () => {
+  const lines = await captureLog(async () => {
+    const response = await login('198.51.100.23', 'wrong');
+    assert.equal(response.status, 401);
+  });
+  const failures = lines.filter((line) => line.includes('auth.failed'));
+  assert.equal(failures.length, 1, `one auth.failed line in:\n${lines.join('\n')}`);
+  assert.match(failures[0], /^\[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}[+-]\d\d:\d\d\] auth\.failed ip=198\.51\.100\.23$/, failures[0]);
+});
+
+await check('failed logins from a signed-in session still count against the address', async () => {
+  const statuses = await burst(limits.loginMax, () => login('10.0.0.4', 'wrong', { cookie }));
   assert.deepEqual([...new Set(statuses)], [401]);
   await assertJsonRefusal(await login('10.0.0.4', 'wrong', { cookie }));
 });
