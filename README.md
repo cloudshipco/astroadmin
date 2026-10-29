@@ -76,7 +76,8 @@ with weak auth settings.
 ## Requirements
 
 - Bun
-- Astro 6 or later, with `astro.config.mjs` or `astro.config.ts`
+- Astro 6 or later, with `astro.config.mjs` or `astro.config.ts` (tested on
+  Astro 7; `CmsImage` needs Astro 7, see [optimised images](docs/optimised-images.md))
 - Content collection schemas in `src/content.config.ts`
 
 ```text
