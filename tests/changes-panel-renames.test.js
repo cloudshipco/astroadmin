@@ -134,6 +134,26 @@ await check('the default commit message names the rename', async () => {
   assert.equal(commitRequests[0].message, 'Renamed 1 file');
 });
 
+await check('confirming the commit dialog before its textarea is focused throws nothing', async () => {
+  const uncaught = [];
+  const record = (error) => uncaught.push(error?.error ?? error);
+  window.addEventListener('error', record);
+  process.on('uncaughtException', record);
+  try {
+    const panel = await showStatus({ renamed: [RENAME] });
+    panel.querySelector('[data-commit-changes]').click();
+    await settle();
+    // Confirm within the dialog's 100 ms focus delay, as a quick Enter does.
+    document.querySelector('#commitModal [data-confirm-commit]').click();
+    assert.equal(document.querySelector('#commitModal'), null, 'control: the dialog closed');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(uncaught.map(String), []);
+  } finally {
+    window.removeEventListener('error', record);
+    process.off('uncaughtException', record);
+  }
+});
+
 await check('hostile names in a rename are text, in the row and its title', async () => {
   const hostileRename = {
     from: 'src/content/pages/a"><img src=x onerror=alert(1)>.md',

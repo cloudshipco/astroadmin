@@ -379,10 +379,10 @@ export function showPublishDialog(options = {}) {
       closeAndResolve(message);
     });
 
-    // Focus the textarea
-    setTimeout(() => {
-      document.getElementById('commitMessage').focus();
-    }, 100);
+    // Focus the textarea. Held by reference: a quick Enter can close the
+    // dialog before the delay, and a removed element focuses as a no-op.
+    const messageInput = modal.querySelector('#commitMessage');
+    setTimeout(() => messageInput.focus(), 100);
 
     // Handle Enter key (with shift for newline), Escape to cancel
     modal.querySelector('#commitMessage').addEventListener('keydown', (e) => {
