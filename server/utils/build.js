@@ -8,7 +8,8 @@
  * It runs through the check's runCommand: in its own process group, killed
  * whole at `build.productionTimeoutMs` (default five minutes), its output
  * capped, and without the admin's own secrets and settings in its
- * environment (buildEnvironment).
+ * environment (buildEnvironment), except ASTROADMIN_DB, which the site's
+ * loader reads.
  */
 
 import { config, getConfig } from '../config.js';
@@ -16,6 +17,25 @@ import { resolveBuildCommand } from './astro-bin.js';
 import { buildEnvironment, runCommand } from './astro-check.js';
 
 const DEFAULT_PRODUCTION_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * The admin's own variables the SITE legitimately reads when it builds for
+ * deployment: ASTROADMIN_DB is where the shelved db store's loader
+ * (loader/index.js) finds content. buildEnvironment() removes every
+ * ASTROADMIN_* variable, and without this one a site with a custom DB path
+ * built empty collections, which rsync --delete then made live. Not the
+ * publish check's build: that builds a commit in a worktree.
+ */
+const SITE_BUILD_VARIABLES = ['ASTROADMIN_DB'];
+
+/** buildEnvironment() plus SITE_BUILD_VARIABLES. */
+function productionBuildEnvironment() {
+  const environment = buildEnvironment();
+  for (const name of SITE_BUILD_VARIABLES) {
+    if (process.env[name] !== undefined) environment[name] = process.env[name];
+  }
+  return environment;
+}
 
 /**
  * Run the production build for deployment.
@@ -49,7 +69,7 @@ export async function runProductionBuildIn(fullConfig, projectRoot) {
       return { success: false, duration: Date.now() - startTime, error, output: '' };
     }
 
-    const { exitCode, output, timedOut } = await runCommand(buildCommand, projectRoot, timeoutMs, buildEnvironment());
+    const { exitCode, output, timedOut } = await runCommand(buildCommand, projectRoot, timeoutMs, productionBuildEnvironment());
     const duration = Date.now() - startTime;
 
     if (exitCode === 0 && !timedOut) {

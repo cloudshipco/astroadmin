@@ -5,6 +5,8 @@
  * - without the admin's own secrets and settings in its environment
  *   (`ASTROADMIN_*`, `ADMIN_*`, `SESSION_SECRET`): the check already removed
  *   them, the production build ran `build.production` with all of them;
+ *   except ASTROADMIN_DB, which the shelved db store's loader reads (a site
+ *   with a custom DB path built empty collections without it);
  * - with a time limit (`build.productionTimeoutMs`): a build that never ends
  *   is killed, its whole process group with it, and reported as failed,
  *   instead of holding Publish open forever.
@@ -68,6 +70,20 @@ await check('the build does not see the admin\'s secrets and settings', async ()
   for (const name of ['SESSION_SECRET', 'ADMIN_PASSWORD', 'ASTROADMIN_PROJECT_ROOT']) {
     assert.ok(!new RegExp(`^${name}=`, 'm').test(environment), `${name} reached the build`);
   }
+});
+
+await check('the build sees ASTROADMIN_DB, the content store the site\'s loader reads', async () => {
+  // A shelved-db-store site's loader (loader/index.js) reads ASTROADMIN_DB.
+  // Stripped, a custom DB path built empty collections, and the deploy's
+  // rsync --delete then removed the live pages.
+  const envFile = path.join(scratch, 'env-db.txt');
+  process.env.ASTROADMIN_DB = path.join(scratch, 'custom/content.db');
+  process.env.ADMIN_PASSWORD = 'admin-password-value';
+  const result = await runProductionBuildIn({ build: { production: buildCommand('env-db', `env > '${envFile}'`) } }, site);
+  assert.equal(result.success, true, JSON.stringify(result));
+  const environment = fs.readFileSync(envFile, 'utf8');
+  assert.match(environment, new RegExp(`^ASTROADMIN_DB=${process.env.ASTROADMIN_DB}$`, 'm'));
+  assert.ok(!/^ADMIN_PASSWORD=/m.test(environment), 'the secrets are still removed');
 });
 
 await check('a build that never ends is killed at the time limit, with its process group', async () => {
