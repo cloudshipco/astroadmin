@@ -664,6 +664,12 @@ copied in from the live checkout.
 
 `npm publish` requires interactive browser auth — ask the user to run
 `! npm publish` themselves; then tag `vX.Y.Z` and create the GitHub release.
+The package's only npm owner is `cloudshipco`: logged in as another account
+the publish fails with a 403 ("You do not have permission to publish"), so
+check `npm whoami` against `npm owner ls astroadmin` first (`npm login
+--auth-type=web` to switch). Right after a publish, `npm pack`/`install` of
+the new version can say "No match found" from a stale metadata cache: use
+`--prefer-online`, or fetch `npm view astroadmin@X.Y.Z dist.tarball` directly.
 Version semantics: npm `0.2.0 → 1.1.0` is the files-first line; git tag
 `v1.0.0` is the shelved SQLite store and was **never published to npm** — don't
 reuse 1.0.0. Pre-publish sanity: `npm pack --dry-run` (the `files` allowlist
