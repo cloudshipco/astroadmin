@@ -93,6 +93,7 @@
     "integration/preview-route.astro",
     "components/CmsImage.astro",
     "components/CmsVideo.astro",
+    "components/cms-video-client.js",
     "README.md",
     "LICENSE"
   ]

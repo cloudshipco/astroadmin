@@ -98,3 +98,12 @@ it from a small script:
 A site that sends a `Content-Security-Policy` needs `media-src 'self'`, or
 the origin its videos are served from. Without it the browser blocks the
 video and shows only the poster.
+
+The component's script is a file of its own (`/_astro/cms-video-client.*.js`),
+never inline, so `script-src 'self'` allows it. A small component
+`<script>` would be inlined by Astro and blocked by that policy, which only
+shows in production: the video never starts and the pause button never
+appears. The button's few styles are a global `<style>`, which Astro may
+inline like any small stylesheet. A policy without `'unsafe-inline'` in
+`style-src` then needs Astro's `build.inlineStylesheets: 'never'`, as the
+rest of such a site's CSS does.

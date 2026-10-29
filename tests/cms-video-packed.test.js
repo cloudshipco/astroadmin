@@ -15,8 +15,12 @@
  * - an empty src renders nothing; a /images/ video with no file fails the
  *   build naming the value, and so does a missing poster.
  *
+ * The browser script must be a same-origin FILE: Astro inlines a small
+ * component <script>, which a site's `script-src 'self'` blocks silently.
+ *
  * Then the built page in Chromium (Playwright, an existing headless shell;
- * set CHROMIUM_PATH to choose one): the video plays by itself, the button
+ * set CHROMIUM_PATH to choose one), served with a strict CSP
+ * (`script-src 'self'`): the video plays by itself, the button
  * pauses and resumes it and says which it will do; under
  * `prefers-reduced-motion: reduce` it does not play and shows the poster,
  * and Play starts it. The browser checks use the WebM fixture (open-source
@@ -29,7 +33,8 @@ import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
+import net from 'net';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 
@@ -78,7 +83,16 @@ function chromiumPath() {
   return undefined; // Playwright's own default
 }
 
-/** A static server for dist/, with Range support (Bun.file responses). */
+/**
+ * The CSP every page is served with: a strict site's, which allows only
+ * same-origin scripts. An inline script (which Astro makes of a small
+ * component <script>) or a data: URL script is blocked by it, and nothing
+ * else reports that: the video just never starts. Styles are allowed inline,
+ * since Astro inlines small stylesheets too and that is the site's setting.
+ */
+const STRICT_CSP = "default-src 'self'; script-src 'self'; media-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'";
+
+/** A static server for dist/, with Range support (Bun.file responses), pages under STRICT_CSP. */
 function serveDist() {
   const distDir = path.join(siteDir, 'dist');
   return Bun.serve({
@@ -89,7 +103,8 @@ function serveDist() {
       if (pathname.endsWith('/')) pathname += 'index.html';
       const filePath = path.join(distDir, pathname);
       if (!filePath.startsWith(distDir + path.sep) || !fs.existsSync(filePath)) return new Response('not found', { status: 404 });
-      return new Response(Bun.file(filePath));
+      const headers = filePath.endsWith('.html') ? { 'Content-Security-Policy': STRICT_CSP } : {};
+      return new Response(Bun.file(filePath), { headers });
     },
   });
 }
@@ -163,6 +178,17 @@ try {
     for (const button of buttons) assert.match(button, /\bhidden\b/, button);
     assert.match(buttons[0], /aria-label="Play hero video"/);
   });
+  await check('the browser script is a same-origin file, never inline or a data: URL (a strict CSP allows it)', () => {
+    const scripts = html.match(/<script\b[^>]*>[\s\S]*?<\/script>/g) || [];
+    const inline = scripts.filter((tag) => !/\ssrc=/.test(tag) && /cms-video|matchMedia/.test(tag));
+    assert.deepStrictEqual(inline, [], 'an inline CmsVideo script');
+    const sources = [...new Set(scripts.map((tag) => tag.match(/\ssrc="([^"]+)"/)?.[1]).filter(Boolean))];
+    assert.strictEqual(sources.length, 1, `one script file: ${sources}`);
+    assert.match(sources[0], /^\/_astro\/cms-video-client\.[\w-]+\.js$/, sources[0]);
+    const emitted = fs.readFileSync(path.join(siteDir, 'dist', sources[0]), 'utf8');
+    assert.ok(emitted.includes('[data-cms-video]'), 'the emitted file is the script');
+  });
+
   await check('a /images/ poster is an optimised WebP no wider than posterWidth; an external one is untouched', () => {
     const poster = hero.match(/poster="([^"]+)"/)?.[1];
     assert.ok(poster && /^\/_astro\/.*\.webp$/.test(poster), `poster: ${poster}`);
@@ -188,6 +214,10 @@ try {
 
   await check('in a browser the video plays by itself; the button pauses and resumes it', async () => {
     const tab = await browser.newPage();
+    const violations = [];
+    // Script violations only: the page's remote video (cdn.example.com) is
+    // blocked by media-src 'self', as it should be.
+    tab.on('console', (message) => { if (/Content Security Policy/i.test(message.text()) && /script/i.test(message.text())) violations.push(message.text()); });
     await tab.goto(pageUrl);
     await tab.waitForFunction(() => {
       const video = document.querySelector('#loop');
@@ -214,6 +244,7 @@ try {
     await toggle.click();
     await tab.waitForFunction(() => !document.querySelector('#loop').paused, null, { timeout: 5000 });
     assert.strictEqual((await videoState(tab)).label, 'Pause background video');
+    assert.deepStrictEqual(violations, [], 'CSP script violations');
     await tab.close();
   });
 
@@ -265,7 +296,54 @@ try {
     assert.match(basedHtml, /<source src="\/blog\/images\/loop\.webm"/);
     assert.match(basedHtml, /poster="\/blog\/_astro\/[^"]+\.webp"/, 'the optimised poster');
     assert.match(basedHtml, /poster="\/blog\/images\/logo\.svg"/, 'an SVG poster as it is, under base');
+    assert.match(basedHtml, /<script type="module" src="\/blog\/_astro\/cms-video-client\.[\w-]+\.js"/, 'the script file under base');
   });
+
+  // --- astro dev (the editor's preview) ---------------------------------
+  // `?url&no-inline` must resolve in dev too, where Vite serves the file
+  // itself; the hosted preview is `astro dev`.
+  writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
+  writeSiteFile('src/pages/index.astro', goodPage);
+  const port = await new Promise((resolve) => {
+    const probe = net.createServer().listen(0, '127.0.0.1', () => {
+      const { port: freePort } = probe.address();
+      probe.close(() => resolve(freePort));
+    });
+  });
+  const dev = spawn('node', ['node_modules/astro/bin/astro.mjs', 'dev', '--port', String(port), '--host', '127.0.0.1', '--ignore-lock'], {
+    cwd: siteDir,
+    env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let devOutput = '';
+  dev.stdout.on('data', (chunk) => (devOutput += chunk));
+  dev.stderr.on('data', (chunk) => (devOutput += chunk));
+  try {
+    for (let attempt = 0; attempt < 150; attempt++) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/`);
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+    browser = await chromium.launch({ executablePath: chromiumPath() });
+    await check('in astro dev (the preview) the script loads and the video plays', async () => {
+      const tab = await browser.newPage();
+      await tab.goto(`http://127.0.0.1:${port}/`);
+      await tab.waitForFunction(() => {
+        const video = document.querySelector('#loop');
+        return video && !video.paused && video.currentTime > 0.2;
+      }, null, { timeout: 15000 }).catch((error) => { throw new Error(`${error.message}\n${devOutput.slice(-2000)}`); });
+      assert.strictEqual(await tab.evaluate(() => document.querySelector('#loop').closest('[data-cms-video]').querySelector('[data-cms-video-toggle]').hidden), false);
+      await tab.close();
+    });
+    await browser.close();
+    browser = undefined;
+  } finally {
+    dev.kill();
+    spawnSync('node', ['node_modules/astro/bin/astro.mjs', 'dev', 'stop'], { cwd: siteDir, encoding: 'utf8' });
+  }
 
   console.log(`\n${passed} passed`);
 } finally {

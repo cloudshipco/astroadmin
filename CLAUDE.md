@@ -538,10 +538,16 @@ queue, so the old body is never written back.
   (a union holding an object crashed the entry; form-generator.test.js). A typed clear
   in a new entry saves null (untouched-structure). ~10 s.
 - `bun tests/cms-video-packed.test.js` — `components/CmsVideo.astro` from the packed
-  tarball in a throwaway Astro 7.3.8 site: markup (muted/loop/playsinline, no `autoplay`
+  tarball in a throwaway Astro 7.3.8 site. Its browser script must be a same-origin FILE
+  (`components/cms-video-client.js`, `?url&no-inline`, `<script is:inline src>`): Astro
+  inlines a small component `<script>` (`shouldInlineScriptChunk`, under
+  assetsInlineLimit, and a site's `vite.build.assetsInlineLimit: 0` did not stop it), which a
+  site's `script-src 'self'` blocks silently in production. The built page is served under
+  such a CSP and must play; seen red with the inline version. Also: markup (muted/loop/playsinline, no `autoplay`
   attribute, the button), the poster optimised to WebP at `posterWidth`, missing video or
   poster failing the build; then in Chromium: it plays by itself, the button pauses and
-  resumes it, and under reduced motion it never starts until Play; with `base: '/blog'`
+  resumes it, and under reduced motion it never starts until Play, and it plays under
+  `astro dev` (the preview); with `base: '/blog'`
   local paths are served under it; a value that is not an .mp4/.webm path or URL (a typed
   bare name, a YouTube page) fails the build by name. ~20 s.
 
