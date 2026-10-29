@@ -1,6 +1,12 @@
 # Video upload: a video field, a picker and a CmsVideo component
 
-Status: BUILT on main (2026-10-29), unreleased; next: a minor release.
+Status: RELEASED as 1.9.0 (2026-10-29, tag v1.9.0 at 8c21645). Next: the
+hosted editors' redeploy (ops#9), then sites bump to ^1.9.0.
+
+Before publishing, a site's own build found two CmsVideo bugs, both fixed in
+1.9.0: Astro inlined its small <script> (blocked by `script-src 'self'`), and
+its unlayered styles beat Tailwind v4's layered utilities on `wrapperClass`.
+The verified candidate was published unchanged (same sha256).
 
 Proxy check (2026-10-29): there is no standing test instance on the hosted
 box, so the upload was driven through a local nginx 1.27 in Docker with the
