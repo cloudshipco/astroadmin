@@ -61,8 +61,11 @@ fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(projectRoot, 'node
 writeFile(projectRoot, '.gitignore', 'node_modules\n');
 writeFile(projectRoot, 'package.json', JSON.stringify({ type: 'module' }));
 writeFile(projectRoot, 'astro.config.mjs', 'export default {};\n');
+// The publish check: passes, unless a test arms it to wait or to fail.
+const barrierDir = path.join(tempRoot, 'barrier');
+const checkCommand = `sh '${path.join(barrierDir, 'check.sh')}'`;
 writeFile(projectRoot, 'astroadmin.config.js',
-  "export default { git: { enabled: true, paths: ['src/content/', 'public/images/'] }, build: { check: 'true' } };\n");
+  `export default { git: { enabled: true, paths: ['src/content/', 'public/images/'] }, build: { check: ${JSON.stringify(checkCommand)} } };\n`);
 writeFile(projectRoot, 'src/content.config.ts', `import { defineCollection, z } from 'astro:content';
 import { glob } from 'astro/loaders';
 export const collections = {
@@ -150,41 +153,82 @@ function assertNoServerPath(body) {
 }
 
 /**
- * A git hook that holds git open at that point until the test releases it
- * (never by a timer, so the test cannot pass by a slow request missing the
- * window). Gives up after 20 s, so a failing test cannot hang.
+ * Barriers hold the server's git, or the publish check, at one point until
+ * the test releases it (never by a timer, so the test cannot pass by a slow
+ * request missing the window). They give up after 20 s, so a failing test
+ * cannot hang.
+ *
+ * Not git hooks: the server runs git with hooks disabled (#67). A `git`
+ * wrapper first on the server's PATH waits before or after one subcommand
+ * when armed, and the publish check (build.check) waits when armed.
  */
-function installBarrierHooks(hookNames) {
-  const marker = path.join(tempRoot, 'hook-reached');
-  const release = path.join(tempRoot, 'hook-release');
-  const hooksDir = path.join(tempRoot, 'hooks');
-  fs.rmSync(marker, { force: true });
-  fs.rmSync(release, { force: true });
-  for (const hookName of hookNames) {
-    writeFile(hooksDir, hookName, `#!/bin/sh
-touch "${marker}"
-i=0
-while [ ! -f "${release}" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+const barrierSpec = path.join(barrierDir, 'spec');
+const barrierMarker = path.join(barrierDir, 'reached');
+const barrierRelease = path.join(barrierDir, 'release');
+const checkFails = path.join(barrierDir, 'check-fails');
+const waitForRelease = `touch "${barrierMarker}"
+  i=0
+  while [ ! -f "${barrierRelease}" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done`;
+const realGit = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf-8' }).trim();
+writeFile(barrierDir, 'bin/git', `#!/bin/sh
+# The subcommand: the first argument that is not a global option.
+sub=""
+skip=0
+for arg in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$arg" in
+    -c|-C|--git-dir|--work-tree|--namespace|--exec-path|--config-env) skip=1 ;;
+    -*) ;;
+    *) sub="$arg"; break ;;
+  esac
+done
+phase=""
+command=""
+if [ -f "${barrierSpec}" ]; then read phase command < "${barrierSpec}"; fi
+if [ "$phase" = before ] && [ "$sub" = "$command" ]; then
+  ${waitForRelease}
+fi
+"${realGit}" "$@"
+code=$?
+if [ "$phase" = after ] && [ "$sub" = "$command" ]; then
+  ${waitForRelease}
+fi
+exit $code
 `);
-    fs.chmodSync(path.join(hooksDir, hookName), 0o755);
-  }
-  git(projectRoot, 'config', 'core.hooksPath', hooksDir);
+fs.chmodSync(path.join(barrierDir, 'bin/git'), 0o755);
+writeFile(barrierDir, 'check.sh', `#!/bin/sh
+if [ -f "${barrierSpec}" ] && [ "$(cat "${barrierSpec}")" = check ]; then
+  ${waitForRelease}
+fi
+[ ! -f "${checkFails}" ]
+`);
+// The server's git (simple-git and execFile alike) finds `git` on PATH when
+// it spawns it.
+process.env.PATH = `${path.join(barrierDir, 'bin')}${path.delimiter}${process.env.PATH}`;
+
+/**
+ * Arm a barrier: `['before', 'commit']` or `['after', 'pull']` (a git
+ * subcommand, found past any `-c` options) or `['check']` (the publish
+ * check's build command).
+ */
+function installBarrier(spec) {
+  fs.rmSync(barrierMarker, { force: true });
+  fs.rmSync(barrierRelease, { force: true });
+  fs.writeFileSync(barrierSpec, `${spec.join(' ')}\n`);
   return {
     async reached() {
       const deadline = Date.now() + 15000;
-      while (!fs.existsSync(marker)) {
-        assert.ok(Date.now() < deadline, 'control: git reached the hook');
+      while (!fs.existsSync(barrierMarker)) {
+        assert.ok(Date.now() < deadline, `control: the server reached the barrier (${spec.join(' ')})`);
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
     },
-    release: () => fs.writeFileSync(release, ''),
-    // Released first, so a hook still waiting (a check that failed before
+    release: () => fs.writeFileSync(barrierRelease, ''),
+    // Released first, so a barrier still waiting (a check that failed before
     // releasing it) exits instead of holding git, and the git lock, for 20 s.
-    // The release file stays until the next install.
     remove() {
-      fs.writeFileSync(release, '');
-      git(projectRoot, 'config', '--unset', 'core.hooksPath');
-      fs.rmSync(hooksDir, { recursive: true, force: true });
+      fs.writeFileSync(barrierRelease, '');
+      fs.rmSync(barrierSpec, { force: true });
     },
   };
 }
@@ -336,42 +380,42 @@ try {
   await check('a save made while publish is rebasing waits, so the abort cannot discard it', async () => {
     developerPushes('src/content/pages/home.md', page('Home (developer 4)'));
     assert.equal((await save('home', 'Home (first save)')).status, 200);
-    // The rebase checks out the remote's commit and runs post-checkout before
-    // replaying the editor's commit: the hook holds it there.
-    const hooks = installBarrierHooks(['post-checkout']);
+    // `git pull --rebase` has stopped on the conflict (the rebase in
+    // progress, not yet aborted): the barrier holds publish there.
+    const barrier = installBarrier(['after', 'pull']);
     try {
       const publishing = publish();
-      await hooks.reached();
+      await barrier.reached();
       const saving = save('home', 'Home (second save)', 'Second.\n');
       assert.ok(await stillPending(saving), 'the save waits for the rebase');
-      hooks.release();
+      barrier.release();
       const [saved, published] = await Promise.all([saving, publishing]);
       assert.equal(saved.status, 200, JSON.stringify(saved.body));
       assert.equal(published.status, 409, JSON.stringify(published.body));
       assert.match(readSite('src/content/pages/home.md'), /Home \(second save\)/,
         'the acknowledged save is on disk after the abort');
     } finally {
-      hooks.remove();
+      barrier.remove();
       resetSite();
     }
   });
 
   await check('a save made while /api/git/pull is merging waits for it', async () => {
     developerPushes('src/content/pages/about.md', page('About (developer pull)'));
-    const hooks = installBarrierHooks(['post-merge', 'post-checkout']);
+    const barrier = installBarrier(['after', 'pull']);
     try {
       const pulling = post('/api/git/pull', {});
-      await hooks.reached();
+      await barrier.reached();
       const saving = save('home', 'Home (during pull)');
       assert.ok(await stillPending(saving), 'the save waits for the pull');
-      hooks.release();
+      barrier.release();
       const [saved, pulled] = await Promise.all([saving, pulling]);
       assert.equal(pulled.status, 200, JSON.stringify(pulled.body));
       assert.equal(saved.status, 200);
       assert.match(readSite('src/content/pages/about.md'), /About \(developer pull\)/, 'control: the pull landed');
       assert.match(readSite('src/content/pages/home.md'), /Home \(during pull\)/);
     } finally {
-      hooks.remove();
+      barrier.remove();
       resetSite();
     }
   });
@@ -476,18 +520,18 @@ try {
   await check("an image's details saved during publish's commit keep the details the rebase brings in", async () => {
     developerPushes('public/images/.metadata.json', `${JSON.stringify({ 'b.png': { alt: 'B (developer)' } })}\n`);
     assert.equal((await save('home', 'Home (metadata)')).status, 200);
-    // pre-commit runs inside publish's hold, before the rebase.
-    const hooks = installBarrierHooks(['pre-commit']);
+    // Just before `git commit`: inside publish's hold, before the rebase.
+    const barrier = installBarrier(['before', 'commit']);
     try {
       const publishing = publish();
-      await hooks.reached();
+      await barrier.reached();
       const updating = fetch(`${base}/api/images/a.png/metadata`, {
         method: 'PUT',
         headers: { cookie, 'Content-Type': 'application/json', ...sameOrigin },
         body: JSON.stringify({ alt: 'A (editor)' }),
       });
       assert.ok(await stillPending(updating), 'the update waits for the commit and rebase');
-      hooks.release();
+      barrier.release();
       const [updated, published] = await Promise.all([updating, publishing]);
       assert.equal(updated.status, 200);
       assert.equal(published.status, 200, JSON.stringify(published.body));
@@ -495,7 +539,7 @@ try {
       assert.equal(metadata['b.png']?.alt, 'B (developer)', "the developer's details survive");
       assert.equal(metadata['a.png']?.alt, 'A (editor)', "the editor's details are saved");
     } finally {
-      hooks.remove();
+      barrier.remove();
       resetSite();
     }
   });
