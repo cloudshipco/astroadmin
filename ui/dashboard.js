@@ -558,6 +558,7 @@ document.getElementById('newItemSlug').addEventListener('keydown', (e) => {
     }
   }
   if (e.key === 'Escape') {
+    e.preventDefault(); // handled: the modal stack (ui/modal-stack.js) leaves it alone
     closeNewItemModal();
   }
 });

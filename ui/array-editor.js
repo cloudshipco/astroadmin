@@ -8,6 +8,7 @@
  */
 
 import { escapeHtml } from './escape-html.js';
+import { pushModal, removeModal } from './modal-stack.js';
 
 import {
   generateFields,
@@ -59,6 +60,7 @@ export function openArrayEditor(fieldName, items, schema, onSave) {
 
   modal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  pushModal(modal, closeArrayEditor);
 
   renderItems();
 }
@@ -71,6 +73,7 @@ export function closeArrayEditor() {
   if (modal) {
     modal.classList.add('hidden');
     document.body.style.overflow = '';
+    removeModal(modal);
   }
   currentCallback = null;
   currentItems = [];
@@ -117,15 +120,6 @@ function setupModalEvents(modal) {
 
   modal.addEventListener('click', (e) => {
     if (e.target === modal) closeArrayEditor();
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
-      // Don't close the list out from under an item editor stacked on top of it
-      if (!document.querySelector('.array-item-edit-overlay')) {
-        closeArrayEditor();
-      }
-    }
   });
 
   modal.querySelector('[data-add]').addEventListener('click', () => {
@@ -291,7 +285,13 @@ export function openSingleItemEditor(item, schema, onSave, { isNew = false } = {
   // editing one field must leave every other value of the item as it was.
   if (!isNew) bindOriginalValues(form, item);
 
-  const closeEditModal = () => editModal.remove();
+  const closeEditModal = () => {
+    removeModal(editModal);
+    editModal.remove();
+  };
+  // Escape closes this editor only while it is the topmost modal: not when a
+  // picker or a nested item editor it opened is on top of it.
+  pushModal(editModal, closeEditModal);
 
   const saveAndClose = () => {
     // Final, by the main form's rule: untouched fields as stored, emptied
@@ -308,9 +308,8 @@ export function openSingleItemEditor(item, schema, onSave, { isNew = false } = {
     if (e.target === editModal) closeEditModal();
   });
 
-  // Handle keyboard
+  // Handle keyboard (Escape is the modal stack's)
   editModal.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeEditModal();
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       saveAndClose();

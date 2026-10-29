@@ -15,6 +15,7 @@ import { enhanceMarkdownEditor } from './markdown-toolbar.js';
 import { escapeHtml } from './escape-html.js';
 import { readJson } from './api-response.js';
 import { mediaKindOf } from './media-kinds.js';
+import { pushModal, removeModal } from './modal-stack.js';
 
 /**
  * Reference fields need to navigate the dashboard to open the entry they point at,
@@ -453,7 +454,13 @@ function openTextareaModal(textarea, onChange) {
     charCount.textContent = `${modalInput.value.length} characters`;
   });
 
-  const closeModal = () => modal.remove();
+  const closeModal = () => {
+    removeModal(modal);
+    modal.remove();
+  };
+  // Escape cancels, through the modal stack: wherever focus is in this modal,
+  // and never while the image library its toolbar opened is on top of it.
+  pushModal(modal, closeModal);
 
   const saveAndClose = () => {
     textarea.value = modalInput.value;
@@ -473,11 +480,6 @@ function openTextareaModal(textarea, onChange) {
   });
 
   modalInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      closeModal();
-      return;
-    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       e.stopPropagation();

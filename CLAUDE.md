@@ -86,6 +86,10 @@ Three invariants that are easy to break and fail silently:
    item editors (bounded by `MAX_STACK_DEPTH`), 70 leaf pickers opened *from a field* (gallery,
    expanded textarea, reference picker), 80 image library (it can be opened from a field *or*
    from the gallery editor). Adding a modal means placing it on this scale.
+   It also means registering it with `ui/modal-stack.js` (`pushModal` on open, `removeModal`
+   on every close): ONE document listener sends Escape to the topmost open modal only. A
+   modal with its own document Escape listener closes along with whatever sits above it,
+   and a closed gallery or item editor discards its unsaved edits (#35).
 
 When changing overlay/stacking behaviour, verify with `document.elementFromPoint()` — asserting
 the element exists proves nothing, since the bug is precisely that a present element is covered.
@@ -278,6 +282,11 @@ runner aggregating them). Most run server-less and need env vars:
   `//host`, such as `/.//host`) falling back to the site root.
 - `bun tests/clean-nullable.test.js` — `cleanEmptyValues` reads through a nullable wrapper
   (both converters' shapes), so an emptied optional array inside a nullable object is dropped.
+- `bun tests/modal-escape.test.js` — Escape closes only the topmost modal (happy-dom, the real
+  buttons): the image library over the gallery (the gallery keeps its edit and Save writes
+  it), over an item editor with focus still on Browse, nested item editors, the expanded
+  textarea over an item editor; and Escape with one modal open still closes it. Seen red
+  (5 of 8) on the per-modal listeners.
 - `bun tests/gallery-structural.test.js` — a gallery add/remove/reorder made in its modal marks
   the field (`data-structural-edit`), so adding an image and removing it leaves an optional
   `.min(1)` gallery unset instead of restoring a stored `[]`; an unchanged save keeps it. Real

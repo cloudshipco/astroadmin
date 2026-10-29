@@ -7,6 +7,7 @@ import { openImageLibrary } from './image-library.js';
 
 import { escapeHtml } from './escape-html.js';
 import { readJson } from './api-response.js';
+import { pushModal, removeModal } from './modal-stack.js';
 
 let currentCallback = null;
 let currentImages = []; // Array of { src, alt } objects
@@ -39,6 +40,7 @@ export async function openGalleryEditor(images, onSave) {
   // Show modal
   modal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  pushModal(modal, closeGalleryEditor);
 
   // Load image metadata for alt text lookup
   await loadImageMetadata();
@@ -55,6 +57,7 @@ export function closeGalleryEditor() {
   if (modal) {
     modal.classList.add('hidden');
     document.body.style.overflow = '';
+    removeModal(modal);
   }
   currentCallback = null;
   currentImages = [];
@@ -125,13 +128,6 @@ function setupModalEvents(modal) {
   // Click outside to close
   modal.addEventListener('click', (e) => {
     if (e.target === modal) {
-      closeGalleryEditor();
-    }
-  });
-
-  // Escape key to close
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
       closeGalleryEditor();
     }
   });

@@ -6,6 +6,7 @@
 import { escapeHtml } from './escape-html.js';
 import { collectionApiPath } from './entry-urls.js';
 import { readJson, failureText } from './api-response.js';
+import { pushModal, removeModal } from './modal-stack.js';
 
 let currentCallback = null;
 let currentCollection = null;
@@ -38,6 +39,7 @@ export async function openReferencePicker(collectionName, onSelect, excludeIds =
   // Show modal
   modal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  pushModal(modal, closeReferencePicker);
 
   // Load entries
   await loadEntries(excludeIds);
@@ -51,6 +53,7 @@ export function closeReferencePicker() {
   if (modal) {
     modal.classList.add('hidden');
     document.body.style.overflow = '';
+    removeModal(modal);
   }
   currentCallback = null;
   currentCollection = null;
@@ -109,13 +112,6 @@ function setupModalEvents(modal) {
   // Click outside to close
   modal.addEventListener('click', (e) => {
     if (e.target === modal) {
-      closeReferencePicker();
-    }
-  });
-
-  // Escape key to close
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
       closeReferencePicker();
     }
   });

@@ -367,6 +367,7 @@ export function showPublishDialog(options = {}) {
         modal.querySelector('[data-confirm-commit]').click();
       }
       if (e.key === 'Escape') {
+        e.preventDefault(); // handled: the modal stack (ui/modal-stack.js) leaves it alone
         closeAndResolve(null);
       }
     });

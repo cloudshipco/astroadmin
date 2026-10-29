@@ -6,6 +6,7 @@
 import { escapeHtml } from './escape-html.js';
 import { readJson, failureText } from './api-response.js';
 import { MAX_IMAGE_SIZE, MAX_VIDEO_SIZE, megabytes, mediaRefusal } from './media-kinds.js';
+import { pushModal, removeModal } from './modal-stack.js';
 
 let currentCallback = null;
 let currentImages = [];
@@ -94,6 +95,7 @@ export async function openImageLibrary(onSelect, currentValue = '', { astroImage
   // Show modal
   modal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  pushModal(modal, closeImageLibrary);
 
   // Load images
   await loadImages();
@@ -110,6 +112,7 @@ export function closeImageLibrary() {
   if (modal) {
     modal.classList.add('hidden');
     document.body.style.overflow = '';
+    removeModal(modal);
   }
   currentCallback = null;
   selectedImageUrl = null;
@@ -194,13 +197,6 @@ function setupModalEvents(modal) {
   // Click outside to close
   modal.addEventListener('click', (e) => {
     if (e.target === modal) {
-      closeImageLibrary();
-    }
-  });
-
-  // Escape key to close
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
       closeImageLibrary();
     }
   });
