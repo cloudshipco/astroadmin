@@ -120,7 +120,13 @@ export function enhanceMarkdownEditor(textarea) {
     if (action) action(textarea);
   });
 
-  textarea.parentNode.insertBefore(bar, textarea);
+  // Above the textarea's wrapper, not inside it: the wrapper positions the
+  // expand button at its top-right corner, which must be the textarea's
+  // corner. Inside the wrapper the button sat on the toolbar's first row,
+  // over whichever button ended it (the link button at most widths).
+  const wrapper = textarea.parentElement;
+  const anchor = wrapper?.classList.contains('textarea-wrapper') ? wrapper : textarea;
+  anchor.parentNode.insertBefore(bar, anchor);
 
   textarea.addEventListener('keydown', (e) => {
     if (!(e.metaKey || e.ctrlKey) || e.altKey) return;

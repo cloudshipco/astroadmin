@@ -1459,6 +1459,21 @@
     @apply bg-gray-100;
   }
 
+  /* Finger-sized targets on a touch screen; a mouse keeps the compact sizes. */
+  @media (pointer: coarse) {
+    .md-toolbar-btn {
+      @apply min-w-10 h-10;
+    }
+
+    .textarea-expand-btn {
+      @apply top-1 right-1 p-3;
+    }
+
+    .textarea-wrapper textarea {
+      @apply pr-12;
+    }
+  }
+
   /* Textarea Modal */
   .textarea-modal-overlay {
     @apply fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4;
