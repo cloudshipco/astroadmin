@@ -326,21 +326,15 @@ function humaniseSlug(slug) {
 }
 
 /**
- * A display title for each entry in a collection, keyed by slug.
+ * A display title for each entry listed with its data
+ * (getCollectionEntriesWithData), keyed by slug.
  *
  * Lets the page selector show "Journal" for an entry whose slug is "blog"
  * (its slug matches the URL it is served at, which the preview navigation
  * relies on, but is a poor label). Falls back to a humanised slug when the
  * entry has no title-like field, and to the raw slug if the file can't be read.
- *
- * @param {string} collectionName
- * @returns {Promise<Record<string, string>>}
+ * @returns {Record<string, string>}
  */
-export async function getCollectionEntryTitles(collectionName) {
-  return entryTitlesOf(await getCollectionEntriesWithData(collectionName));
-}
-
-/** The titles of entries listed with their data (getCollectionEntriesWithData). */
 function entryTitlesOf(listed) {
   return Object.fromEntries(listed.map(({ slug, data, error }) => {
     if (error) return [slug, slug];

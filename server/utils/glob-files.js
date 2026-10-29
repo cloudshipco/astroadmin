@@ -174,7 +174,7 @@ export async function assertContainedPath(rootDirectory, candidatePath) {
   return candidatePath;
 }
 
-export function escapeRegExp(value) {
+function escapeRegExp(value) {
   return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 }
 
