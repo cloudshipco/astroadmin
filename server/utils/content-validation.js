@@ -197,6 +197,124 @@ export async function validateAgainstSchema(collectionSchema, data) {
   return issues.length === 0 ? { status: 'valid', issues: [] } : { status: 'invalid', issues };
 }
 
+// Bounds on a save's candidate list: it is the client's, so it is untrusted.
+const MAX_BLANK_CANDIDATES = 1000;
+const MAX_BLANK_PATH_LENGTH = 1000;
+const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+
+/**
+ * A form path (`blocks[1].meta.note`) as issue-path segments
+ * (['blocks', 1, 'meta', 'note']), or null if it is not one.
+ * @param {*} candidate
+ * @returns {Array<string|number>|null}
+ */
+function parseFieldPath(candidate) {
+  if (typeof candidate !== 'string' || candidate === '' || candidate.length > MAX_BLANK_PATH_LENGTH) return null;
+  const segments = [];
+  const pattern = /([^.[\]]+)|\[(\d+)\]|\./y;
+  let expectName = true;
+  while (pattern.lastIndex < candidate.length) {
+    const match = pattern.exec(candidate);
+    if (!match) return null;
+    if (match[1] !== undefined) {
+      if (!expectName || FORBIDDEN_SEGMENTS.has(match[1])) return null;
+      segments.push(match[1]);
+      expectName = false;
+    } else if (match[2] !== undefined) {
+      if (expectName) return null;
+      segments.push(Number(match[2]));
+    } else {
+      if (expectName) return null;
+      expectName = true;
+    }
+  }
+  return expectName ? null : segments;
+}
+
+/**
+ * The object holding the value at `segments`, if that value is an own "" of
+ * a plain object inside `data`; else null.
+ */
+function blankParent(data, segments) {
+  let node = data;
+  for (const segment of segments.slice(0, -1)) {
+    if (typeof segment === 'number') {
+      if (!Array.isArray(node) || !Number.isSafeInteger(segment) || segment >= node.length) return null;
+      node = node[segment];
+    } else {
+      if (!node || typeof node !== 'object' || Array.isArray(node) || !Object.hasOwn(node, segment)) return null;
+      node = node[segment];
+    }
+  }
+  const last = segments[segments.length - 1];
+  if (typeof last !== 'string' || !node || typeof node !== 'object' || Array.isArray(node)) return null;
+  return Object.hasOwn(node, last) && node[last] === '' ? node : null;
+}
+
+/** A copy of `data` with the "" at each of these paths removed. */
+function withoutBlanks(data, removals) {
+  const copy = structuredClone(data);
+  for (const segments of removals) {
+    const parent = blankParent(copy, segments);
+    if (parent) delete parent[segments[segments.length - 1]];
+  }
+  return copy;
+}
+
+/** The formatted paths of every issue the site's zod finds in `data`. */
+async function issuePathsOf(zodSchema, data) {
+  const result = await zodSchema.safeParseAsync(data);
+  return new Set(result.success ? [] : result.error.issues.map((issue) => formatIssuePath(issue.path || [])));
+}
+
+/**
+ * Remove the "" values the editor's form kept inside blocks at optional keys
+ * (#70) where the site's REAL zod refuses them, and only there.
+ *
+ * The form keeps every "" inside a block, because the JSON Schema it is drawn
+ * from cannot say which "" the site's zod accepts (z.coerce, .catch(),
+ * z.preprocess and zod 4's .base64() serialise as stricter than they are).
+ * It names them in the save (`blankOptionals`); this runs the collection's
+ * zod on the entry and drops a candidate only when (1) an issue sits at
+ * EXACTLY its path (a refinement at a parent path never drops anything), or
+ * it is an image() field, whose bundled stand-in accepts "" though the build
+ * refuses it, and (2) with it removed, no issue sits at that path (absent is
+ * accepted: never a required key). Every other value stays as sent.
+ *
+ * The list is the client's and untrusted: a path that is not a form path,
+ * names a prototype key, leaves the entry, or does not hold "" in a plain
+ * object is ignored. Nothing but a "" is ever removed.
+ *
+ * @param {Object|undefined} collectionSchema - one value of loadSchemas()
+ * @param {*} data - the entry data as the save sent it
+ * @param {*} candidates - the save's `blankOptionals`
+ * @returns {Promise<*>} `data` itself when nothing is removed, else a copy
+ */
+export async function dropRefusedBlanks(collectionSchema, data, candidates) {
+  const zodSchema = collectionSchema?._zodSchema;
+  if (!zodSchema || !Array.isArray(candidates) || candidates.length === 0) return data;
+  if (!data || typeof data !== 'object') return data;
+
+  const byPath = new Map();
+  for (const candidate of candidates.slice(0, MAX_BLANK_CANDIDATES)) {
+    const segments = parseFieldPath(candidate);
+    if (!segments || !blankParent(data, segments)) continue;
+    byPath.set(formatIssuePath(segments), segments);
+  }
+  if (byPath.size === 0) return data;
+
+  const refusedPaths = await issuePathsOf(zodSchema, data);
+  for (const image of findImageFields(collectionSchema.schema, data)) {
+    if (image.value === '') refusedPaths.add(formatIssuePath(image.path));
+  }
+  const refused = [...byPath].filter(([formatted]) => refusedPaths.has(formatted));
+  if (refused.length === 0) return data;
+
+  const stillRefused = await issuePathsOf(zodSchema, withoutBlanks(data, refused.map(([, segments]) => segments)));
+  const removals = refused.filter(([formatted]) => !stillRefused.has(formatted)).map(([, segments]) => segments);
+  return removals.length === 0 ? data : withoutBlanks(data, removals);
+}
+
 /**
  * Read a stored entry back and validate it. Never throws for a schema problem:
  * a failure to load the schemas comes back as 'unchecked' so a save can still

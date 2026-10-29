@@ -1533,7 +1533,26 @@ export function extractFormData(formElement, schema) {
     }
   }
 
-  return extractValues(formElement, schema).data;
+  const { data, blanks } = extractValues(formElement, schema);
+  if (blanks.length > 0) blankOptionalCandidates.set(data, blanks);
+  return data;
+}
+
+/** @type {WeakMap<object, string[]>} see blankOptionalPaths */
+const blankOptionalCandidates = new WeakMap();
+
+/**
+ * The paths (`blocks[1].caption`) of the "" values in a saved entry that are
+ * kept only because they sit inside a block at a key the schema proves
+ * optional: what extractFormData returned them in. Inside a block a "" is
+ * kept, since the JSON Schema cannot say which "" the site's zod refuses; the
+ * save sends these paths (see save-payload.js) and the server drops each one
+ * the site's real zod refuses at exactly that path (#70).
+ * @param {*} data - a value extractFormData returned
+ * @returns {string[]}
+ */
+export function blankOptionalPaths(data) {
+  return (data && typeof data === 'object' && blankOptionalCandidates.get(data)) || [];
 }
 
 /**
@@ -1548,8 +1567,9 @@ export function extractFormData(formElement, schema) {
  *
  * @param {HTMLElement} container
  * @param {object} schema - the object schema the container renders
- * @returns {{data: object, removed: string[]}} the value, and the top-level
- *   keys cleanup removed
+ * @returns {{data: object, removed: string[], blanks: string[]}} the value,
+ *   the top-level keys cleanup removed, and the block "" it kept at optional
+ *   keys (see blankOptionalPaths)
  */
 function extractValues(container, schema) {
   const data = readFields(container);
@@ -1588,8 +1608,9 @@ function extractValues(container, schema) {
   // Strip empty optional fields, but keep required ones (see cleanEmptyValues) —
   // walking the schema so this holds at every level, not just the top.
   const before = Object.keys(data);
-  cleanEmptyValues(data, schema, false, kept, '', { constants });
-  return { data, removed: before.filter((key) => !(key in data)) };
+  const blanks = [];
+  cleanEmptyValues(data, schema, false, kept, '', { constants, blanks });
+  return { data, removed: before.filter((key) => !(key in data)), blanks };
 }
 
 /** The paths of a list's items (`<path>[i]`), as cleanEmptyValues walks them. */
@@ -2064,6 +2085,9 @@ function toNumber(value) {
  *   there. Each is removed where the schema proves its key optional, at every
  *   level, blocks included: an optional literal the entry did not have is
  *   not the editor's to add (#69). A required one is always written.
+ * @param {?string[]} [extras.blanks] - Collects the path of every "" kept
+ *   inside a block at a key the schema proves optional (see
+ *   blankOptionalPaths).
  */
 export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = null, path = '', extras = {}) {
   // A nullable node ({anyOf: [<node>, {type: 'null'}]} or type: [x, 'null'])
@@ -2114,8 +2138,10 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = nu
       continue;
     }
     if (value === '') {
-      // Only ever drop a value the schema proves optional.
+      // Only ever drop a value the schema proves optional. Inside a block it
+      // is kept, and named for the server to judge by the site's zod (#70).
       if (!isBlockItem && schemaKnown && !isRequired) delete obj[key];
+      else if (schemaKnown && !isRequired) extras.blanks?.push(keyPath);
     } else if (value && typeof value === 'object') {
       cleanEmptyValues(value, props ? props[key] : undefined, isBlockItem, kept, keyPath, extras);
       // Drop a now-empty object only when we can prove that key is optional.

@@ -10,7 +10,8 @@ import {
   deleteContent,
   contentExists,
 } from '../utils/content.js';
-import { validateStoredEntry } from '../utils/content-validation.js';
+import { validateStoredEntry, dropRefusedBlanks } from '../utils/content-validation.js';
+import { loadSchemas } from '../utils/collections.js';
 import { getConfig } from '../config.js';
 import { isContentPathError } from '../utils/glob-files.js';
 
@@ -69,6 +70,27 @@ async function validateSavedEntry(collection, slug, locale) {
 }
 
 const UNCHECKED_REASON = 'This entry could not be checked against its schema; see the server log.';
+
+/**
+ * The data a save writes: as sent, less the "" values inside blocks that the
+ * editor named (`blankOptionals`) and the site's own zod refuses at exactly
+ * their paths (dropRefusedBlanks, #70). Without the schemas, everything is
+ * written as sent: the save never fails for this.
+ * @param {string} collection
+ * @param {*} data
+ * @param {*} candidates - the request's `blankOptionals` (untrusted)
+ */
+async function dataToWrite(collection, data, candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return data;
+  try {
+    const schemas = await loadSchemas();
+    if (!Object.hasOwn(schemas, collection)) return data;
+    return await dropRefusedBlanks(schemas[collection], data, candidates);
+  } catch (error) {
+    console.error(`Could not check ${collection}'s blank optionals against its schema; saving them as sent:`, error);
+    return data;
+  }
+}
 
 /** The 404 for an entry that does not exist, built from the request, not the error. */
 function notFoundMessage(req) {
@@ -164,7 +186,7 @@ router.post('/:collection/:slug', async (req, res) => {
 
     // Write content
     const result = await writeContent(collection, slug, {
-      data,
+      data: await dataToWrite(collection, data, req.body.blankOptionals),
       ...bodyToWrite(req.body),
       type: type || 'content',
     }, locale);
@@ -212,7 +234,7 @@ router.put('/:collection/:slug', async (req, res) => {
 
     // Write content
     const result = await writeContent(collection, slug, {
-      data,
+      data: await dataToWrite(collection, data, req.body.blankOptionals),
       ...bodyToWrite(req.body),
       type: type || 'content',
     }, locale);

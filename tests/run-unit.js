@@ -24,7 +24,7 @@ const FAST_TESTS = [
   'content-files', 'content-round-trip', 'serializer-fidelity', 'save-body',
   'file-entry-id', 'file-entry-keys', 'export-files', 'import-files',
   'form-generator', 'extract-fields', 'untouched-fields', 'untouched-structure',
-  'primitive-top-level-array', 'clean-nullable', 'blank-optional-round-trip',
+  'primitive-top-level-array', 'clean-nullable', 'blank-optional-round-trip', 'refused-blanks',
   'date-round-trip', 'gallery-structural', 'modal-escape', 'modal-scroll-lock',
   'ui-escaping',
   'colour-field', 'text-field-sizing', 'nested-array-indexes',

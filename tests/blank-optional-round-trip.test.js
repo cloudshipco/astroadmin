@@ -8,6 +8,10 @@
  * template or block-level refinement can tell them apart), and the serialised
  * JSON Schema cannot say which "" the site's zod rejects (z.coerce, .catch(),
  * z.preprocess and zod 4's .base64() serialise as stricter than they are).
+ * So the form keeps them and names them in the save (`blankOptionals`), and
+ * the server drops each one the site's REAL zod refuses at exactly its path
+ * (#70; tests/refused-blanks.test.js for the server's side): here a block's
+ * `.min(1).optional()` left blank is absent, and every other "" is the base's.
  *
  * For a site on zod 4 and one on zod 3 (a child process each), through the
  * real app (its schema parser and block enrichment, its PUT and file writer),
@@ -147,6 +151,13 @@ export const collections = {
     current: await import(path.join(repoRoot, 'ui/form-generator.js')),
     mutant: await import(mutantFile),
   };
+  // Each renderer's own save payload (the dashboard's savePayload), so what
+  // a save sends besides the data travels as the dashboard sends it.
+  const payloads = {
+    head: await import(path.join(headUi, 'ui/save-payload.js')),
+    current: await import(path.join(repoRoot, 'ui/save-payload.js')),
+    mutant: await import(path.join(mutantUi, 'ui/save-payload.js')),
+  };
 
   const { createServer } = await import('../server/index.js');
   const { app } = await createServer();
@@ -163,10 +174,10 @@ export const collections = {
     assert.ok(schema.properties.blocks.blockTypes?.note, 'control: the app enriched the blocks with their types');
 
     /** Save a payload through the real PUT, from the stored file; the file's bytes after. */
-    async function saveThroughApp(data) {
+    async function saveThroughApp(payload) {
       fs.writeFileSync(entryFile, STORED_TEXT);
       const response = await fetch(`${base}/api/content/pages/page`, {
-        method: 'PUT', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ data, type: 'data' }),
+        method: 'PUT', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
       assert.equal(response.status, 200, await response.clone().text());
       return fs.readFileSync(entryFile, 'utf8');
@@ -224,8 +235,12 @@ export const collections = {
       ],
       'a new block added and left empty': [
         { path: ['blocks', 4, 'lit'], base: '', now: undefined },
+        // #70: a block's "" is dropped where the site's own zod refuses it
+        // (min(1)); every other "" it accepts is kept, as the base kept it.
+        { path: ['blocks', 4, 'minOpt'], base: '', now: undefined },
       ],
       'every matrix field cleared': [
+        { path: ['blocks', 0, 'minOpt'], base: '', now: undefined },
         // #61: a cleared number is absent. The base wrote "" (which
         // z.coerce.number() reads as 0, and every z.number() refuses).
         { path: ['blocks', 0, 'coerced'], base: '', now: undefined },
@@ -257,8 +272,9 @@ export const collections = {
       bindOriginalValues(form, structuredClone(STORED));
       scenarios[scenario](form);
       const data = extractFormData(form, schema);
+      const payload = payloads[rendererName].savePayload(form, data, 'data');
       form.remove();
-      return { data, text: await saveThroughApp(data) };
+      return { data, payload, text: await saveThroughApp(payload) };
     }
 
     let mutantDiffered = 0;
@@ -276,6 +292,13 @@ export const collections = {
           for (const key of TOP_CLEARED.absent) assert.ok(!(key in saved), `a cleared optional ${key} at the top level is absent, not ${JSON.stringify(saved[key])}`);
           for (const [key, value] of Object.entries(TOP_CLEARED.kept)) assert.deepStrictEqual(saved[key], value, `the stored ${key} is kept`);
           assert.deepStrictEqual(saved.blocks, STORED.blocks, 'control: the blocks are untouched');
+        }
+        if (scenario === 'every matrix field cleared') {
+          // #70: the form names every block "" at an optional key, refused or
+          // not; the SERVER keeps the ones the site's zod accepts.
+          for (const field of ['minOpt', 'opt', 'defaulted', 'choice', 'meta.note', 'caught']) {
+            assert.ok(current.payload.blankOptionals?.includes(`blocks[0].${field}`), `the save names blocks[0].${field} (sent: ${JSON.stringify(current.payload.blankOptionals)})`);
+          }
         }
         expected = expectedText(scenario, head.text);
         assert.equal(current.text, expected, DELIBERATE[scenario]
