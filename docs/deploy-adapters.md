@@ -28,6 +28,7 @@ export default {
       keyPath: '~/.ssh/deploy_key',    // SSH private key
       exclude: ['.DS_Store'],          // rsync --exclude patterns
       dryRun: false,                   // true: report, change nothing
+      allowDestructivePath: false,     // true: skip the destination check below
     },
   },
 };
@@ -36,7 +37,23 @@ export default {
 AstroAdmin runs `rsync -av --delete dist/ <destination>`, adding `-z` and
 `-e "ssh -p <port> -i <keyPath> -o StrictHostKeyChecking=accept-new"` for a
 remote host. `--delete` removes files at the destination that are not in
-`dist/`, so point `path` at a directory that holds only the site.
+`dist/`, so point `path` at a directory that holds only the site. The key
+path is quoted, so it may contain spaces, and `port` must be a whole number.
+
+Publish refuses a destination where `--delete` would destroy something, and
+says why, before it commits or builds anything:
+
+- for a local copy: the filesystem root, the home directory or any directory
+  above it, the project or any directory above it, anything inside the
+  project, and the build output itself or anything inside it. A relative
+  `path` is resolved against the project, as rsync resolves it, and symlinks
+  are followed;
+- for a remote host: `/`, the remote user's home (`~`, `.`, an empty path)
+  and anything above it (`..`). A relative remote path is relative to that
+  home.
+
+If the destination really is one of these, set `allowDestructivePath: true`
+(the boolean) to skip the check.
 
 The values can come from the environment:
 

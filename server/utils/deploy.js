@@ -29,9 +29,12 @@ function supportedList() {
  * No adapter configured is considered valid (deployment is optional).
  *
  * @param {object} deployConfig - The `deploy` config block
+ * @param {{projectRoot?: string, distDir?: string}} [context] - where the site
+ *   and its build output are, so an adapter can refuse a destination that
+ *   would destroy them (rsync --delete into the project, say)
  * @returns {{valid: boolean, errors: string[]}}
  */
-export function validateDeployConfig(deployConfig) {
+export function validateDeployConfig(deployConfig, context = {}) {
   if (!deployConfig?.adapter) {
     return { valid: true, errors: [] };
   }
@@ -44,7 +47,7 @@ export function validateDeployConfig(deployConfig) {
     };
   }
 
-  return adapter.validate(deployConfig[deployConfig.adapter] || {});
+  return adapter.validate(deployConfig[deployConfig.adapter] || {}, context);
 }
 
 /**

@@ -498,7 +498,7 @@ export async function publishHandler(req, res) {
 
     // Validate deploy config up front.
     if (deployConfig?.adapter) {
-      const validation = validateDeployConfig(deployConfig);
+      const validation = validateDeployConfig(deployConfig, { projectRoot: fullConfig.paths.projectRoot });
       if (!validation.valid) {
         return res.status(400).json({
           success: false,
