@@ -91,6 +91,10 @@ it from a small script:
   requested as `/blog/images/loop.mp4` with `base: '/blog'`.
 - `class`, `id` and other attributes go on the `<video>`; `wrapperClass` goes
   on the element around it, which positions the button.
+- **The site keeps Astro's default `publicDir`** (`./public`): like
+  `CmsImage`, the component finds local files in `public/images/` only, so a
+  custom `publicDir` fails the build for every local video. See
+  [The public folder](./optimised-images.md#the-public-folder).
 - An empty `src` renders nothing. A value that is not a path or URL of an
   `.mp4` or `.webm` file (a bare file name, a YouTube page) fails the build
   with an error naming it.

@@ -9,7 +9,9 @@
  * - cms-image-prerequisites (static): when the site's source uses CmsImage,
  *   the SITE's sharp (resolved from the site root, as `astro build` resolves
  *   it, not from Astro's own folder) must be >= 0.35.4 and Astro >= 7; on
- *   Astro 7, an unset vite.build.cssTarget warns.
+ *   Astro 7, an unset vite.build.cssTarget warns. A publicDir other than
+ *   ./public (or one not readable statically) warns for CmsImage and for
+ *   CmsVideo, whose globs are fixed at /public/images/** (#86).
  *
  * Each is shown red on a mutated copy of a healthy fixture.
  *
@@ -206,6 +208,52 @@ await check('prerequisites MUTATION: Astro 7 with no vite.build.cssTarget warns'
   const result = await prereqResult(makePrereqSite({ config: CONFIG_WITHOUT_CSS_TARGET }));
   assert.equal(result.severity, 'warn', JSON.stringify(result));
   assert.ok(result.message.includes('cssTarget'), result.message);
+});
+
+// #86: the components' globs are fixed at /public/images/**, so a custom
+// publicDir finds no image or video. The doctor warns, naming the setting.
+const configWithPublicDir = (value) => CONFIG_WITH_CSS_TARGET.replace('integrations: [astroadmin()],', `integrations: [astroadmin()],\n  publicDir: ${value},`);
+const PAGE_USING_CMS_VIDEO = `---
+import CmsVideo from 'astroadmin/components/CmsVideo.astro';
+---
+<CmsVideo src="/images/intro.mp4" />
+`;
+
+await check('prerequisites MUTATION: CmsImage with publicDir \'./static\' warns, naming publicDir (#86)', async () => {
+  const result = await prereqResult(makePrereqSite({ config: configWithPublicDir("'./static'") }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes('publicDir') && result.message.includes('./static'), result.message);
+});
+
+await check('prerequisites MUTATION: CmsVideo alone with publicDir \'static\' warns, naming publicDir (#86)', async () => {
+  const result = await prereqResult(makePrereqSite({ config: configWithPublicDir("'static'"), page: PAGE_USING_CMS_VIDEO }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes('publicDir') && result.message.includes('CmsVideo'), result.message);
+});
+
+await check('prerequisites MUTATION: a publicDir the doctor cannot read statically warns to check by hand (#86)', async () => {
+  const result = await prereqResult(makePrereqSite({ config: configWithPublicDir("new URL('./static/', import.meta.url)") }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes('publicDir'), result.message);
+});
+
+await check('prerequisites MUTATION: a custom publicDir and no cssTarget warn about both (#86)', async () => {
+  const config = CONFIG_WITHOUT_CSS_TARGET.replace('integrations: [astroadmin()]', "integrations: [astroadmin()], publicDir: './static'");
+  const result = await prereqResult(makePrereqSite({ config }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes('publicDir') && result.message.includes('cssTarget'), result.message);
+});
+
+await check('prerequisites: publicDir set to \'./public\' (or \'public/\') is the default and passes (#86 control)', async () => {
+  for (const value of ["'./public'", "'public/'"]) {
+    const result = await prereqResult(makePrereqSite({ config: configWithPublicDir(value) }));
+    assert.equal(result.severity, 'pass', `${value}: ${JSON.stringify(result)}`);
+  }
+});
+
+await check('prerequisites: a site using neither component is a skip whatever its publicDir (#86 control)', async () => {
+  const result = await prereqResult(makePrereqSite({ config: configWithPublicDir("'./static'"), page: '<h1>Home</h1>\n' }));
+  assert.equal(result.severity, 'skip', JSON.stringify(result));
 });
 
 await check('both checks name the version that added them', async () => {

@@ -46,6 +46,7 @@ import {
   compareVersions,
   findAstroAssetsUse,
   findCmsImageUse,
+  findCmsVideoUse,
   findCommittedLockfile,
   isGitRepository,
   LOCKFILE_NAMES,
@@ -107,6 +108,25 @@ export function doctorOutDirParent(projectRoot) {
     // no writable node_modules
   }
   return projectRoot;
+}
+
+/**
+ * Why a custom publicDir breaks CmsImage and CmsVideo, or null when the site
+ * keeps Astro's default. Their globs are fixed at /public/images/** (a glob
+ * cannot take a runtime value), and the admin uploads into <root>/public, so
+ * with another publicDir every local `/images/...` value fails the build as
+ * missing (#86).
+ * @param {string} projectRoot
+ * @param {{state: string, value: string|null}} publicDir - from readAstroConfigFacts
+ * @param {string} components - which components the site uses, and where
+ */
+function describePublicDirProblem(projectRoot, publicDir, components) {
+  const limitation = `${components} find /images/ files only in ./public/images (and the editor uploads there), so every local image or video would fail the build as missing. Keep the site's public files in ./public. See ${OPTIMISED_IMAGES_DOCS}#the-public-folder.`;
+  if (publicDir.state === 'unknown') return `Could not verify publicDir in the Astro config (not a plain string); check by hand that it is ./public: ${limitation}`;
+  if (publicDir.state === 'literal' && path.resolve(projectRoot, publicDir.value) !== path.resolve(projectRoot, 'public')) {
+    return `publicDir is set to '${publicDir.value}', but ${limitation}`;
+  }
+  return null;
 }
 
 function formatBytes(bytes) {
@@ -257,7 +277,16 @@ export const CHECKS = [
     problemTitle: 'CmsImage prerequisites not met',
     async run(context) {
       const usedIn = await findCmsImageUse(context.projectRoot);
-      if (!usedIn) return { severity: 'skip', message: 'The site does not use CmsImage (astroadmin/components/CmsImage.astro).' };
+      const videoIn = await findCmsVideoUse(context.projectRoot);
+      if (!usedIn && !videoIn) return { severity: 'skip', message: 'The site does not use CmsImage (astroadmin/components/CmsImage.astro).' };
+      const facts = await context.astroConfig();
+      const components = [usedIn && `CmsImage (${usedIn})`, videoIn && `CmsVideo (${videoIn})`].filter(Boolean).join(' and ');
+      const publicDirWarning = describePublicDirProblem(context.projectRoot, facts.publicDir, components);
+      if (!usedIn) {
+        // CmsVideo alone: only the public folder matters here.
+        if (publicDirWarning) return { severity: 'warn', title: 'A custom publicDir', message: publicDirWarning };
+        return { severity: 'skip', message: `The site does not use CmsImage (astroadmin/components/CmsImage.astro); ${components} reads the default public folder.` };
+      }
       const sharp = sitePackageVersion(context.projectRoot, 'sharp');
       const astro = sitePackageVersion(context.projectRoot, 'astro');
       const problems = [];
@@ -270,16 +299,18 @@ export const CHECKS = [
       else if (compareVersions(astro.version, MIN_ASTRO) < 0) problems.push(`Astro is ${astro.version}; CmsImage needs Astro 7 or later`);
       const versions = `site sharp ${sharp ? sharp.version : 'none'}, Astro ${astro ? astro.version : 'none'}`;
       if (problems.length > 0) {
-        return { severity: 'fail', message: `CmsImage is used (${usedIn}), but ${problems.join('; and ')}. See ${OPTIMISED_IMAGES_DOCS}#prerequisites.`, details: [versions] };
+        return { severity: 'fail', message: `CmsImage is used (${usedIn}), but ${problems.join('; and ')}. See ${OPTIMISED_IMAGES_DOCS}#prerequisites.`, details: publicDirWarning ? [versions, publicDirWarning] : [versions] };
       }
-      const facts = await context.astroConfig();
+      const warnings = [];
+      if (publicDirWarning) warnings.push({ title: 'A custom publicDir', message: publicDirWarning });
       if (facts.cssTarget !== 'set') {
-        return {
-          severity: 'warn',
+        warnings.push({
           title: 'vite.build.cssTarget not set on Astro 7',
           message: `${versions}. ${facts.cssTarget === 'unknown' ? 'Could not verify vite.build.cssTarget (not a plain literal); check by hand.' : 'vite.build.cssTarget is not set'}: Astro 7 builds with target esnext, so Vite's CSS minifier strips vendor prefixes such as -webkit-backdrop-filter. See ${OPTIMISED_IMAGES_DOCS}#astro-7-and-vendor-prefixes.`,
-        };
+        });
       }
+      if (warnings.length === 1) return { severity: 'warn', ...warnings[0] };
+      if (warnings.length > 1) return { severity: 'warn', message: warnings.map((warning) => warning.message).join(' ') };
       return { severity: 'pass', message: `CmsImage is used (${usedIn}) with ${versions}, and vite.build.cssTarget is set.` };
     },
   },

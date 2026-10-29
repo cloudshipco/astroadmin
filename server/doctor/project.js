@@ -36,6 +36,11 @@ const SHARP_TIMEOUT_MS = 20_000;
  * @property {'set'|'missing'|'unknown'} allowedHosts - vite.server.allowedHosts
  * @property {'disabled'|'enabled'|'unknown'} hmr - vite.server.hmr
  * @property {string|null} outDir
+ * @property {'set'|'missing'|'unknown'} cssTarget - vite.build.cssTarget
+ * @property {{state: 'unset'|'literal'|'unknown', value: string|null}} publicDir
+ *   - 'unset' is Astro's default (./public); 'literal' carries the string it
+ *   is set to; 'unknown' is a value the doctor cannot read statically (a URL,
+ *   a call, a spread config)
  */
 
 // A value that is there but cannot be read statically (a later spread, a
@@ -183,7 +188,7 @@ function listCalls(listNode, localNames, resolve, depth = 0) {
  * @returns {Promise<AstroConfigFacts>}
  */
 export async function readAstroConfigFacts(projectRoot) {
-  const facts = { file: null, parseError: null, integrationImported: false, integrationCalled: 'no', allowedHosts: 'unknown', hmr: 'unknown', outDir: null, cssTarget: 'unknown' };
+  const facts = { file: null, parseError: null, integrationImported: false, integrationCalled: 'no', allowedHosts: 'unknown', hmr: 'unknown', outDir: null, cssTarget: 'unknown', publicDir: { state: 'unknown', value: null } };
   let source = null;
   for (const name of ASTRO_CONFIG_NAMES) {
     try {
@@ -194,7 +199,7 @@ export async function readAstroConfigFacts(projectRoot) {
       // try the next name
     }
   }
-  if (source === null) return facts;
+  if (source === null) return { ...facts, publicDir: { state: 'unset', value: null } };
 
   let ast;
   try {
@@ -250,6 +255,10 @@ export async function readAstroConfigFacts(projectRoot) {
     const outDir = getProperty(configObject, 'outDir', resolve);
     const outDirValue = outDir === undefined || outDir === UNKNOWN ? null : resolve(outDir);
     if (outDirValue?.type === 'StringLiteral') facts.outDir = outDirValue.value;
+    const publicDir = getProperty(configObject, 'publicDir', resolve);
+    const publicDirValue = publicDir === undefined || publicDir === UNKNOWN ? null : resolve(publicDir);
+    if (publicDir === undefined) facts.publicDir = { state: 'unset', value: null };
+    else if (publicDirValue?.type === 'StringLiteral') facts.publicDir = { state: 'literal', value: publicDirValue.value };
   }
   return facts;
 }
@@ -328,11 +337,22 @@ export async function findAstroAssetsUse(projectRoot) {
  * @param {string} projectRoot
  * @returns {Promise<string|null>} the first file that does, relative to the site
  */
-export async function findCmsImageUse(projectRoot) {
+export function findCmsImageUse(projectRoot) {
+  return findImportUse(projectRoot, 'astroadmin/components/CmsImage.astro');
+}
+
+/**
+ * Does the site's source use AstroAdmin's CmsVideo component?
+ * @param {string} projectRoot
+ * @returns {Promise<string|null>} the first file that does, relative to the site
+ */
+export function findCmsVideoUse(projectRoot) {
+  return findImportUse(projectRoot, 'astroadmin/components/CmsVideo.astro');
+}
+
+async function findImportUse(projectRoot, specifier) {
   for await (const file of sourceFiles(path.join(projectRoot, 'src'))) {
-    if (fs.readFileSync(file, 'utf-8').includes('astroadmin/components/CmsImage.astro')) {
-      return path.relative(projectRoot, file);
-    }
+    if (fs.readFileSync(file, 'utf-8').includes(specifier)) return path.relative(projectRoot, file);
   }
   return null;
 }

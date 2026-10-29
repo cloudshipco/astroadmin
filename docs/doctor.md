@@ -213,7 +213,8 @@ as the publish check (Bun), and makes a 1x1 image.
 ### cms-image-prerequisites
 
 *Since 1.8.0. Fails when a prerequisite is missing; warns about the CSS
-target; skipped when the site does not use CmsImage.*
+target and a custom `publicDir`; skipped when the site uses neither CmsImage
+nor CmsVideo.*
 
 A site whose source imports `astroadmin/components/CmsImage.astro` needs:
 
@@ -228,6 +229,12 @@ On Astro 7 it also warns when `vite.build.cssTarget` is not set: Astro builds
 with target `esnext`, so Vite's CSS minifier strips vendor prefixes such as
 `-webkit-backdrop-filter`. See
 [Optimised images](./optimised-images.md#prerequisites).
+
+It warns, for CmsImage and for `astroadmin/components/CmsVideo.astro`, when
+the Astro config sets `publicDir` to anything but `./public`, or to a value it
+cannot read statically: both components find `/images/...` files only in
+`public/images/`. See
+[The public folder](./optimised-images.md#the-public-folder).
 
 ### build-runs
 

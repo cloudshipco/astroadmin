@@ -35,6 +35,15 @@ nothing:
 rm -rf node_modules/.astro && npx astro build
 ```
 
+### The public folder
+
+The site must keep Astro's default `publicDir`, `./public`. `CmsImage` and
+`CmsVideo` find `/images/...` values with a glob fixed at
+`/public/images/**` (a glob cannot take a value from the config), and the
+editor uploads into `public/images/`. With `publicDir: './static'` every local
+image or video fails the build as missing. `astroadmin doctor` warns when
+`publicDir` is set to anything else, or to a value it cannot read (a `URL`).
+
 ### Astro 7 and vendor prefixes
 
 Astro 7 builds with Vite's `build.target: 'esnext'`. Vite 8 derives the CSS
