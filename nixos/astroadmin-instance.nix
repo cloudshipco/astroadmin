@@ -247,9 +247,17 @@ let
   checkoutScript = name: inst: pkgs.writeShellScript "astroadmin-${name}-checkout" ''
     set -euo pipefail
     export GIT_SSH_COMMAND="${gitSshCommand name inst}"
+    # The site's own code (preview, builds, the bun install below) can write
+    # .git/hooks and .git/config, and this runs with the deploy key: no hook,
+    # fsmonitor or ext:: transport runs (astroadmin#67, as the admin does).
+    # Filter drivers are not neutralised here (the admin enumerates them).
+    hardened_git() {
+      ${pkgs.git}/bin/git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+        -c protocol.ext.allow=never "$@"
+    }
     if [ ! -e ${inst.checkoutPath}/.git ]; then
       # No checkout yet — a failure here is fatal, there is nothing to serve.
-      ${pkgs.git}/bin/git clone --branch ${inst.branch} ${inst.repoUrl} ${inst.checkoutPath}
+      hardened_git clone --branch ${inst.branch} ${inst.repoUrl} ${inst.checkoutPath}
     else
       # Every refusal below WARNS and carries on rather than failing the unit:
       # the admin and preview units `requires` this one, so exiting non-zero
@@ -262,17 +270,17 @@ let
       # local history diverges, so a commit the editor made but could not push
       # is never discarded. `reset --hard` would silently destroy it.
       cd ${inst.checkoutPath}
-      head_branch="$(${pkgs.git}/bin/git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+      head_branch="$(hardened_git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
       if [ "$head_branch" != "${inst.branch}" ]; then
         echo "astroadmin: not pulling — checkout is on '$head_branch', expected '${inst.branch}'" >&2
-      elif [ -n "$(${pkgs.git}/bin/git status --porcelain)" ]; then
+      elif [ -n "$(hardened_git status --porcelain)" ]; then
         echo "astroadmin: not pulling — working tree is dirty (unpublished editor edits)" >&2
-      elif ! ${pkgs.git}/bin/git fetch origin ${inst.branch}; then
+      elif ! hardened_git fetch origin ${inst.branch}; then
         echo "astroadmin: not pulling — fetch from origin failed" >&2
-      elif ! ${pkgs.git}/bin/git merge --ff-only FETCH_HEAD; then
+      elif ! hardened_git merge --ff-only FETCH_HEAD; then
         echo "astroadmin: not pulling — local '${inst.branch}' has diverged from origin (unpushed commits?)" >&2
       else
-        echo "astroadmin: checkout at $(${pkgs.git}/bin/git rev-parse --short HEAD) (${inst.branch})"
+        echo "astroadmin: checkout at $(hardened_git rev-parse --short HEAD) (${inst.branch})"
       fi
     fi
     cd ${inst.projectRoot}
