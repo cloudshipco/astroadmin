@@ -132,8 +132,11 @@ over-redaction in every version of "show the output with server paths removed or
 
 ## Testing
 
-Tests are standalone scripts under `tests/`, run individually (there is no test
-runner aggregating them). Most run server-less and need env vars:
+Tests are standalone scripts under `tests/`, each run as its own process.
+`npm run test:unit` (`bun tests/run-unit.js [word...]`) runs the fast server-less
+ones in turn and prints a summary (~45 s); a new fast test goes in its list. The
+slow ones (full Astro builds, a browser) are run by name before a release, and the
+shelved SQLite store's are `npm run test:db`. Most run server-less and need env vars:
 
 - **Run them as `bun tests/<file>.js`, never `bun test <file>`.** `bun test`
   sets `NODE_ENV=test`, which every spawned `astro build` inherits, so
@@ -663,7 +666,7 @@ before imports), since `files` is now the default.
 
 **Caveat:** `npm test` / the `test` script only runs `tests/api.test.js`, which
 needs a **running server** and is currently red (tracked as issue #2). Don't read
-that single red as the suite being broken — run the server-less tests above.
+that single red as the suite being broken: run `npm run test:unit`.
 
 ## Schema validation: saves warn, the site's own Astro gates the push
 

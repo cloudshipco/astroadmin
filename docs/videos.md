@@ -44,6 +44,10 @@ The image library and the video library are one folder. Each picker offers
 only its own kind, so a video cannot be put in an image field. An Astro
 `image()` field never takes a video.
 
+A library video opened in its own browser tab does not start by itself:
+press Play. The admin serves its files with no script allowed, and that
+also stops autoplay. On the site, `CmsVideo` plays as usual.
+
 ## `CmsVideo`
 
 ```astro
