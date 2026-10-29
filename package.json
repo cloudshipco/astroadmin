@@ -12,7 +12,7 @@
     "./components/CmsVideo.astro": "./components/CmsVideo.astro"
   },
   "bin": {
-    "astroadmin": "./bin/cli.js"
+    "astroadmin": "bin/cli.js"
   },
   "scripts": {
     "dev": "NODE_ENV=development bun --watch bin/cli.js dev",
@@ -41,7 +41,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cloudshipco/astroadmin.git"
+    "url": "git+https://github.com/cloudshipco/astroadmin.git"
   },
   "homepage": "https://astroadmin.dev",
   "dependencies": {
