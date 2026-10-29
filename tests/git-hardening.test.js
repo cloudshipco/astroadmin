@@ -105,8 +105,9 @@ function plantInto(checkout, tag = '') {
   git(checkout, 'config', 'diff.external', wrap('external-diff'));
   git(checkout, 'config', 'commit.gpgSign', 'true');
   git(checkout, 'config', 'gpg.program', wrap('gpg'));
-  // A merge driver named by an attribute the repository keeps out of its tree.
-  writeFile(git(checkout, 'rev-parse', '--path-format=absolute', '--git-path', 'info'), 'attributes', '*.md merge=planted\n');
+  // The filter and a merge driver, named by attributes kept out of the tree
+  // (so the filter's can be dropped before the publish steps).
+  writeFile(git(checkout, 'rev-parse', '--path-format=absolute', '--git-path', 'info'), 'attributes', '*.md merge=planted filter=planted\n');
   git(checkout, 'config', 'merge.planted.driver', `${wrap('merge-driver')} %A %O %B`);
   // The programs run for a fetch and a push over a local path (or ssh).
   git(checkout, 'config', 'remote.origin.uploadpack', wrap('upload-pack'));
@@ -147,7 +148,7 @@ git(tempRoot, 'init', '-q', '--bare', '-b', 'main', remoteDir);
 fs.mkdirSync(projectRoot);
 fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(projectRoot, 'node_modules'), 'dir');
 writeFile(projectRoot, '.gitignore', 'node_modules\n');
-writeFile(projectRoot, '.gitattributes', '*.md filter=planted diff=planted\n');
+writeFile(projectRoot, '.gitattributes', '*.md diff=planted\n');
 writeFile(projectRoot, 'package.json', JSON.stringify({ type: 'module' }));
 writeFile(projectRoot, 'astro.config.mjs', 'export default {};\n');
 writeFile(projectRoot, 'astroadmin.config.js',
@@ -339,6 +340,16 @@ try {
   }, ({ status, body }) => {
     assert.equal(status, 200, JSON.stringify(body));
     assert.match(fs.readFileSync(path.join(projectRoot, 'src/content/pages/about.md'), 'utf-8'), /title: About\n/);
+  });
+
+  // A site whose files go through a filter is not published at all (its
+  // bytes are not what git would store with the driver switched off):
+  // tests/publish-filters.test.js. The rest publish with the filter attribute
+  // gone and its driver still configured.
+  await step('publish while a filter driver is in use (refused)', () => request('POST', '/api/publish', { message: 'Refused' }), ({ status, body }) => {
+    assert.equal(status, 409, JSON.stringify(body));
+    assert.equal(body.committed, false, JSON.stringify(body));
+    writeFile(git(projectRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'info'), 'attributes', '*.md merge=planted\n');
   });
 
   await step('publish (commit, pull --rebase onto a moved remote, check worktree, push)', async () => {

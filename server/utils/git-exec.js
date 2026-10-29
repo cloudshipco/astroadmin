@@ -149,7 +149,7 @@ const TEXT_MERGE_DRIVER = 'git merge-file --marker-size=%L %A %O %B';
  *   long-running process. Emptied (git treats an empty command as no filter)
  *   and required=false, so a disabled driver is not an error: files go in
  *   and out of git byte for byte. A repository whose attributes USE a
- *   configured filter (Git LFS included) is refused for publishing
+ *   configured filter, or Git LFS's, is refused for publishing
  *   (filter-attributes.js), since those bytes are not what git would store.
  * - merge.<name>.driver: run for a file both sides changed (the publish
  *   rebase). Replaced with git's own text merge: an empty driver is not

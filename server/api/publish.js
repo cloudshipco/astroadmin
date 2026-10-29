@@ -27,6 +27,7 @@ import { listSlugs } from '../utils/content.js';
 import { resolveLiveUrl } from '../../ui/live-url.js';
 import { buildProblems } from '../utils/build-failure.js';
 import { withCheckoutExclusive } from '../utils/checkout-lock.js';
+import { filterDriverInUse } from '../utils/filter-attributes.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
 import { FETCH_PROGRAMS, GIT_PASSED_ENVIRONMENT, PUSH_PROGRAMS, SIMPLE_GIT_UNSAFE, gitEnvironment, hardenedConfig } from '../utils/git-exec.js';
 
@@ -113,7 +114,9 @@ export function withGitLock(task) {
  * check leaves the commit local and unpushed.
  *
  * Outcomes besides the check: `blocked` when the checkout already holds an
- * unfinished rebase or merge (nothing staged or committed; left as it was);
+ * unfinished rebase or merge (nothing staged or committed; left as it was),
+ * or, with `blockedReason: 'filter'`, when the repository's files go
+ * through a git filter driver such as Git LFS (filter-attributes.js);
  * `conflict` when OUR rebase conflicted (it is aborted; the commit stays
  * local); `localChanges` when the incoming changes touch files with
  * uncommitted changes in the checkout (nothing moved; the commit stays
@@ -123,14 +126,15 @@ export function withGitLock(task) {
  * @param {object} fullConfig
  * @param {import('simple-git').SimpleGit} git
  * @param {{commit?: () => Promise<object|null>, onlyIfCommitted?: boolean}} [options]
- * @returns {Promise<{blocked: boolean, conflict: boolean, localChanges: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
+ * @returns {Promise<{blocked: boolean, blockedReason: 'filter'|null, conflict: boolean, localChanges: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
  */
 export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyIfCommitted = false } = {}) {
-  const outcome = { blocked: false, conflict: false, localChanges: false, commitResult: null, pushed: false, pushError: null, check: null };
+  const outcome = { blocked: false, blockedReason: null, conflict: false, localChanges: false, commitResult: null, pushed: false, pushError: null, check: null };
   const prepared = await commitInCheckout(git, commit, {
     rebase: (commitResult) => !(onlyIfCommitted && !commitResult),
   });
   outcome.blocked = prepared.blocked;
+  outcome.blockedReason = prepared.blockedReason;
   outcome.conflict = prepared.conflict;
   outcome.localChanges = prepared.localChanges;
   outcome.commitResult = prepared.commitResult;
@@ -162,21 +166,28 @@ export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyI
 }
 
 /**
- * In one exclusive checkout hold: refuse an unfinished git operation, commit
+ * In one exclusive checkout hold: refuse an unfinished git operation or a
+ * repository whose files go through a git filter, commit
  * (when `commit` is given) and, when `rebase(commitResult)` says so, rebase
  * onto the upstream. `ready` means go on to check and push. Also the commit
  * route's path when it does not push.
- * @returns {Promise<{blocked: boolean, conflict: boolean, localChanges: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
+ * @returns {Promise<{blocked: boolean, blockedReason: 'filter'|null, conflict: boolean, localChanges: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
  */
 export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
   return withCheckoutExclusive(async () => {
-    const prepared = { blocked: false, conflict: false, localChanges: false, ready: false, commitResult: null, upstream: null };
+    const prepared = { blocked: false, blockedReason: null, conflict: false, localChanges: false, ready: false, commitResult: null, upstream: null };
     const unfinished = await unfinishedOperation(git);
     if (unfinished) {
       // Someone else's (an interrupted publish, or a person on the box): not
       // ours to finish or abort. Aborting it would reset to ITS starting point.
       console.error(`Publish refused: the checkout has an unfinished git operation (${unfinished})`);
       prepared.blocked = true;
+      return prepared;
+    }
+    if (await filterDriverInUse(git)) {
+      // Logged with the driver's name; the editor gets a fixed sentence.
+      prepared.blocked = true;
+      prepared.blockedReason = 'filter';
       return prepared;
     }
     if (commit) prepared.commitResult = await commit();
@@ -365,8 +376,23 @@ async function pushCheckedCommit(git, commit, upstream) {
   await git.raw(['push', ...PUSH_PROGRAMS, '--no-follow-tags', upstream.remote, `${commit}:${upstream.ref}`]);
 }
 
-/** Response body for a checkout left mid-rebase or mid-merge by someone else. */
-export function blockedBody() {
+/**
+ * Response body for a checkout left mid-rebase or mid-merge by someone else,
+ * or (reason 'filter') a repository whose files go through a git filter.
+ * @param {'filter'|null} [reason]
+ */
+export function blockedBody(reason = null) {
+  if (reason === 'filter') {
+    return {
+      success: false,
+      committed: false,
+      pushed: false,
+      commit: null,
+      error: 'This site cannot be published from the editor',
+      message: 'Nothing was published: this site stores some files through a git filter (such as Git LFS), '
+        + 'which publishing from the editor does not support. Your changes are saved. Contact your site administrator.',
+    };
+  }
   return {
     success: false,
     committed: false,
@@ -567,7 +593,7 @@ export async function publishHandler(req, res) {
       ({ pushed, commitResult } = outcome);
       committed = Boolean(commitResult);
       if (outcome.blocked) {
-        return res.status(409).json(blockedBody());
+        return res.status(409).json(blockedBody(outcome.blockedReason));
       }
       if (outcome.conflict) {
         return res.status(409).json(conflictBody({ committed, commitResult }));

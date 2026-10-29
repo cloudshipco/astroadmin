@@ -370,7 +370,7 @@ router.post('/commit', async (req, res) => {
     const result = outcome.commitResult;
 
     if (outcome.blocked) {
-      return res.status(409).json(blockedBody());
+      return res.status(409).json(blockedBody(outcome.blockedReason));
     }
     if (!result) {
       return res.status(400).json({
