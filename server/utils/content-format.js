@@ -24,6 +24,7 @@
  */
 
 import matter from 'gray-matter';
+import { DATE_MARKER } from '../../ui/schema-markers.js';
 
 const DEFAULT_INDENT = '  ';
 // A YAML 1.1 timestamp as js-yaml reads it: date-only, or date and time. Seconds
@@ -144,7 +145,7 @@ export function restoreDates(previous, next) {
  */
 export function dateFieldsFromSchema(jsonSchema) {
   const fields = new Set();
-  const isDate = (node) => Boolean(node) && (node['x-astroadmin-date'] === true
+  const isDate = (node) => Boolean(node) && (node[DATE_MARKER] === true
     || [...(node.anyOf || []), ...(node.oneOf || []), ...(node.allOf || [])].some(isDate));
   for (const [name, property] of Object.entries(jsonSchema?.properties || {})) {
     if (isDate(property)) fields.add(name);

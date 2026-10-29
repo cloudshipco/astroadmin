@@ -11,6 +11,9 @@
 import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, isPreviewableVideo, setWidgetValue, CLEARED_ATTRIBUTE } from './field-widgets.js';
 
 import { escapeHtml } from './escape-html.js';
+// The keywords the schema parser marks a real date, a file() entry's id and
+// Astro's image() with (shared with the server).
+import { DATE_MARKER, ENTRY_ID_MARKER, IMAGE_MARKER } from './schema-markers.js';
 
 /**
  * Serialise a value into an HTML attribute as JSON.
@@ -203,13 +206,6 @@ function isNullableSchema(schema) {
   return nonNull.length === 1 && nonNull.length !== union.length;
 }
 
-/**
- * The keyword the schema parser marks a REAL date with (z.date(),
- * z.coerce.date(); DATE_MARKER in server/utils/schema-parser.js), as opposed
- * to a string with a date format.
- */
-const DATE_MARKER = 'x-astroadmin-date';
-
 // A timestamp with no zone, as YAML and the serialiser's parseTimestamp read it: UTC.
 const ZONELESS_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
 
@@ -223,12 +219,6 @@ function parseStoredDate(value) {
   const text = String(value);
   return new Date(ZONELESS_TIMESTAMP.test(text) ? `${text.replace(' ', 'T')}Z` : text);
 }
-
-/**
- * The keyword the schema parser marks a file() collection's `id` with
- * (ENTRY_ID_MARKER in server/utils/schema-parser.js).
- */
-const ENTRY_ID_MARKER = 'x-astroadmin-entry-id';
 
 /**
  * The values a NEW entry's form starts with: its entry id, when the schema
@@ -1016,13 +1006,6 @@ export function isImageField(name, schema) {
 
   return false;
 }
-
-/**
- * The keyword the schema parser marks Astro's image() with (IMAGE_MARKER in
- * server/utils/schema-parser.js). A keyword of its own, so a site's
- * image().describe('Portrait') is still image().
- */
-const IMAGE_MARKER = 'x-astroadmin-image';
 
 /**
  * Whether a field is Astro's image(). Its value must be a path Astro can

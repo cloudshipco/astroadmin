@@ -194,6 +194,10 @@ runner aggregating them). Most run server-less and need env vars:
   are not. zod 4 marks through its serializer override; zod 3 through `markZod3StandIns`, which
   must walk every wrapper beside its JSON Schema (it once skipped unions, so a new date in a
   `z.union([z.date(), z.null()])` field was written quoted and failed the schema).
+- `bun tests/schema-markers.test.js` — the parser's marker keywords (`IMAGE_MARKER`,
+  `DATE_MARKER`, `ENTRY_ID_MARKER`) are defined once, in `ui/schema-markers.js`, which
+  the editor and the server import: no other `ui/` or `server/` file spells one as a
+  literal, and the parser re-exports that module's values. <1 s.
 - `bun tests/stand-in-marks.test.js` — the image() and reference() stand-ins keep their marks
   (`x-astroadmin-image`, `referenceCollection`) through describe/nullable/optional/default/
   nullish/one-option unions, in arrays, objects and block options, for zod 3 (a site whose

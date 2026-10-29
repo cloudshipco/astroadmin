@@ -25,24 +25,14 @@ const ZOD3_REFERENCE_KEY = 'astroadminReferenceCollection';
 const ZOD3_IMAGE_KEY = 'astroadminImage';
 
 /**
- * Marks Astro's image() in the JSON Schema. A keyword of its own, not a
- * description: `image().describe('Portrait')` replaced the old 'Image path'
- * description, and the field lost its image() handling. zod 4 keeps it
- * through .describe(), .optional() and .nullable() (meta is merged); zod 3
- * gets it from the _def (markZod3StandIns). Read by ui/form-generator.js
- * isAstroImageField and server/utils/content-validation.js.
+ * The keywords this parser adds to the JSON Schema: IMAGE_MARKER (Astro's
+ * image()), ENTRY_ID_MARKER (a file() entry's id) and DATE_MARKER (a real
+ * date). Defined once in ui/schema-markers.js, which the editor reads too;
+ * re-exported for the server modules that import them from here.
  */
-export const IMAGE_MARKER = 'x-astroadmin-image';
+import { IMAGE_MARKER, ENTRY_ID_MARKER, DATE_MARKER } from '../../ui/schema-markers.js';
 
-/**
- * Marks a file() collection's top-level `id` in the JSON Schema. The store
- * writes a file() entry under the id it was opened or created with (renaming
- * it would orphan the entry and break references to it), so the form shows
- * this field read-only rather than as a box whose edits are silently dropped
- * (#72). Read by ui/form-generator.js. A glob() entry's `id`-named field is
- * ordinary data and is not marked.
- */
-export const ENTRY_ID_MARKER = 'x-astroadmin-entry-id';
+export { IMAGE_MARKER, ENTRY_ID_MARKER, DATE_MARKER };
 
 /** Mark the entry id of a file() collection's schema (see ENTRY_ID_MARKER). */
 function markFileEntryId(jsonSchema) {
@@ -412,15 +402,6 @@ function toJsonSchema(zodSchema) {
   markZod3StandIns(zodSchema, jsonSchema);
   return jsonSchema;
 }
-
-/**
- * Marks a REAL date (z.date(), z.coerce.date()) in the JSON Schema, as opposed
- * to a string that only has a date format (zod 4 z.iso.date(), zod 3
- * z.string().date()). Both serialise as `format: 'date'`, but only a real date
- * may be written to frontmatter as an unquoted YAML date: the string forms
- * refuse a Date.
- */
-const DATE_MARKER = 'x-astroadmin-date';
 
 /**
  * zod 3 has no serializer override, so walk the zod schema beside its JSON
