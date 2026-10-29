@@ -238,6 +238,9 @@ export const collections = {
         // #70: a block's "" is dropped where the site's own zod refuses it
         // (min(1)); every other "" it accepts is kept, as the base kept it.
         { path: ['blocks', 4, 'minOpt'], base: '', now: undefined },
+        // A new block's optional number starts empty, so it is left out; the
+        // base started it at 0, a value nobody chose.
+        { path: ['blocks', 4, 'coerced'], base: 0, now: undefined },
       ],
       'every matrix field cleared': [
         { path: ['blocks', 0, 'minOpt'], base: '', now: undefined },

@@ -2868,6 +2868,7 @@ export function createEmptyArrayItem(schema) {
 
   const item = {};
   const props = schema.properties || {};
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
 
   for (const [key, propSchema] of Object.entries(props)) {
     if (propSchema.default !== undefined) {
@@ -2875,7 +2876,8 @@ export function createEmptyArrayItem(schema) {
     } else if (propSchema.type === 'string') {
       item[key] = '';
     } else if (isNumericType(propSchema.type)) {
-      item[key] = 0;
+      // An optional number starts empty: 0 is a value nobody chose.
+      if (required.has(key)) item[key] = 0;
     } else if (propSchema.type === 'boolean') {
       item[key] = false;
     } else if (propSchema.type === 'array') {
@@ -2995,6 +2997,7 @@ export function createEmptyBlock(blockType, blockSchema) {
   const block = { type: blockType };
 
   if (blockSchema?.properties) {
+    const required = new Set(Array.isArray(blockSchema.required) ? blockSchema.required : []);
     for (const [key, schema] of Object.entries(blockSchema.properties)) {
       if (key === 'type') continue;
 
@@ -3005,7 +3008,9 @@ export function createEmptyBlock(blockType, blockSchema) {
       } else if (schema.type === 'object') {
         block[key] = {};
       } else if (isNumericType(schema.type)) {
-        block[key] = 0;
+        // An optional number starts empty: 0 is a value nobody chose, and an
+        // empty box is left out of the save (#61).
+        if (required.has(key)) block[key] = 0;
       } else if (schema.type === 'boolean') {
         block[key] = false;
       } else {

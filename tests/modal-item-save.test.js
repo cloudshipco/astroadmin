@@ -185,5 +185,39 @@ await check('a file() entry that is one list of cards: a cleared number is gone 
   assert.deepEqual(saved, [{ label: 'Visitors' }, { label: 'B', value: 2 }]);
 });
 
+// A new block or card starts with nothing in an optional number (unless the
+// schema has a default): 0 is a value nobody chose, saved as if they had.
+const counted = toSchema(z.object({
+  type: z.literal('stat'),
+  label: z.string(),
+  count: z.number().optional(),
+  total: z.number(),
+  rank: z.number().default(3),
+}));
+await check('a new block: an optional number starts empty and is left out; a required one is 0; a default is kept', () => {
+  const schema = { type: 'object', properties: { blocks: { type: 'array', blockTypes: { stat: counted }, items: { anyOf: [counted] } } }, required: ['blocks'] };
+  const form = render(schema, { blocks: [] });
+  form.querySelector('.add-block-type').value = 'stat';
+  form.querySelector('.add-block-btn').click();
+  assert.equal(form.querySelector('[name="blocks[0].count"]').value, '', 'the optional number box is empty');
+  const saved = fg.extractFormData(form, schema);
+  assert.equal('count' in saved.blocks[0], false, `saved ${JSON.stringify(saved.blocks[0])}`);
+  assert.strictEqual(saved.blocks[0].total, 0);
+  assert.strictEqual(saved.blocks[0].rank, 3);
+});
+
+await check('a new card: an optional number starts empty and is left out', async () => {
+  const schema = toSchema(z.object({ title: z.string(), stats: z.array(z.object({ label: z.string(), count: z.number().optional(), total: z.number() })) }));
+  const form = render(schema, { title: 'T', stats: [] });
+  form.querySelector('[data-add-array-card]').click();
+  for (let i = 0; i < 100 && !document.querySelector('.array-item-edit-overlay'); i++) await new Promise((r) => setTimeout(r, 5));
+  const overlay = document.querySelector('.array-item-edit-overlay');
+  assert.equal(overlay.querySelector('[name="count"]').value, '', 'the optional number box is empty');
+  type(overlay, 'label', 'New');
+  done(overlay);
+  const saved = fg.extractFormData(form, schema);
+  assert.deepEqual(saved.stats, [{ label: 'New', total: 0 }]);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
