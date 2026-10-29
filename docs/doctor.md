@@ -232,7 +232,11 @@ with target `esnext`, so Vite's CSS minifier strips vendor prefixes such as
 
 It warns, for CmsImage and for `astroadmin/components/CmsVideo.astro`, when
 the Astro config sets `publicDir` to anything but `./public`, or to a value it
-cannot read statically: both components find `/images/...` files only in
+cannot read statically, or when it cannot read the config well enough to
+find `publicDir` at all (a syntax error, a function passed to
+`defineConfig`, a spread of another object). It reads a string, a template
+literal with no `${}`, and `new URL('./public', import.meta.url)`, bare or
+inside `fileURLToPath(...)`. Both components find `/images/...` files only in
 `public/images/`. See
 [The public folder](./optimised-images.md#the-public-folder).
 

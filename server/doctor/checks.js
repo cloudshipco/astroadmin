@@ -147,6 +147,7 @@ function removeDoctorOutDir(outDir) {
  */
 function describePublicDirProblem(projectRoot, publicDir, components) {
   const limitation = `${components} find /images/ files only in ./public/images (and the editor uploads there), so every local image or video would fail the build as missing. Keep the site's public files in ./public. See ${OPTIMISED_IMAGES_DOCS}#the-public-folder.`;
+  if (publicDir.state === 'unreadable') return `The doctor could not read the Astro config statically to find publicDir; check by hand that it is ./public: ${limitation}`;
   if (publicDir.state === 'unknown') return `Could not verify publicDir in the Astro config (not a plain string); check by hand that it is ./public: ${limitation}`;
   if (publicDir.state === 'literal' && path.resolve(projectRoot, publicDir.value) !== path.resolve(projectRoot, 'public')) {
     return `publicDir is set to '${publicDir.value}', but ${limitation}`;

@@ -12,6 +12,7 @@ import { spawn } from 'child_process';
 // the sync calls (small files, bounded walks).
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { bunExecutable } from '../utils/astro-bin.js';
 import { runGit } from '../utils/git-exec.js';
 
@@ -35,10 +36,13 @@ const SHARP_TIMEOUT_MS = 20_000;
  * @property {'disabled'|'enabled'|'unknown'} hmr - vite.server.hmr
  * @property {string|null} outDir
  * @property {'set'|'missing'|'unknown'} cssTarget - vite.build.cssTarget
- * @property {{state: 'unset'|'literal'|'unknown', value: string|null}} publicDir
- *   - 'unset' is Astro's default (./public); 'literal' carries the string it
- *   is set to; 'unknown' is a value the doctor cannot read statically (a URL,
- *   a call, a spread config)
+ * @property {{state: 'unset'|'literal'|'unknown'|'unreadable', value: string|null}} publicDir
+ *   - 'unset' is Astro's default (./public); 'literal' carries the path it is
+ *   set to (a string as written, or a URL relative to the config file as a
+ *   path relative to the root); 'unknown' is a publicDir whose value the
+ *   doctor cannot read statically (a call, an env variable); 'unreadable' is
+ *   a config in which the doctor cannot find publicDir at all (a syntax
+ *   error, a function passed to defineConfig, a spread that may set it)
  */
 
 // A value that is there but cannot be read statically (a later spread, a
@@ -204,7 +208,7 @@ export async function readAstroConfigFacts(projectRoot) {
     ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] });
   } catch (error) {
     facts.parseError = error.message;
-    return facts;
+    return { ...facts, publicDir: { state: 'unreadable', value: null } };
   }
 
   const localNames = new Set();
@@ -254,11 +258,72 @@ export async function readAstroConfigFacts(projectRoot) {
     const outDirValue = outDir === undefined || outDir === UNKNOWN ? null : resolve(outDir);
     if (outDirValue?.type === 'StringLiteral') facts.outDir = outDirValue.value;
     const publicDir = getProperty(configObject, 'publicDir', resolve);
-    const publicDirValue = publicDir === undefined || publicDir === UNKNOWN ? null : resolve(publicDir);
     if (publicDir === undefined) facts.publicDir = { state: 'unset', value: null };
-    else if (publicDirValue?.type === 'StringLiteral') facts.publicDir = { state: 'literal', value: publicDirValue.value };
+    else if (publicDir === UNKNOWN) facts.publicDir = { state: 'unreadable', value: null };
+    else {
+      const value = readPath(publicDir, resolve, urlHelperNames(ast), path.join(projectRoot, facts.file), projectRoot);
+      if (value !== null) facts.publicDir = { state: 'literal', value };
+    }
+  } else {
+    // The export is not an object literal the doctor can read (a function
+    // passed to defineConfig, a helper's result).
+    facts.publicDir = { state: 'unreadable', value: null };
   }
   return facts;
+}
+
+/** A string literal, or a template literal with no expressions: its text. */
+function staticString(node) {
+  if (node?.type === 'StringLiteral') return node.value;
+  if (node?.type === 'TemplateLiteral' && node.expressions.length === 0) return node.quasis[0].value.cooked;
+  return null;
+}
+
+/** The local names `fileURLToPath` is imported under from url / node:url. */
+function urlHelperNames(ast) {
+  const names = new Set();
+  for (const statement of ast.program.body) {
+    if (statement.type !== 'ImportDeclaration' || !['url', 'node:url'].includes(statement.source.value)) continue;
+    for (const specifier of statement.specifiers) {
+      const imported = specifier.type === 'ImportSpecifier' ? (specifier.imported.name ?? specifier.imported.value) : null;
+      if (imported === 'fileURLToPath') names.add(specifier.local.name);
+    }
+  }
+  return names;
+}
+
+/** Is the node `import.meta.url`? */
+function isImportMetaUrl(node) {
+  return node?.type === 'MemberExpression' && !node.computed
+    && node.object.type === 'MetaProperty' && node.object.meta.name === 'import' && node.object.property.name === 'meta'
+    && node.property.type === 'Identifier' && node.property.name === 'url';
+}
+
+/**
+ * A path-valued config option as a path relative to the project root, or null
+ * when it cannot be read statically. Reads a string (or expression-free
+ * template literal), and `new URL('<string>', import.meta.url)`, bare or
+ * inside `fileURLToPath(...)`, resolved against the config file as Node
+ * would. A plain string is returned as written (Astro resolves it against
+ * the root).
+ */
+function readPath(node, resolve, fileURLToPathNames, configFile, projectRoot) {
+  let value = resolve(node);
+  const text = staticString(value);
+  if (text !== null) return text;
+  if (value?.type === 'CallExpression' && value.callee.type === 'Identifier' && fileURLToPathNames.has(value.callee.name) && value.arguments.length === 1) {
+    value = resolve(value.arguments[0]);
+  }
+  if (value?.type !== 'NewExpression' || value.callee.type !== 'Identifier' || value.callee.name !== 'URL' || value.arguments.length !== 2) return null;
+  const relative = staticString(resolve(value.arguments[0]));
+  if (relative === null || !isImportMetaUrl(value.arguments[1])) return null;
+  try {
+    const url = new URL(relative, pathToFileURL(configFile));
+    if (url.protocol !== 'file:') return null;
+    return path.relative(projectRoot, fileURLToPath(url)) || '.';
+  } catch {
+    return null;
+  }
 }
 
 async function git(cwd, args) {

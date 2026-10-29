@@ -42,7 +42,8 @@ The site must keep Astro's default `publicDir`, `./public`. `CmsImage` and
 `/public/images/**` (a glob cannot take a value from the config), and the
 editor uploads into `public/images/`. With `publicDir: './static'` every local
 image or video fails the build as missing. `astroadmin doctor` warns when
-`publicDir` is set to anything else, or to a value it cannot read (a `URL`).
+`publicDir` is set to anything else, or to a value it cannot read without
+running the config (an environment variable, a helper's result).
 
 ### Astro 7 and vendor prefixes
 

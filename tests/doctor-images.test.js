@@ -232,9 +232,59 @@ await check('prerequisites MUTATION: CmsVideo alone with publicDir \'static\' wa
 });
 
 await check('prerequisites MUTATION: a publicDir the doctor cannot read statically warns to check by hand (#86)', async () => {
-  const result = await prereqResult(makePrereqSite({ config: configWithPublicDir("new URL('./static/', import.meta.url)") }));
+  const result = await prereqResult(makePrereqSite({ config: configWithPublicDir("process.env.PUBLIC_FOLDER") }));
   assert.equal(result.severity, 'warn', JSON.stringify(result));
-  assert.ok(result.message.includes('publicDir'), result.message);
+  assert.ok(result.message.includes('publicDir') && result.message.includes('not a plain string'), result.message);
+});
+
+// Values the doctor can read without running the config: a template literal
+// with no expressions, and a URL relative to the config file (Astro accepts
+// a URL, and fileURLToPath of one is the documented idiom).
+await check('prerequisites: publicDir as `./public`, a URL or fileURLToPath of one to ./public is the default and passes', async () => {
+  const urlConfig = (value) => configWithPublicDir(value).replace("import { defineConfig } from 'astro/config';", "import { defineConfig } from 'astro/config';\nimport { fileURLToPath } from 'node:url';");
+  assert.ok(urlConfig('x').includes("from 'node:url'"), 'the import was added');
+  for (const config of [
+    configWithPublicDir('`./public`'),
+    configWithPublicDir("new URL('./public/', import.meta.url)"),
+    urlConfig("fileURLToPath(new URL('./public', import.meta.url))"),
+    urlConfig('fileURLToPath(new URL(`public/`, import.meta.url))'),
+  ]) {
+    const result = await prereqResult(makePrereqSite({ config }));
+    assert.equal(result.severity, 'pass', `${config}\n${JSON.stringify(result)}`);
+  }
+});
+
+await check('prerequisites MUTATION: publicDir as `./static` or fileURLToPath(new URL(\'./static\', ...)) warns, naming the folder', async () => {
+  const urlConfig = configWithPublicDir("fileURLToPath(new URL('./static', import.meta.url))").replace("import { defineConfig } from 'astro/config';", "import { defineConfig } from 'astro/config';\nimport { fileURLToPath } from 'url';");
+  for (const config of [configWithPublicDir('`./static`'), urlConfig]) {
+    const result = await prereqResult(makePrereqSite({ config }));
+    assert.equal(result.severity, 'warn', `${config}\n${JSON.stringify(result)}`);
+    assert.match(result.message, /publicDir is set to '(\.\/)?static'/, result.message);
+  }
+});
+
+await check('prerequisites MUTATION: a template literal with an expression is not read as a string', async () => {
+  const result = await prereqResult(makePrereqSite({ config: `const folder = 'public';\n${configWithPublicDir('`./${folder}`')}` }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes('not a plain string'), result.message);
+});
+
+// A config the doctor cannot read at all is a different problem from a
+// publicDir it cannot read: the warning says which.
+await check('prerequisites MUTATION: a config the doctor cannot read statically says so, not "not a plain string"', async () => {
+  const configs = {
+    'a spread and no publicDir': CONFIG_WITH_CSS_TARGET.replace('integrations: [astroadmin()],', 'integrations: [astroadmin()],\n  ...sharedOptions,').replace("import { defineConfig } from 'astro/config';", "import { defineConfig } from 'astro/config';\nimport sharedOptions from './shared.mjs';"),
+    'an async defineConfig': "import { defineConfig } from 'astro/config';\nexport default defineConfig(async () => ({ integrations: [] }));\n",
+    'a syntax error': 'export default {{{\n',
+  };
+  assert.ok(configs['a spread and no publicDir'].includes('...sharedOptions'), 'the spread was added');
+  for (const [name, config] of Object.entries(configs)) {
+    const result = await prereqResult(makePrereqSite({ config }));
+    assert.equal(result.severity === 'warn' || result.severity === 'fail', true, `${name}: ${JSON.stringify(result)}`);
+    const text = [result.message, ...result.details].join(' ');
+    assert.ok(text.includes('could not read the Astro config statically to find publicDir'), `${name}: ${text}`);
+    assert.ok(!text.includes('not a plain string'), `${name}: ${text}`);
+  }
 });
 
 await check('prerequisites MUTATION: a custom publicDir and no cssTarget warn about both (#86)', async () => {
