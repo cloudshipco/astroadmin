@@ -78,15 +78,33 @@ export async function getRepoPrefix(git) {
 
 /**
  * Translate a repo-root-relative path (as reported by `git status`) to a
- * projectRoot-relative path by stripping the subdirectory prefix. Paths outside
- * the project subdirectory are returned unchanged (they get dropped by the
- * git-path scoping that follows).
+ * projectRoot-relative path by stripping the subdirectory prefix.
+ * @returns {string|null} null for a path OUTSIDE the project subdirectory. It
+ *   used to come back unchanged, so a repo-root `src/content/x.md` passed the
+ *   git-path filter as if it were the site's own (#68).
  */
 export function toProjectRelative(repoRelativePath, repoPrefix) {
-  if (repoPrefix && repoRelativePath.startsWith(repoPrefix)) {
-    return repoRelativePath.slice(repoPrefix.length);
+  if (typeof repoRelativePath !== 'string') return null;
+  if (!repoPrefix) return repoRelativePath;
+  return repoRelativePath.startsWith(repoPrefix)
+    ? repoRelativePath.slice(repoPrefix.length)
+    : null;
+}
+
+/**
+ * The editor's name for a repo-root-relative path: projectRoot-relative when
+ * it is inside the project AND within the configured git paths, else null.
+ * Every git response that names a file goes through this (or asks git for
+ * projectRoot-relative paths scoped by the same git paths), so nothing outside
+ * the site, or outside what Publish stages, reaches the editor.
+ * @returns {string|null}
+ */
+export function scopeRepoPath(repoRelativePath, repoPrefix, allowedGitPaths) {
+  const projectRelative = toProjectRelative(repoRelativePath, repoPrefix);
+  if (projectRelative === null || !isWithinAllowedGitPaths(projectRelative, allowedGitPaths)) {
+    return null;
   }
-  return repoRelativePath;
+  return projectRelative;
 }
 
 /**
@@ -110,9 +128,81 @@ export function isWithinAllowedGitPaths(projectRelativePath, allowedGitPaths) {
  * panel listing files outside the editor's remit.
  */
 export function scopeStatusFiles(files, repoPrefix, allowedGitPaths) {
-  return files
-    .map((file) => toProjectRelative(file, repoPrefix))
-    .filter((file) => isWithinAllowedGitPaths(file, allowedGitPaths));
+  return (files || [])
+    .map((file) => scopeRepoPath(file, repoPrefix, allowedGitPaths))
+    .filter((file) => file !== null);
+}
+
+/**
+ * Scope `git status` renames at BOTH ends. A rename within the site stays a
+ * rename; one from outside the site (or outside the git paths) into it is, to
+ * the editor, a new file, and one out of it a deleted file. Neither names the
+ * end that is not the site's.
+ * @param {Array<{from: string, to: string}>} renamed - repo-root-relative
+ * @returns {{renamed: Array<{from: string, to: string}>, created: string[], deleted: string[]}}
+ */
+export function scopeStatusRenames(renamed, repoPrefix, allowedGitPaths) {
+  const scoped = { renamed: [], created: [], deleted: [] };
+  for (const entry of renamed || []) {
+    const from = scopeRepoPath(entry.from, repoPrefix, allowedGitPaths);
+    const to = scopeRepoPath(entry.to, repoPrefix, allowedGitPaths);
+    if (from !== null && to !== null) scoped.renamed.push({ from, to });
+    else if (to !== null) scoped.created.push(to);
+    else if (from !== null) scoped.deleted.push(from);
+  }
+  return scoped;
+}
+
+/** The configured git paths as literal pathspecs (relative to projectRoot). */
+function allowedPathspecs(allowedGitPaths) {
+  return allowedGitPaths.filter(Boolean).map(literalPathspec);
+}
+
+/**
+ * The files that changed between two commits, as the editor may see them:
+ * projectRoot-relative and within the configured git paths, with line counts.
+ * Asked of git with `--relative` and the git-path pathspecs rather than parsed
+ * from a pull's diffstat, which names repo-root paths, writes a rename as
+ * `{other => site/...}/x.md` and shortens a long path to `.../x.md`.
+ * `--no-renames`: a rename across the site's edge is then an add or a delete
+ * of the site's own file, and one within it both.
+ * @returns {Promise<{files: string[], insertions: Record<string, number>, deletions: Record<string, number>, summary: {changes: number, insertions: number, deletions: number}}>}
+ */
+export async function scopedChangesBetween(git, fromCommit, toCommit, allowedGitPaths) {
+  const changes = {
+    files: [],
+    insertions: {},
+    deletions: {},
+    summary: { changes: 0, insertions: 0, deletions: 0 },
+  };
+  const pathspecs = allowedPathspecs(allowedGitPaths);
+  if (pathspecs.length === 0 || fromCommit === toCommit) return changes;
+
+  const output = await git.raw([
+    'diff', '--numstat', '-z', '--no-renames', '--relative', fromCommit, toCommit, '--', ...pathspecs,
+  ]);
+  for (const record of output.split('\0')) {
+    const match = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(record);
+    if (!match) continue;
+    const [, added, removed, file] = match;
+    // A binary file is `-\t-`: listed, with no line counts.
+    const addedLines = added === '-' ? 0 : Number(added);
+    const removedLines = removed === '-' ? 0 : Number(removed);
+    changes.files.push(file);
+    changes.insertions[file] = addedLines;
+    changes.deletions[file] = removedLines;
+    changes.summary.insertions += addedLines;
+    changes.summary.deletions += removedLines;
+  }
+  changes.summary.changes = changes.files.length;
+  return changes;
+}
+
+/** The commit HEAD names, or the empty tree on an unborn branch. */
+async function headOrEmptyTree(git) {
+  const head = (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
+  if (head) return head;
+  return (await git.raw(['hash-object', '-t', 'tree', '/dev/null'])).trim();
 }
 
 /** A file path or commit the request named that the git API refuses (400). */
@@ -282,14 +372,7 @@ router.get('/status', async (req, res) => {
     const repoPrefix = await getRepoPrefix(git);
     const allowedGitPaths = getAllowedGitPaths(fullConfig);
     const scope = (files) => scopeStatusFiles(files, repoPrefix, allowedGitPaths);
-    // renamed entries are { from, to } objects; scope on the destination path.
-    const scopeRenamed = (renamed) =>
-      (renamed || [])
-        .map((entry) => ({
-          from: toProjectRelative(entry.from, repoPrefix),
-          to: toProjectRelative(entry.to, repoPrefix),
-        }))
-        .filter((entry) => isWithinAllowedGitPaths(entry.to, allowedGitPaths));
+    const renames = scopeStatusRenames(status.renamed, repoPrefix, allowedGitPaths);
 
     res.json({
       success: true,
@@ -298,9 +381,9 @@ router.get('/status', async (req, res) => {
         // `created` = staged-new; `not_added` = untracked. The editor stages
         // only at Publish time, so newly-created entries live in not_added —
         // include them (Publish's `git add -A` will stage them too).
-        created: [...new Set([...scope(status.created), ...scope(status.not_added)])],
-        deleted: scope(status.deleted),
-        renamed: scopeRenamed(status.renamed),
+        created: [...new Set([...scope(status.created), ...scope(status.not_added), ...renames.created])],
+        deleted: [...new Set([...scope(status.deleted), ...renames.deleted])],
+        renamed: renames.renamed,
         staged: scope(status.staged),
         ahead: status.ahead,
         behind: status.behind,
@@ -391,7 +474,14 @@ router.get('/log', async (req, res) => {
     const fullConfig = await getConfig();
     const git = createGitClient(fullConfig);
 
-    const log = await git.log({ maxCount: limit });
+    // Only commits that touch the configured git paths: a commit to the rest
+    // of the repository (a sibling folder, the repo root) is not the editor's,
+    // and its message can name files outside the site.
+    const pathspecs = allowedPathspecs(getAllowedGitPaths(fullConfig));
+    if (pathspecs.length === 0) {
+      return res.json({ success: true, commits: [], total: 0 });
+    }
+    const log = await git.log([`--max-count=${limit}`, '--', ...pathspecs]);
 
     const commits = log.all.map(commit => ({
       hash: commit.hash,
@@ -428,16 +518,18 @@ router.post('/pull', async (req, res) => {
     // Under the git lock: a pull that moved HEAD during a publish's check would
     // make the pushed commit differ from the checked one.
     // And the checkout to itself: a save landing mid-merge could be overwritten.
-    const result = await withGitLock(() => withCheckoutExclusive(() => git.pull()));
+    // The files are read from git between the HEADs either side of the pull,
+    // never from the pull's own report, which names the whole repository.
+    const changes = await withGitLock(() => withCheckoutExclusive(async () => {
+      const before = await headOrEmptyTree(git);
+      await git.pull();
+      const after = await headOrEmptyTree(git);
+      return scopedChangesBetween(git, before, after, getAllowedGitPaths(fullConfig));
+    }));
 
     res.json({
       success: true,
-      result: {
-        files: result.files,
-        insertions: result.insertions,
-        deletions: result.deletions,
-        summary: result.summary,
-      },
+      result: changes,
       message: 'Pulled latest changes successfully',
     });
   } catch (error) {
@@ -480,21 +572,23 @@ router.get('/diff', async (req, res) => {
     // An empty list after `--` would mean the whole tree, so it is no diff.
     const pathspecs = validatedFile
       ? [literalPathspec(validatedFile)]
-      : getAllowedGitPaths(fullConfig).filter(Boolean).map(literalPathspec);
+      : allowedPathspecs(getAllowedGitPaths(fullConfig));
     if (pathspecs.length === 0) {
       return res.json({ success: true, diff: '' });
     }
+    // `--relative`: the diff's file headers name projectRoot-relative paths
+    // (`a/src/content/x.md`), not repo-root ones (`a/site/src/content/x.md`).
     let diffResult;
 
     if (validatedFrom && validatedTo) {
       // Diff between two commits
-      diffResult = await git.diff([validatedFrom, validatedTo, '--', ...pathspecs]);
+      diffResult = await git.diff(['--relative', validatedFrom, validatedTo, '--', ...pathspecs]);
     } else if (validatedFrom) {
       // Diff from a specific commit to working tree
-      diffResult = await git.diff([validatedFrom, '--', ...pathspecs]);
+      diffResult = await git.diff(['--relative', validatedFrom, '--', ...pathspecs]);
     } else {
       // Diff of uncommitted changes (staged + unstaged)
-      diffResult = await git.diff(['HEAD', '--', ...pathspecs]);
+      diffResult = await git.diff(['--relative', 'HEAD', '--', ...pathspecs]);
     }
 
     res.json({

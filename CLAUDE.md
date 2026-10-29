@@ -377,6 +377,18 @@ runner aggregating them). Most run server-less and need env vars:
   `./`, `.`, `src/..`) are dropped by `getAllowedGitPaths`, so they scope nothing, like `[]`:
   empty changes diff, package.json refused for diff and revert, absent from status; a real
   entry beside them still works.
+- `bun tests/git-subdir-routes.test.js` — a site in `site-a/` of its repository, with
+  siblings at the repo root (one, `src/content/pages/root-only.md`, has a site-relative
+  name inside the git paths) and in `other/` (#68), over HTTP through the real app: status,
+  diff (all, one file, since a commit, between commits), log, file-history, show, revert,
+  restore, pull, commit and publish name no sibling and no `site-a/` prefix, while the
+  site's own changes are listed site-relative. A rename into the site is `created`, one out
+  of it `deleted` (`scopeStatusRenames`); pull's files come from `git diff --numstat
+  --relative` between the HEADs either side of it (`scopedChangesBetween`), never from the
+  pull's diffstat (repo-root paths, `{other => site-a/...}` renames, `.../` truncation); the
+  log lists only commits touching the git paths. Every path in a git response goes through
+  `scopeRepoPath`, or asks git for projectRoot-relative paths under the same pathspecs.
+  6 of 9 checks red on the pre-fix code. ~3 s.
 - `bun tests/cross-origin.test.js` — every state-changing `/api` request (save, delete, upload,
   revert, commit, publish, login, logout) from another origin is a 403 that changes nothing on
   disk (`Sec-Fetch-Site: same-site`/`cross-site`, a foreign or `null` Origin, another port),

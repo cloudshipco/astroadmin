@@ -150,7 +150,10 @@ try {
 
   await check('helpers handle edge inputs', () => {
     assert.strictEqual(toProjectRelative('site/a.md', 'site/'), 'a.md');
-    assert.strictEqual(toProjectRelative('other/a.md', 'site/'), 'other/a.md');
+    // Outside the project subdirectory is no project path at all (#68).
+    assert.strictEqual(toProjectRelative('other/a.md', 'site/'), null);
+    assert.strictEqual(toProjectRelative('src/content/x.md', 'site/'), null);
+    assert.strictEqual(toProjectRelative('src/content/x.md', ''), 'src/content/x.md');
     assert.ok(isWithinAllowedGitPaths('src/content/x.md', allowedGitPaths));
     assert.ok(!isWithinAllowedGitPaths('src/contentX/x.md', allowedGitPaths)); // prefix, not dir
   });
