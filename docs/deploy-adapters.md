@@ -88,7 +88,9 @@ what would be copied.
 ## What Publish returns
 
 With an adapter, the `POST /api/publish` response includes the build and
-deploy results:
+deploy results. They are status fields only: the build's and rsync's output
+name server paths and the destination, so they go to the server log, never
+into the response.
 
 ```json
 {
@@ -96,10 +98,30 @@ deploy results:
   "committed": true,
   "pushed": true,
   "commit": { "hash": "abc123", "summary": { "changes": 1, "insertions": 5, "deletions": 2 } },
-  "build": { "success": true, "duration": 3500, "output": "..." },
-  "deploy": { "success": true, "adapter": "rsync", "output": "...", "dryRun": false, "local": false },
+  "build": { "success": true, "duration": 3500 },
+  "deploy": { "success": true, "adapter": "rsync", "dryRun": false },
   "message": "Published: committed and pushed, built and deployed"
 }
 ```
 
-A failed build or deploy returns `"success": false` with the step's output.
+A failed build returns `"success": false`, `"deploy": null` and a `build`
+with a fixed `error` and `problems`: the error codes the build's output
+names, each as a sentence AstroAdmin wrote (an unknown code reads "Astro
+refused the build (<code>); see the server log").
+
+```json
+{
+  "success": false,
+  "build": {
+    "success": false,
+    "duration": 2100,
+    "error": "The build command failed.",
+    "problems": [{ "code": "ImageNotFound", "message": "..." }]
+  },
+  "deploy": null,
+  "error": "Build failed - deployment skipped"
+}
+```
+
+A failed deploy returns `"success": false` with
+`"deploy": { "success": false, "error": "The deployment failed; see the server log." }`.

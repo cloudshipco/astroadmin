@@ -500,11 +500,14 @@ let
       proxyPass = "http://127.0.0.1:${toString inst.adminPort}";
       proxyWebsockets = true;     # admin live-reload / ws
     };
-    # Brute-force guard on the only credential-accepting endpoint. The app's
-    # own limiter gives each address 100 requests per 15 minutes for logins
-    # and everything not signed in (server/utils/rate-limit.js), so a
-    # login-specific ceiling belongs here. The zone is declared once in
-    # appendHttpConfig below. 429 (not the 503 default) so the client sees a
+    # Brute-force guard on the only credential-accepting endpoint, in front
+    # of the app's own (server/utils/rate-limit.js: 10 FAILED logins per
+    # address, an IPv6 address counted by its /56, per 15 minutes, within
+    # 100 requests per address for logins and everything not signed in).
+    # This one caps every login attempt, failed or not, before it reaches
+    # the app. The app counts the client's own address only because this
+    # nginx reaches it over loopback (127.0.0.1, its default TRUST_PROXY).
+    # The zone is declared once in appendHttpConfig below. 429 (not the 503 default) so the client sees a
     # retryable rate-limit, matching the app limiter's semantics.
     #
     # Regex, NOT `= /api/login`: an exact match is trivially bypassed because
