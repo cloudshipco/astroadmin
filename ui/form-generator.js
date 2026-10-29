@@ -346,6 +346,11 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   // container is unchanged, and on an edited entry a value STORED at its path
   // is kept (bindOriginalValues, `constants`).
   if (schema.const !== undefined) {
+    // A literal that is not a string (z.literal(5), z.literal(true)) rides as
+    // JSON, so it is read back with its own type: as text it saved "5".
+    if (typeof schema.const !== 'string') {
+      return `<input type="hidden" name="${fullPath}" id="${id}" value="${jsonAttr(schema.const)}" data-json="true" data-schema-const>`;
+    }
     return `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(String(schema.const))}" data-schema-const>`;
   }
 
@@ -1729,12 +1734,13 @@ function readFields(container) {
   const binding = boundContainers.get(container) || null;
 
   // Hidden fields carrying JSON
+  // (by path: a non-string const can sit in a block or an object)
   container.querySelectorAll('input[type="hidden"][data-json="true"]').forEach(input => {
     try {
-      data[input.name] = JSON.parse(input.value);
+      setNestedValue(data, input.name, JSON.parse(input.value));
     } catch (e) {
       console.error('Failed to parse JSON field:', input.name, e);
-      data[input.name] = input.value;
+      setNestedValue(data, input.name, input.value);
     }
   });
 

@@ -671,5 +671,45 @@ check('nullable boolean: false and true are kept apart from null', () => {
   equal(extractFormData(render(schema, { enabled: true }), schema), { enabled: true });
 });
 
+// A z.literal that is not a string is saved with its own JSON type: a hidden
+// input's value is text, so z.literal(5) saved "5" and z.literal(true)
+// saved "true", both refused by the schema.
+const typedLiteralNote = {
+  type: 'object',
+  properties: { type: { type: 'string', const: 'note' }, heading: { type: 'string' }, version: { type: 'number', const: 2 } },
+  required: ['type', 'heading', 'version'],
+};
+const typedLiteralSchema = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    version: { type: 'number', const: 5 },
+    live: { type: 'boolean', const: true },
+    nothing: { type: 'null', const: null },
+    optionalVersion: { type: 'number', const: 7 },
+    blocks: { type: 'array', blockTypes: { note: typedLiteralNote }, items: { anyOf: [typedLiteralNote] } },
+  },
+  required: ['title', 'version', 'live', 'nothing', 'blocks'],
+};
+
+check('a required non-string literal with nothing stored saves its own type (5, true, null), in a block too', () => {
+  const form = render(typedLiteralSchema, { title: 'T', blocks: [{ type: 'note', heading: 'H' }] });
+  form.querySelector('[name="title"]').value = 'After';
+  form.querySelector('[name="blocks[0].heading"]').value = 'H2';
+  equal(extractFormData(form, typedLiteralSchema), {
+    title: 'After', version: 5, live: true, nothing: null, blocks: [{ type: 'note', heading: 'H2', version: 2 }],
+  });
+});
+
+check('a non-string literal stored is kept as stored; an optional one with nothing stored is not written', () => {
+  const stored = { title: 'T', version: 5, live: true, nothing: null, optionalVersion: 7, blocks: [] };
+  const form = render(typedLiteralSchema, stored);
+  form.querySelector('[name="title"]').value = 'After';
+  equal(extractFormData(form, typedLiteralSchema), { ...stored, title: 'After' });
+  const bare = render(typedLiteralSchema, { title: 'T', version: 5, live: true, nothing: null, blocks: [] });
+  bare.querySelector('[name="title"]').value = 'After';
+  equal('optionalVersion' in extractFormData(bare, typedLiteralSchema), false, 'control: an optional literal is not added');
+});
+
 console.log(`\n${passed} checks passed, ${failures.length} failed, ${assertions} assertions run`);
 if (failures.length > 0) process.exit(1);
