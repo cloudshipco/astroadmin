@@ -2042,6 +2042,15 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 });
 
 /**
+ * The deploy a publish ran, or null: a deploy step with no adapter configured
+ * (`skipped`) ran nothing, so what reached the site is the push alone.
+ * @returns {?{success: boolean, dryRun?: boolean}}
+ */
+function ranDeploy(result) {
+  return result.deploy && !result.deploy.skipped ? result.deploy : null;
+}
+
+/**
  * Turn a publish API result that cannot be checked against the live page into
  * a friendly, non-technical message for CMS users, with the toast type that
  * matches what we know. The server's own message ("committed and pushed") is
@@ -2053,8 +2062,24 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
  * @returns {{text: string, type: 'success'|'warning'|'info'}}
  */
 function friendlyPublishMessage(result) {
+  const deploy = ranDeploy(result);
+  // A dry run (rsync's dryRun) only lists what it would upload.
+  if (deploy?.dryRun) {
+    return {
+      text: result.pushed
+        ? 'Your changes were sent to the repository. The deploy is a dry run: nothing was uploaded to the live site.'
+        : 'Dry run: nothing was uploaded, so the live site has not changed.',
+      type: 'info',
+    };
+  }
+  if (deploy && deploy.success !== true) {
+    return {
+      text: 'Your site was built, but the deploy did not finish, so your changes are not live. See the server log.',
+      type: 'error',
+    };
+  }
   // A deploy adapter uploads the built site directly, so it's live right away.
-  if (result.deploy) {
+  if (deploy) {
     return { text: '✅ Published! Your changes are now live on your site.', type: 'success' };
   }
   if (result.pushed) {
@@ -2209,14 +2234,15 @@ async function pollUntilLive(pagePath, preHash, status, liveUrl) {
  * is no publicUrl or no page for this entry, so nothing can be polled).
  */
 function showPublishOutcome(result, { pagePath, preHash, liveUrl }) {
-  // Only a push or a deploy reaches the live site; a local commit does not.
-  const didPublish = result.pushed || result.deploy;
+  // Only a push or a deploy that uploaded reaches the live site; a local
+  // commit, a dry run or a failed deploy does not.
+  const deploy = ranDeploy(result);
 
-  if (didPublish && result.deploy) {
+  if (deploy && deploy.success === true && !deploy.dryRun) {
     // Synchronous deploy adapter — already live.
     showPublishStatus('').update('✅ Published! Your changes are now live on your site.',
       { type: 'success', link: liveUrl, autoDismissMs: 8000 });
-  } else if (didPublish && preHash) {
+  } else if (!deploy && result.pushed && preHash) {
     // Build-on-push host — poll until the change appears on the live site.
     const status = showPublishStatus('✅ Published! Waiting for your changes to go live…');
     pollUntilLive(pagePath, preHash, status, liveUrl);

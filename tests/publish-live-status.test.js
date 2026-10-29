@@ -11,6 +11,9 @@
  * The same holds when there is nothing to poll (no publicUrl, or no page for
  * this entry): a push is sent but unverified, a warning, never "✅ Published!
  * ... in a minute or two" (showPublishOutcome / friendlyPublishMessage).
+ * A deploy adapter's result is live only when it uploaded: a dry run is
+ * "nothing was uploaded" (info), a deploy reporting failure is an error, and
+ * a skipped deploy (no adapter) leaves the push to be judged on its own.
  *
  * The real functions are extracted from ui/dashboard.js (it boots on import)
  * and run in a happy-dom document with fetch stubbed and a fake clock.
@@ -157,7 +160,7 @@ async function runOutcome(result, { preHash = null, liveUrl = null } = {}) {
     Date,
   };
   const outcomeSource = ['showNotification', 'showPublishStatus', 'fetchLiveHash', 'pollUntilLive',
-    'friendlyPublishMessage', 'showPublishOutcome'].map(extractFunction).join('\n\n');
+    'ranDeploy', 'friendlyPublishMessage', 'showPublishOutcome'].map(extractFunction).join('\n\n');
   const api = new Function(...Object.keys(stubs), `${outcomeSource}\nreturn { showPublishOutcome };`)(...Object.values(stubs));
   api.showPublishOutcome(result, { pagePath: preHash ? '/about' : null, preHash, liveUrl });
   const toasts = document.querySelectorAll('.notification');
@@ -197,6 +200,30 @@ for (const [label, liveUrl] of [['no publicUrl', null], ['a publicUrl but no pag
     assert.ok(result.dismissAfterMs >= 15000, `long enough to read (${result.dismissAfterMs} ms)`);
   });
 }
+
+await check('a dry-run deploy says nothing was uploaded, never live', async () => {
+  for (const pushed of [false, true]) {
+    const result = await runOutcome({ success: true, committed: true, pushed, deploy: { success: true, adapter: 'rsync', dryRun: true } });
+    assert.doesNotMatch(result.text, /✅|now live/i, `pushed=${pushed}: ${result.text}`);
+    assert.match(result.text, /dry run/i, result.text);
+    assert.match(result.text, /nothing was uploaded/i, result.text);
+    assert.equal(result.type, 'notification-info', result.type);
+  }
+});
+
+await check('a deploy that reports failure is an error, never live', async () => {
+  const result = await runOutcome({ success: true, committed: true, pushed: false, deploy: { success: false, adapter: 'rsync' } });
+  assert.doesNotMatch(result.text, /✅|now live/i, result.text);
+  assert.match(result.text, /deploy/i, result.text);
+  assert.match(result.text, /not live|did not|failed/i, result.text);
+  assert.equal(result.type, 'notification-error', result.type);
+});
+
+await check('a skipped deploy (no adapter) is not a deploy: a push is still unverified', async () => {
+  const result = await runOutcome({ success: true, committed: true, pushed: true, deploy: { success: true, skipped: true } });
+  assert.doesNotMatch(result.text, /✅|now live/i, result.text);
+  assert.equal(result.type, 'notification-warning', result.type);
+});
 
 await check('a commit with nowhere to push is not shown as a success', async () => {
   const result = await runOutcome({ success: true, committed: true, pushed: false, deploy: null });
