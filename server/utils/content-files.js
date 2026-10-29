@@ -498,6 +498,55 @@ export async function listSlugs(collection) {
   return slugs;
 }
 
+/**
+ * Every entry of a collection with its data, in listSlugs order: `{slug,
+ * data}`, or `{slug, error}` for one readContent would refuse. A file()
+ * collection's file is read and parsed ONCE (reading each slug through
+ * readContent parsed the whole file per entry); a glob() collection reads
+ * each entry's file once. The results match listSlugs + readContent: an item
+ * with no id is listed by its index and has no data, and a repeated id gives
+ * the first item with that id.
+ * @returns {Promise<Array<{slug: string, data?: Object, error?: Error}>>}
+ */
+export async function listEntries(collection) {
+  sanitizePath(collection);
+  const info = await getCollectionLoaderInfo(collection);
+
+  if (!info.isFile) {
+    const slugs = await listSlugs(collection);
+    return Promise.all(slugs.map(async (slug) => {
+      try {
+        return { slug, data: (await readContent(collection, slug)).data };
+      } catch (error) {
+        return { slug, error };
+      }
+    }));
+  }
+
+  let arr;
+  try {
+    arr = await readFileCollectionArray(info.filePath, { missingOk: true });
+  } catch {
+    return []; // as listSlugs
+  }
+  const firstById = new Map();
+  for (const item of arr) {
+    const id = fileEntryId(item);
+    if (id !== undefined && !firstById.has(id)) firstById.set(id, item);
+  }
+  return arr.map((item, index) => {
+    const slug = fileEntryId(item) ?? String(index);
+    try {
+      sanitizePath(slug); // as readContent
+    } catch (error) {
+      return { slug, error };
+    }
+    return firstById.has(slug)
+      ? { slug, data: firstById.get(slug) }
+      : { slug, error: new Error(`Content not found: ${slug}`) };
+  });
+}
+
 /** Collection names that currently have at least one entry on disk. */
 export async function distinctCollections() {
   const schemas = await loadSchemas();

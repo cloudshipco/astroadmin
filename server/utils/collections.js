@@ -11,9 +11,9 @@ import { config } from '../config.js';
 import { parseAstroSchemas } from './schema-parser.js';
 import {
   listSlugs,
+  listEntries,
   distinctCollections,
   getCollectionType as getCollectionTypeFromStore,
-  readContent,
   getAvailableLocales,
 } from './content.js';
 import { isContentPathError } from './glob-files.js';
@@ -174,6 +174,22 @@ export async function getCollectionEntries(collectionName) {
 }
 
 /**
+ * Every entry with its data (`{slug, data}`, or `{slug, error}` for one that
+ * cannot be read), listed and read in one pass: a file() collection's file is
+ * read once, not once per entry. Errors as getCollectionEntries.
+ * @param {string} collectionName
+ */
+async function getCollectionEntriesWithData(collectionName) {
+  try {
+    return await listEntries(collectionName);
+  } catch (error) {
+    if (isContentPathError(error)) throw error;
+    console.error(`Error reading collection ${collectionName}:`, error);
+    return [];
+  }
+}
+
+/**
  * Get entries with their available locales (for i18n sites)
  * @param {string} collectionName - Collection name
  * @param {string[]} locales - Configured locales
@@ -318,27 +334,19 @@ function humaniseSlug(slug) {
  * entry has no title-like field, and to the raw slug if the file can't be read.
  *
  * @param {string} collectionName
- * @param {string[]} [slugs] - Pre-fetched slugs; omit to list them here. Passing
- *   them in avoids a second listing pass when the caller already has them.
  * @returns {Promise<Record<string, string>>}
  */
-export async function getCollectionEntryTitles(collectionName, slugs) {
-  if (!slugs) slugs = await getCollectionEntries(collectionName);
+export async function getCollectionEntryTitles(collectionName) {
+  return entryTitlesOf(await getCollectionEntriesWithData(collectionName));
+}
 
-  const pairs = await Promise.all(
-    slugs.map(async (slug) => {
-      try {
-        const content = await readContent(collectionName, slug);
-        const data = content.data || {};
-        const title = data.title || data.name || data.heading || humaniseSlug(slug);
-        return [slug, title];
-      } catch {
-        return [slug, slug];
-      }
-    })
-  );
-
-  return Object.fromEntries(pairs);
+/** The titles of entries listed with their data (getCollectionEntriesWithData). */
+function entryTitlesOf(listed) {
+  return Object.fromEntries(listed.map(({ slug, data, error }) => {
+    if (error) return [slug, slug];
+    const fields = data || {};
+    return [slug, fields.title || fields.name || fields.heading || humaniseSlug(slug)];
+  }));
 }
 
 /**
@@ -360,9 +368,10 @@ export async function getAllCollections() {
 
   const collections = await Promise.all(
     collectionNames.map(async (name) => {
-      const entries = await getCollectionEntries(name);
-      // Reuse the slugs we just listed instead of listing them again.
-      const entryTitles = await getCollectionEntryTitles(name, entries);
+      // One pass lists the entries and reads their titles.
+      const listed = await getCollectionEntriesWithData(name);
+      const entries = listed.map(({ slug }) => slug);
+      const entryTitles = entryTitlesOf(listed);
       const schemaInfo = schemas[name] || {};
 
       return {
@@ -405,44 +414,32 @@ export async function hasBlockEditor(collectionName) {
  * Returns entries with slug, title, and preview text
  */
 export async function getCollectionEntriesWithPreview(collectionName) {
-  const slugs = await getCollectionEntries(collectionName);
+  const listed = await getCollectionEntriesWithData(collectionName);
 
-  const entries = await Promise.all(
-    slugs.map(async (slug) => {
-      try {
-        const content = await readContent(collectionName, slug);
-        const data = content.data || {};
+  return listed.map(({ slug, data: storedData, error }) => {
+    // If we can't read the entry, just return basic info
+    if (error) return { slug, title: slug, preview: '' };
+    const data = storedData || {};
 
-        // Try to extract a title from common field names
-        const title = data.title || data.name || data.heading || slug;
+    // Try to extract a title from common field names
+    const title = data.title || data.name || data.heading || slug;
 
-        // Try to extract preview text from common field names
-        const previewFields = ['quote', 'description', 'content', 'excerpt', 'summary', 'subheading'];
-        let preview = '';
-        for (const field of previewFields) {
-          if (data[field] && typeof data[field] === 'string') {
-            preview = data[field].substring(0, 100);
-            if (data[field].length > 100) preview += '...';
-            break;
-          }
-        }
-
-        return {
-          slug,
-          title,
-          preview,
-          data, // Include all frontmatter for richer display
-        };
-      } catch (error) {
-        // If we can't read the file, just return basic info
-        return {
-          slug,
-          title: slug,
-          preview: '',
-        };
+    // Try to extract preview text from common field names
+    const previewFields = ['quote', 'description', 'content', 'excerpt', 'summary', 'subheading'];
+    let preview = '';
+    for (const field of previewFields) {
+      if (data[field] && typeof data[field] === 'string') {
+        preview = data[field].substring(0, 100);
+        if (data[field].length > 100) preview += '...';
+        break;
       }
-    })
-  );
+    }
 
-  return entries;
+    return {
+      slug,
+      title,
+      preview,
+      data, // Include all frontmatter for richer display
+    };
+  });
 }

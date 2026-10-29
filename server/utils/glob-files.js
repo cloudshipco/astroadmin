@@ -12,6 +12,8 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import picomatch from 'picomatch';
+import { glob as tinyglobby } from 'tinyglobby';
 import { config } from '../config.js';
 
 export const CONTENT_EXTENSIONS = ['.md', '.mdx', '.json'];
@@ -215,102 +217,94 @@ export function getGlobPatterns(schema) {
   return [DEFAULT_GLOB_PATTERN];
 }
 
-function normalizeGlobPattern(pattern) {
-  return pattern.replace(/\\/g, '/').replace(/^\.\//, '');
+/** Astro's split of a pattern list: `!`-prefixed entries are ignores. */
+function splitPatterns(patterns) {
+  const list = Array.isArray(patterns) ? patterns : [patterns];
+  return {
+    positive: list.filter((pattern) => !pattern.startsWith('!')),
+    negative: list.filter((pattern) => pattern.startsWith('!')).map((pattern) => pattern.slice(1)),
+  };
 }
 
-export function globPatternToRegExp(pattern) {
-  const normalizedPattern = normalizeGlobPattern(pattern);
-  let regexSource = '^';
+// tinyglobby's picomatch options with Astro's call (dot files off, case
+// sensitive, braces/extglobs/globstars on, POSIX classes: `[!_]` negates).
+const PICOMATCH_OPTIONS = { dot: false, posix: true };
 
-  for (let index = 0; index < normalizedPattern.length; index++) {
-    const char = normalizedPattern[index];
-
-    if (char === '*') {
-      const isGlobStar = normalizedPattern[index + 1] === '*';
-      if (isGlobStar) {
-        const hasFollowingSlash = normalizedPattern[index + 2] === '/';
-        if (hasFollowingSlash) {
-          regexSource += '(?:.*/)?';
-          index += 2;
-        } else {
-          regexSource += '.*';
-          index += 1;
-        }
-      } else {
-        regexSource += '[^/]*';
-      }
-      continue;
-    }
-
-    if (char === '?') {
-      regexSource += '[^/]';
-      continue;
-    }
-
-    if (char === '{') {
-      const closingIndex = normalizedPattern.indexOf('}', index + 1);
-      if (closingIndex !== -1) {
-        const alternatives = normalizedPattern
-          .slice(index + 1, closingIndex)
-          .split(',')
-          .map((alternative) => escapeRegExp(alternative));
-        regexSource += `(?:${alternatives.join('|')})`;
-        index = closingIndex;
-        continue;
-      }
-    }
-
-    regexSource += escapeRegExp(char);
-  }
-
-  return new RegExp(`${regexSource}$`);
-}
-
-export function matchesAnyPattern(relativeFilePath, patterns) {
-  return patterns
-    .map(globPatternToRegExp)
-    .some((patternRegex) => patternRegex.test(relativeFilePath));
+/** tinyglobby's normalisation of a relative pattern (no trailing slash, `./` gone). */
+function normalizePattern(pattern) {
+  const trimmed = pattern.endsWith('/') ? pattern.slice(0, -1) : pattern;
+  return path.posix.normalize(trimmed);
 }
 
 /**
- * Recursively find files under `baseDirectory` matching any of `patterns`,
- * restricted to content extensions. Returns POSIX-relative paths, sorted.
+ * A matcher deciding what tinyglobby decides for one collection-relative
+ * POSIX path: a positive pattern matches it, no negation matches it, and no
+ * negation matches any directory above it (tinyglobby does not descend into
+ * an ignored directory, so `!**` + `/_*` also drops `_drafts/x.md`).
+ */
+function compileMatcher(patterns) {
+  const { positive, negative } = splitPatterns(patterns);
+  const isPositive = picomatch(positive.map(normalizePattern), PICOMATCH_OPTIONS);
+  const isIgnored = negative.length > 0
+    ? picomatch(negative.map(normalizePattern), PICOMATCH_OPTIONS)
+    : () => false;
+  return (relativeFilePath) => {
+    if (relativeFilePath.startsWith('../') || !isPositive(relativeFilePath) || isIgnored(relativeFilePath)) {
+      return false;
+    }
+    const segments = relativeFilePath.split('/');
+    for (let depth = 1; depth < segments.length; depth++) {
+      if (isIgnored(segments.slice(0, depth).join('/'))) return false;
+    }
+    return true;
+  };
+}
+
+/**
+ * Whether a collection-relative POSIX path is one of the collection's files,
+ * as Astro's glob loader lists them (tinyglobby): negations apply, and
+ * dotfiles and dot-directories match only when a pattern names them. For
+ * paths that are not on disk (a commit's file list); on disk, use
+ * findMatchingFiles.
+ */
+export function matchesAnyPattern(relativeFilePath, patterns) {
+  return compileMatcher(patterns)(relativeFilePath);
+}
+
+/**
+ * The files under `baseDirectory` that Astro's glob loader loads for
+ * `patterns`, listed the way it lists them (tinyglobby, `cwd` the base,
+ * `expandDirectories: false`), restricted to content extensions. Returns
+ * POSIX-relative paths, sorted.
+ *
+ * One difference, on purpose: a file whose real path is outside the base (a
+ * symlink out, or a pattern climbing with `../`) is left out. Astro follows
+ * it; the store refuses to read or write through it (assertContainedPath).
  */
 export async function findMatchingFiles(baseDirectory, patterns) {
-  // Compile once per call, not per file visited.
-  const patternRegexes = patterns.map(globPatternToRegExp);
-  const files = [];
-
-  async function walk(directory) {
-    let dirents;
-    try {
-      dirents = await fs.readdir(directory, { withFileTypes: true });
-    } catch {
-      if (directory === baseDirectory) return;
-      throw new Error(`Could not read directory: ${directory}`);
-    }
-
-    for (const dirent of dirents) {
-      const fullPath = path.join(directory, dirent.name);
-      if (dirent.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-
-      if (!dirent.isFile()) continue;
-
-      const relativePath = toPosixPath(path.relative(baseDirectory, fullPath));
-      const extension = path.extname(relativePath).toLowerCase();
-      if (!CONTENT_EXTENSIONS.includes(extension)) continue;
-      if (!patternRegexes.some((patternRegex) => patternRegex.test(relativePath))) continue;
-
-      files.push(relativePath);
-    }
+  const resolvedBase = path.resolve(baseDirectory);
+  let realBase;
+  try {
+    realBase = await fs.realpath(resolvedBase);
+  } catch {
+    return [];
   }
-
-  await walk(baseDirectory);
-  return files.sort();
+  const listed = await tinyglobby(patterns, { cwd: resolvedBase, expandDirectories: false });
+  const files = new Set();
+  for (const listedPath of listed) {
+    if (!CONTENT_EXTENSIONS.includes(path.extname(listedPath).toLowerCase())) continue;
+    const fullPath = path.resolve(resolvedBase, listedPath);
+    if (!isStrictlyInside(resolvedBase, fullPath)) continue;
+    let realFile;
+    try {
+      realFile = await fs.realpath(fullPath);
+    } catch {
+      continue; // a dangling link
+    }
+    if (!isStrictlyInside(realBase, realFile)) continue;
+    files.add(toPosixPath(path.relative(resolvedBase, fullPath)));
+  }
+  return [...files].sort();
 }
 
 /**

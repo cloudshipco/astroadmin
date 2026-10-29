@@ -57,6 +57,23 @@ export async function getAvailableLocales(...args) {
 export async function listSlugs(...args) {
   return (await store()).listSlugs(...args);
 }
+/**
+ * Every entry with its data (`{slug, data}` or `{slug, error}`), in listSlugs
+ * order. The files store reads a file() collection once; a store without its
+ * own listEntries reads each slug through readContent.
+ */
+export async function listEntries(collection) {
+  const active = await store();
+  if (typeof active.listEntries === 'function') return active.listEntries(collection);
+  const slugs = await active.listSlugs(collection);
+  return Promise.all(slugs.map(async (slug) => {
+    try {
+      return { slug, data: (await active.readContent(collection, slug)).data };
+    } catch (error) {
+      return { slug, error };
+    }
+  }));
+}
 export async function distinctCollections(...args) {
   return (await store()).distinctCollections(...args);
 }

@@ -14,6 +14,7 @@ export {
   contentExists,
   getAvailableLocales,
   listSlugs,
+  listEntries,
   distinctCollections,
   getCollectionType,
 } from './content-store.js';

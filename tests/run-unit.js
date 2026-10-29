@@ -31,7 +31,7 @@ const FAST_TESTS = [
   'schema-markers', 'date-marker', 'stand-in-marks', 'schema-references',
   'schema-refinements', 'route-detection', 'content-validation',
   'content-problems', 'block-reveal', 'changes-panel-renames', 'entry-urls',
-  'content-traversal', 'live-url', 'live-status', 'preview-live-link',
+  'content-traversal', 'glob-files', 'file-collection-listing', 'live-url', 'live-status', 'preview-live-link',
   'preview-click', 'preview-cache-bust', 'preview-routes',
   'markdown-transforms', 'markdown-body-not-named', 'focus-editor-field',
   'api-response', 'login-log', 'rate-limit', 'cross-origin', 'auth',
