@@ -6,6 +6,11 @@
 > preserved behind `config.content.store = 'db'` for a future hosted/SaaS
 > phase; `astroadmin export` migrates a db-mode site back to files. Kept for
 > historical context.
+>
+> **Historical:** the references below to tests, git commands, fixtures and
+> config keys (`tests/api.test.js`, `git pull --rebase`, the Playwright e2e
+> fixture, `build.staging`) are to code that has since changed or no longer
+> exists; they describe the plan as written, not AstroAdmin today.
 
 ## Context
 
