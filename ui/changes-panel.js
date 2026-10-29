@@ -136,10 +136,7 @@ async function loadStatus() {
       renderChanges(changesList, statusData.status);
 
       // Enable commit button if there are changes
-      const hasChanges = statusData.status.modified.length > 0 ||
-                        statusData.status.created.length > 0 ||
-                        statusData.status.deleted.length > 0;
-      commitBtn.disabled = !hasChanges;
+      commitBtn.disabled = countChanges(statusData.status) === 0;
     }
 
     if (logData.success) {
@@ -155,10 +152,29 @@ async function loadStatus() {
  * Render the changes list
  */
 function renderChanges(container, status) {
+  const fileChange = (file, type) => ({
+    type,
+    title: file,
+    label: formatFilePath(file),
+    diffFile: type === 'deleted' ? null : file,
+    revertFile: file,
+  });
+  // A rename (git reports one only when it is staged) offers no diff or
+  // revert: the server refuses to revert the new name (it is not in HEAD),
+  // reverting the old name restores it BESIDE the new one, and a diff of the
+  // new name shows the whole file as added.
+  const renameChange = ({ from, to }) => ({
+    type: 'renamed',
+    title: `${from} → ${to}`,
+    label: `${formatFilePath(from)} → ${formatFilePath(to)}`,
+    diffFile: null,
+    revertFile: null,
+  });
   const allChanges = [
-    ...status.modified.map(f => ({ file: f, type: 'modified' })),
-    ...status.created.map(f => ({ file: f, type: 'added' })),
-    ...status.deleted.map(f => ({ file: f, type: 'deleted' })),
+    ...status.modified.map(f => fileChange(f, 'modified')),
+    ...status.created.map(f => fileChange(f, 'added')),
+    ...status.deleted.map(f => fileChange(f, 'deleted')),
+    ...(status.renamed || []).map(renameChange),
   ];
 
   if (allChanges.length === 0) {
@@ -169,13 +185,21 @@ function renderChanges(container, status) {
   container.innerHTML = allChanges.map(change => `
     <div class="change-item">
       <span class="change-type change-type-${change.type}">${change.type[0].toUpperCase()}</span>
-      <span class="change-file" title="${escapeHtml(change.file)}">${escapeHtml(formatFilePath(change.file))}</span>
+      <span class="change-file" title="${escapeHtml(change.title)}">${escapeHtml(change.label)}</span>
       <div class="change-actions">
-        ${change.type !== 'deleted' ? `<button type="button" class="btn-icon" data-view-diff="${escapeHtml(change.file)}" title="View changes">👁</button>` : ''}
-        <button type="button" class="btn-icon btn-icon-danger" data-revert-file="${escapeHtml(change.file)}" title="Revert changes">↩</button>
+        ${change.diffFile !== null ? `<button type="button" class="btn-icon" data-view-diff="${escapeHtml(change.diffFile)}" title="View changes">👁</button>` : ''}
+        ${change.revertFile !== null ? `<button type="button" class="btn-icon btn-icon-danger" data-revert-file="${escapeHtml(change.revertFile)}" title="Revert changes">↩</button>` : ''}
       </div>
     </div>
   `).join('');
+}
+
+/** Every uncommitted change in a status response, renames included. */
+function countChanges(status) {
+  return status.modified.length +
+         status.created.length +
+         status.deleted.length +
+         (status.renamed || []).length;
 }
 
 /**
@@ -442,10 +466,12 @@ function generateDefaultMessage() {
   const modified = currentStatus.modified.length;
   const created = currentStatus.created.length;
   const deleted = currentStatus.deleted.length;
+  const renamed = (currentStatus.renamed || []).length;
 
   if (created > 0) parts.push(`Added ${created} file${created > 1 ? 's' : ''}`);
   if (modified > 0) parts.push(`Updated ${modified} file${modified > 1 ? 's' : ''}`);
   if (deleted > 0) parts.push(`Removed ${deleted} file${deleted > 1 ? 's' : ''}`);
+  if (renamed > 0) parts.push(`Renamed ${renamed} file${renamed > 1 ? 's' : ''}`);
 
   return parts.length > 0 ? parts.join(', ') : 'Content updates';
 }
@@ -540,9 +566,7 @@ export async function getChangesCount() {
     const data = await readJson(res);
 
     if (data.success) {
-      return data.status.modified.length +
-             data.status.created.length +
-             data.status.deleted.length;
+      return countChanges(data.status);
     }
   } catch (error) {
     console.error('Error getting changes count:', error);

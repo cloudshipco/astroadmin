@@ -366,6 +366,12 @@ runner aggregating them). Most run server-less and need env vars:
   in a body is decoded to `<` and `</textarea>` truncates it on the next save. Pinned by behaviour: the real
   `renderEditor` (extracted, loaders stubbed) must leave `textarea.value` byte-identical to a body
   holding `&lt;b&gt;`, `&amp;`, `</textarea>` and `<script>`.
+- `bun tests/changes-panel-renames.test.js` — a staged rename (`status.renamed`, git reports
+  one only when staged) is a Changes panel row (`old → new`, escaped), enables Commit, is
+  counted by `getChangesCount` and named in the default commit message. A renamed row has no
+  diff or revert button: the server refuses to revert the new name, reverting the old one
+  leaves a copy beside the new, and a diff of the new name shows the whole file as added.
+  The real panel in happy-dom.
 - `bun tests/image-symlink.test.js` — the image() picker never reads or writes through a
   symlink out of the project: a public or src/assets image that links outside, a public
   image folder that is a link out, and a src/content/assets destination that is a link out
