@@ -89,7 +89,10 @@ Three invariants that are easy to break and fail silently:
    It also means registering it with `ui/modal-stack.js` (`pushModal` on open, `removeModal`
    on every close): ONE document listener sends Escape to the topmost open modal only. A
    modal with its own document Escape listener closes along with whatever sits above it,
-   and a closed gallery or item editor discards its unsaved edits (#35).
+   and a closed gallery or item editor discards its unsaved edits (#35). The stack also
+   locks page scroll while any modal on it is open (restoring the body's previous overflow
+   when the last one closes), so a modal never writes `document.body.style.overflow`
+   itself: closing the image library used to unlock the page under its gallery.
 
 When changing overlay/stacking behaviour, verify with `document.elementFromPoint()` — asserting
 the element exists proves nothing, since the bug is precisely that a present element is covered.
@@ -301,6 +304,11 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   it), over an item editor with focus still on Browse, nested item editors, the expanded
   textarea over an item editor; and Escape with one modal open still closes it. Seen red
   (5 of 8) on the per-modal listeners.
+- `bun tests/modal-scroll-lock.test.js` — page scroll is locked while any modal on the stack
+  is open: closing the library over a gallery (button or Escape) or the library and expanded
+  textarea over an item editor leaves it locked, closing the last unlocks it, the body's
+  earlier overflow is restored, and a modal removed without `removeModal` holds no lock.
+  Seen red (4 of 6) with each modal writing overflow itself.
 - `bun tests/gallery-structural.test.js` — a gallery add/remove/reorder made in its modal marks
   the field (`data-structural-edit`), so adding an image and removing it leaves an optional
   `.min(1)` gallery unset instead of restoring a stored `[]`; an unchanged save keeps it. Real

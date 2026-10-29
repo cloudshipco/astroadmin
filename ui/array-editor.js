@@ -59,7 +59,6 @@ export function openArrayEditor(fieldName, items, schema, onSave) {
   modal.querySelector('[data-title]').textContent = `Edit ${fieldName}`;
 
   modal.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
   pushModal(modal, closeArrayEditor);
 
   renderItems();
@@ -72,7 +71,6 @@ export function closeArrayEditor() {
   const modal = document.getElementById('arrayEditorModal');
   if (modal) {
     modal.classList.add('hidden');
-    document.body.style.overflow = '';
     removeModal(modal);
   }
   currentCallback = null;

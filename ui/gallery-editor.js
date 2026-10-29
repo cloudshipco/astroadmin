@@ -39,7 +39,6 @@ export async function openGalleryEditor(images, onSave) {
 
   // Show modal
   modal.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
   pushModal(modal, closeGalleryEditor);
 
   // Load image metadata for alt text lookup
@@ -56,7 +55,6 @@ export function closeGalleryEditor() {
   const modal = document.getElementById('galleryEditorModal');
   if (modal) {
     modal.classList.add('hidden');
-    document.body.style.overflow = '';
     removeModal(modal);
   }
   currentCallback = null;

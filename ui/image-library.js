@@ -94,7 +94,6 @@ export async function openImageLibrary(onSelect, currentValue = '', { astroImage
 
   // Show modal
   modal.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
   pushModal(modal, closeImageLibrary);
 
   // Load images
@@ -111,7 +110,6 @@ export function closeImageLibrary() {
   const modal = document.getElementById('imageLibraryModal');
   if (modal) {
     modal.classList.add('hidden');
-    document.body.style.overflow = '';
     removeModal(modal);
   }
   currentCallback = null;

@@ -38,7 +38,6 @@ export async function openReferencePicker(collectionName, onSelect, excludeIds =
 
   // Show modal
   modal.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
   pushModal(modal, closeReferencePicker);
 
   // Load entries
@@ -52,7 +51,6 @@ export function closeReferencePicker() {
   const modal = document.getElementById('referencePickerModal');
   if (modal) {
     modal.classList.add('hidden');
-    document.body.style.overflow = '';
     removeModal(modal);
   }
   currentCallback = null;
