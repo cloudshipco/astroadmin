@@ -143,6 +143,36 @@ try {
       });
     }
   }
+
+  // The default git paths name folders a site may not have (src/styles/):
+  // a path that does not exist is skipped quietly, while one whose tracked
+  // files were all deleted is still staged (the deletion is committed).
+  await check('a configured path that does not exist is skipped without a note; a deleted one is committed', async () => {
+    writeFile(projectRoot, 'src/retired/old.md', page('Old'));
+    git(repoRoot, 'add', 'site-a/src/retired/old.md');
+    git(repoRoot, 'commit', '-qm', 'a folder to retire');
+    fs.rmSync(path.join(projectRoot, 'src/retired'), { recursive: true });
+    globalThis.__testGitPaths = ['src/content/', 'src/styles/', 'src/retired/'];
+    writeFile(projectRoot, 'src/content/pages/home.md', page('Home (quiet staging)'));
+    const before = head();
+    const logged = [];
+    const originalLog = console.log;
+    console.log = (...args) => {
+      logged.push(args.join(' '));
+      originalLog(...args);
+    };
+    let response;
+    try {
+      response = await post('/api/publish', { message: 'Quiet staging' });
+    } finally {
+      console.log = originalLog;
+    }
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.deepEqual(committedSince(before), ['site-a/src/content/pages/home.md', 'site-a/src/retired/old.md'],
+      'the edit and the deletion are committed');
+    assert.ok(logged.some((line) => line.includes('Committed')), `control: the publish's own log lines were captured: ${logged}`);
+    assert.deepEqual(logged.filter((line) => /Staging note|pathspec/.test(line)), [], 'no note for a missing path');
+  });
 } finally {
   server.close();
   fs.rmSync(tempRoot, { recursive: true, force: true });

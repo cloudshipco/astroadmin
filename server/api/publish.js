@@ -73,6 +73,12 @@ async function stageGitPaths(git, gitPaths) {
   const stagedPaths = [];
 
   for (const gitPath of gitPaths) {
+    // A path with nothing on disk and nothing in the index (a default such as
+    // src/styles/ in a site without one) matches no pathspec: skip it rather
+    // than log git's refusal on every publish. A folder whose tracked files
+    // were all deleted is still in the index, so its deletion is staged.
+    const matches = await git.raw(['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', gitPath]);
+    if (!matches) continue;
     try {
       await git.add(['-A', '--', gitPath]);
       stagedPaths.push(gitPath);
