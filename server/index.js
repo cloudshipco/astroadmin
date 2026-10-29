@@ -25,6 +25,7 @@ import { verifyCredentials, authConfigWarnings } from './utils/auth.js';
 import { requireSameOrigin } from './utils/same-origin.js';
 import { apiRateLimiters } from './utils/rate-limit.js';
 import { sessionFingerprint } from './utils/session-fingerprint.js';
+import { mediaKindOf } from '../ui/media-kinds.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -256,9 +257,19 @@ export async function createServer() {
   // document, so <img> display is unchanged, while a direct visit gets an
   // opaque origin and no script. nosniff keeps a file from being re-read as
   // HTML.
+  //
+  // A video opened directly is a media document that loads the video itself.
+  // With an opaque origin Chromium loads no media whatever media-src allows
+  // (measured, Chromium 151), so a video, and only a video, keeps its own
+  // origin (`allow-same-origin`) and may load media from it. The sandbox still
+  // allows no script (no `allow-scripts`, which also stops autoplay: the
+  // viewer starts it), and nosniff keeps the file a video.
+  const SITE_FILE_POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox";
+  const VIDEO_FILE_POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; media-src 'self'; sandbox allow-same-origin";
   const siteFileOptions = {
-    setHeaders(res) {
-      res.setHeader('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox");
+    setHeaders(res, filePath) {
+      const policy = mediaKindOf(filePath) === 'video' ? VIDEO_FILE_POLICY : SITE_FILE_POLICY;
+      res.setHeader('Content-Security-Policy', policy);
       res.setHeader('X-Content-Type-Options', 'nosniff');
     },
   };

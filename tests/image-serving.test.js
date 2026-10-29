@@ -7,15 +7,19 @@
  * (a response CSP applies only when the file is rendered as a document).
  *
  * Builds a throwaway project, starts createServer(), logs in, uploads an SVG
- * through the real upload route and fetches it back.
+ * through the real upload route and fetches it back. Then in Chromium
+ * (Playwright, an existing headless shell; CHROMIUM_PATH overrides): the SVG
+ * opened directly runs no script, and an uploaded video opened directly
+ * (#80) loads and plays when the viewer starts it.
  *
- *   bun tests/image-serving.test.js
+ *   bun tests/image-serving.test.js     (~3 s)
  */
 
 import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { chromium } from 'playwright-core';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-image-serving-')));
@@ -47,6 +51,19 @@ writeProjectFile('src/content/assets/posts/rel.svg', HOSTILE_SVG);
 writeProjectFile('src/assets/project.svg', HOSTILE_SVG);
 writeProjectFile('public/images/photo.png', Buffer.from('89504e470d0a1a0a', 'hex'));
 
+/** A Chromium Playwright can drive: CHROMIUM_PATH, else a downloaded headless shell. */
+function chromiumPath() {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
+  const shells = fs.existsSync(cache) ? fs.readdirSync(cache).filter((name) => name.startsWith('chromium_headless_shell-')).sort().reverse() : [];
+  for (const shell of shells) {
+    const candidate = path.join(cache, shell, 'chrome-headless-shell-mac-arm64/chrome-headless-shell');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined; // Playwright's own default
+}
+
+let uploadedVideoUrl;
 let passed = 0;
 async function check(name, fn) {
   try {
@@ -129,6 +146,87 @@ await check('without a session, every admin-served folder refuses (draft files a
   const forged = await fetch(`${base}/images/committed.svg`, { headers: { cookie: 'connect.sid=s%3Anot-a-session.x' } });
   assert.equal(forged.status, 401, `forged cookie got ${forged.status}`);
 });
+
+// --- in a real browser ---------------------------------------------------
+// The headers above are only what the server says; what they do is the
+// browser's. A video opened directly is a media document: under `sandbox`
+// alone its origin is opaque and Chromium loads no media whatever media-src
+// says (measured on Chromium 151: networkState NO_SOURCE with media-src
+// 'self' and with media-src *), so a video gets `sandbox allow-same-origin`
+// and `media-src 'self'`. Without allow-scripts nothing runs, and the
+// sandbox's automatic-features flag stops autoplay: the viewer starts it.
+const browser = await chromium.launch({ executablePath: chromiumPath() });
+const context = await browser.newContext();
+await context.addCookies([{ name: cookie.split('=')[0], value: cookie.slice(cookie.indexOf('=') + 1), url: base }]);
+
+await check('in Chromium, an uploaded SVG opened directly is drawn but its script does not run', async () => {
+  const tab = await context.newPage();
+  await tab.goto(`${base}/images/committed.svg`);
+  // evaluate() runs through the devtools protocol, which the sandbox does not stop.
+  assert.equal(await tab.evaluate(() => document.querySelectorAll('rect').length), 1, 'the SVG was rendered (control)');
+  assert.notEqual(await tab.title(), 'svg-script-ran', 'the SVG script ran on the admin origin');
+  await tab.close();
+});
+
+await check('a video uploaded through the editor is sandboxed, with no script, and media from its own origin only', async () => {
+  const form = new FormData();
+  form.append('image', new Blob([fs.readFileSync(path.join(repoRoot, 'tests/fixtures/video/clip.webm'))], { type: 'video/webm' }), 'clip.webm');
+  const upload = await fetch(`${base}/api/images`, { method: 'POST', headers: { cookie }, body: form });
+  const uploaded = await upload.json();
+  assert.equal(upload.status, 200, JSON.stringify(uploaded));
+  uploadedVideoUrl = uploaded.image.url;
+  const response = await fetch(base + uploadedVideoUrl, { headers: { cookie } });
+  await response.arrayBuffer();
+  const directives = (response.headers.get('content-security-policy') || '').split(';').map((d) => d.trim());
+  assert.ok(directives.some((d) => /^sandbox\b/.test(d)), `no sandbox: ${directives}`);
+  assert.equal(directives.some((d) => /allow-scripts/.test(d)), false, `the sandbox allows script: ${directives}`);
+  assert.ok(directives.includes("default-src 'none'"), `${directives}`);
+  assert.equal(directives.some((d) => /^script-src/.test(d)), false, `CSP allows script: ${directives}`);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  // The relaxation is the video's only: an SVG keeps the opaque-origin sandbox.
+  const svgResponse = await fetch(`${base}/images/committed.svg`, { headers: { cookie } });
+  await svgResponse.arrayBuffer();
+  const svgDirectives = (svgResponse.headers.get('content-security-policy') || '').split(';').map((d) => d.trim());
+  assert.ok(svgDirectives.includes('sandbox'), `${svgDirectives}`);
+  assert.equal(svgDirectives.some((d) => /^media-src|allow-same-origin/.test(d)), false, `${svgDirectives}`);
+});
+
+await check('in Chromium, a library video opened in its own tab loads, and plays when the viewer starts it', async () => {
+  assert.ok(uploadedVideoUrl, 'the upload check ran');
+  const tab = await context.newPage();
+  const violations = [];
+  tab.on('console', (message) => { if (/Content Security Policy/i.test(message.text())) violations.push(message.text()); });
+  await tab.goto(base + uploadedVideoUrl);
+  const videoState = () => tab.evaluate(() => {
+    const video = document.querySelector('video');
+    return video && { readyState: video.readyState, networkState: video.networkState, width: video.videoWidth, paused: video.paused, time: video.currentTime };
+  });
+  // Polled from here: waitForFunction polls by requestAnimationFrame inside
+  // the page, which never fires in a sandboxed document without scripts.
+  async function waitForVideo(predicate) {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const state = await videoState();
+      if (state && predicate(state)) return state;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return undefined;
+  }
+  const loaded = await waitForVideo((state) => state.readyState >= 2 && state.width > 0);
+  assert.ok(loaded, `the video did not load: ${JSON.stringify(await videoState())} ${violations.join(' | ')}`);
+  assert.equal(loaded.paused, true, 'no autoplay (the sandbox allows no automatic features)');
+  // Real input, not video.play(): focus the video, then Space (the media
+  // document's own control; the 96px fixture is too small to show a play
+  // button, and a click on the picture does not toggle it).
+  const box = await tab.locator('video').boundingBox();
+  await tab.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await tab.keyboard.press('Space');
+  const playing = await waitForVideo((state) => !state.paused && state.time > 0.2);
+  assert.ok(playing, `the video did not play: ${JSON.stringify(await videoState())}`);
+  assert.deepStrictEqual(violations, [], 'CSP violations');
+  await tab.close();
+});
+
+await browser.close();
 
 await check("the admin's own pages are not sandboxed (control: the headers are scoped)", async () => {
   const response = await fetch(`${base}/login`);
