@@ -122,7 +122,15 @@ Larger or to file:
 - Upstream: Astro's `isPathInRoot`/compile-metadata key mismatch (#89).
 - rsync deploy has no timeout; `z.array(z.array(z.string()))` renders as text.
 
-Before release: the ops session retests #89 (and simple-git 4 on the box) on the
-test editor with the packed tarball; evaluate the NixOS module change; post the
+Retested on the hosted test editor (2026-10-29, tarball of fd854b4, Bun 1.3.13,
+NixOS, Astro 7.4.4): the commit that failed the check with 1.10.0 published
+(rebased onto a remote 2 commits ahead, check passed, pushed, live on the first
+poll); author/committer and the deploy key came from the unit's GIT_* variables
+under simple-git 4; no worktree or check directory left. Also from that run: a
+site without `src/styles` logs "Staging note: fatal: pathspec 'src/styles' did
+not match any files" on every publish; quieten it (default paths that do not
+exist are not an error).
+
+Before release: evaluate the NixOS module change; post the
 drafted issue comments and close #2, #3, #37, #40, #59, #61 (part 1), #64, #67,
 #69, #70, #73, #77, #83, #84, #86, #88, #89.
