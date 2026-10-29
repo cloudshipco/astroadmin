@@ -6,12 +6,15 @@
  *
  * `npm test` and `npm run test:unit` both run this.
  *
- * Not listed: the shelved SQLite store (`npm run test:db`), and the slow ones that run full
- * Astro builds or a browser (publish-check, publish-refusal-*,
- * check-linked-styles, cms-*-packed,
+ * Not listed, deliberately: the shelved SQLite store (`npm run test:db`:
+ * content-store, loader, schema-parser-db; and loader-node, which runs under
+ * `node`), and the slow ones that run full Astro builds or a browser
+ * (publish-check, publish-refusal-reasons, publish-refusal-paths,
+ * check-linked-styles, cms-image-packed, cms-video-packed, astro-bin,
  * component-preview, dev-toolbar, cli-dev, doctor-*, video-picker-browser,
- * dashboard-layout-browser, login-browser,
- * image-*-astro builds). Run those by name before a release.
+ * dashboard-layout-browser, login-browser, image-astro-fields,
+ * image-field-astro). Run those by name before a release. Every other
+ * tests/*.test.js file is in FAST_TESTS below.
  *
  *   bun tests/run-unit.js            every file below
  *   bun tests/run-unit.js git ui     only files whose name contains a word
@@ -39,7 +42,7 @@ const FAST_TESTS = [
   'api-basics', 'api-response', 'login-log', 'rate-limit', 'cross-origin', 'auth',
   'error-paths', 'image-serving', 'image-symlink', 'image-picker-astro',
   'video-upload', 'git-api', 'git-subdir', 'git-subdir-routes',
-  'git-paths-scope', 'git-paths-commit', 'git-log-limit', 'git-environment', 'git-hardening', 'checkout-lock', 'publish-sync',
+  'git-paths-scope', 'git-paths-commit', 'git-log-limit', 'git-environment', 'git-hardening', 'checkout-lock', 'publish-sync', 'publish-dirty-checkout',
   'publish-message', 'publish-api', 'publish-failure', 'publish-live-status',
   'deploy',
   'build-failure', 'build-deploy-responses', 'production-build',
