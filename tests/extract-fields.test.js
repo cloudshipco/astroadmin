@@ -496,6 +496,64 @@ check('integer fields (plain, default, nullable, nested, array) read back as num
   equal(extractFormData(render(schema, entry), schema), entry);
 });
 
+// --- A cleared number is absent, never "" (#61) --------------------------------
+// An empty number input has no number to save. "" fails every z.number(), so
+// a cleared (non-nullable) number is left out, at the top level and inside a
+// block alike; a nullable one saves null (below). An untouched one keeps its
+// stored value, whatever that is.
+
+const numberControl = (form, name) => form.querySelector(`[name="${name}"]`);
+const NOTE_WITH_COUNT = {
+  type: 'object',
+  properties: { type: { type: 'string', const: 'note' }, heading: { type: 'string' }, count: { type: 'number' } },
+  required: ['type', 'heading'],
+};
+const COUNT_PAGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    order: INT,
+    weight: { type: 'number' },
+    blocks: { type: 'array', blockTypes: { note: NOTE_WITH_COUNT }, items: { anyOf: [NOTE_WITH_COUNT] } },
+  },
+  required: ['title', 'order', 'blocks'],
+};
+
+check('a cleared required number and a cleared optional one save as absent, not "" (#61)', () => {
+  const entry = { title: 'T', order: 2, weight: 1.5, blocks: [] };
+  const form = render(COUNT_PAGE_SCHEMA, entry);
+  numberControl(form, 'order').value = '';
+  numberControl(form, 'weight').value = '';
+  equal(extractFormData(form, COUNT_PAGE_SCHEMA), { title: 'T', blocks: [] });
+  equal('order' in extractFields(form), false, 'extractFields leaves the cleared number out too');
+});
+
+check('a cleared optional number inside a block saves as absent, not "" (#61)', () => {
+  const entry = { title: 'T', order: 1, blocks: [{ type: 'note', heading: 'H', count: 3 }] };
+  const form = render(COUNT_PAGE_SCHEMA, entry);
+  numberControl(form, 'blocks[0].count').value = '';
+  equal(extractFormData(form, COUNT_PAGE_SCHEMA), { title: 'T', order: 1, blocks: [{ type: 'note', heading: 'H' }] });
+});
+
+check('a number cleared in a block added since binding (unbound) is absent; its siblings are read', () => {
+  const entry = { title: 'T', order: 1, blocks: [] };
+  const form = render(COUNT_PAGE_SCHEMA, entry);
+  setupFormHandlers(form, () => {});
+  form.querySelector('#add-block-type').value = 'note';
+  form.querySelector('.add-block-btn').click();
+  numberControl(form, 'blocks[0].heading').value = 'New';
+  // A new block starts its number at 0 (createEmptyBlock); clearing it is the edit.
+  numberControl(form, 'blocks[0].count').value = '';
+  equal(extractFormData(form, COUNT_PAGE_SCHEMA).blocks, [{ type: 'note', heading: 'New' }]);
+});
+
+check('control: an untouched number keeps its stored value, a stored "" included', () => {
+  const entry = { title: 'T', order: 4, weight: '', blocks: [{ type: 'note', heading: 'H', count: '' }] };
+  const form = render(COUNT_PAGE_SCHEMA, entry);
+  numberControl(form, 'title').value = 'Edited';
+  equal(extractFormData(form, COUNT_PAGE_SCHEMA), { ...entry, title: 'Edited' });
+});
+
 check('a date-format field reads back as the YYYY-MM-DD string the schema coerces', () => {
   const schema = { type: 'object', properties: { joined: { type: 'string', format: 'date' } }, required: ['joined'] };
   equal(extractFormData(render(schema, { joined: '2020-04-02' }), schema), { joined: '2020-04-02' });

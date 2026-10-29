@@ -1675,6 +1675,16 @@ function readFields(container) {
     // string instead would turn a title of "2024" into the number 2024, and a
     // reference id of "123" into an integer.
     let fieldValue = value;
+    if (input?.type === 'number' && value === '' && input.dataset?.nullable === undefined && !key.endsWith(']')) {
+      // An empty number box has no number to save, and "" fails every
+      // z.number(): the key is left out (#61), inside a block too (its parent
+      // object is still made, so an object holding only it stays). A nullable
+      // one is cleared to null below; an untouched one gets its stored value
+      // back (applyOriginalValues). An item of a list keeps its place.
+      setNestedValue(data, key, value);
+      deleteNestedValue(data, key);
+      continue;
+    }
     if (input?.type === 'number') fieldValue = toNumber(value);
     else if (input?.type === 'date' || input?.type === 'datetime-local') fieldValue = dateControlValue(input, value);
     else if (input?.dataset?.valueType === 'boolean' && (value === 'true' || value === 'false')) fieldValue = value === 'true';

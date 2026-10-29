@@ -22,7 +22,9 @@
  * Scenarios: nothing edited (a positive control: no version can differ, since
  * every untouched value is restored), a sibling field in the block edited, a
  * new block added and left empty, and every matrix field cleared. Each file
- * this checkout writes must equal the base's. The mutant must differ
+ * this checkout writes must equal the base's, except for the changes listed
+ * in DELIBERATE (each naming its path, the base's value and the new one).
+ * The mutant must differ
  * somewhere, so the comparison is known to be able to fail.
  *
  *   bun tests/blank-optional-round-trip.test.js
@@ -192,6 +194,33 @@ export const collections = {
       },
     };
 
+    // Where this checkout deliberately writes other bytes than the base: each
+    // change names the path, the value the base wrote there (asserted, so a
+    // split is never a silent widening) and the value written now (undefined:
+    // the key is absent). Everything else in the file must still be the base's.
+    const DELIBERATE = {
+      'every matrix field cleared': [
+        // #61: a cleared number is absent. The base wrote "" (which
+        // z.coerce.number() reads as 0, and every z.number() refuses).
+        { path: ['blocks', 0, 'coerced'], base: '', now: undefined },
+      ],
+    };
+    const valueAt = (data, keys) => keys.reduce((node, key) => (node === undefined || node === null ? undefined : node[key]), data);
+    /** The base's file with this scenario's deliberate changes applied. */
+    function expectedText(scenario, headText) {
+      const changes = DELIBERATE[scenario] || [];
+      if (changes.length === 0) return headText;
+      const data = JSON.parse(headText);
+      for (const change of changes) {
+        const parent = valueAt(data, change.path.slice(0, -1));
+        const key = change.path[change.path.length - 1];
+        assert.deepStrictEqual(parent?.[key], change.base, `control: the base wrote ${JSON.stringify(change.base)} at ${change.path.join('.')}`);
+        if (change.now === undefined) delete parent[key];
+        else parent[key] = change.now;
+      }
+      return `${JSON.stringify(data, null, 2)}\n`;
+    }
+
     /** What one renderer saves for one scenario. */
     async function savedBy(rendererName, scenario) {
       const { generateForm, setupFormHandlers, bindOriginalValues, extractFormData } = renderers[rendererName];
@@ -211,18 +240,22 @@ export const collections = {
       const head = await savedBy('head', scenario);
       const current = await savedBy('current', scenario);
       const mutant = await savedBy('mutant', scenario);
+      let expected = head.text;
       try {
         if (scenario === 'nothing edited') {
           assert.equal(head.text, STORED_TEXT, 'control: the base writes an unedited entry back byte for byte');
         }
-        assert.equal(current.text, head.text, "this checkout must write the base renderer's file");
+        expected = expectedText(scenario, head.text);
+        assert.equal(current.text, expected, DELIBERATE[scenario]
+          ? "this checkout must write the base renderer's file with only the deliberate changes"
+          : "this checkout must write the base renderer's file");
         passed++;
-        console.log(`✅ [zod ${childZod}] ${scenario}: the base renderer's bytes`);
+        console.log(`✅ [zod ${childZod}] ${scenario}: the base renderer's bytes${DELIBERATE[scenario] ? ` (${DELIBERATE[scenario].length} deliberate change(s))` : ''}`);
       } catch (error) {
         console.error(`❌ [zod ${childZod}] ${scenario}\n   ${error.message.split('\n').join('\n   ')}`);
         process.exitCode = 1;
       }
-      if (mutant.text !== head.text) mutantDiffered++;
+      if (mutant.text !== expected) mutantDiffered++;
     }
 
     try {
