@@ -1927,18 +1927,6 @@ function showNotification(message, type = 'info') {
   const notification = document.createElement('div');
   notification.className = `notification notification-${type}`;
   notification.textContent = message;
-  notification.style.cssText = `
-    position: fixed;
-    top: 60px;
-    right: 20px;
-    padding: 12px 20px;
-    background: ${type === 'success' ? '#22c55e' : type === 'error' ? '#ef4444' : '#667eea'};
-    color: white;
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    z-index: 1000;
-    font-size: 14px;
-  `;
 
   document.body.appendChild(notification);
 
@@ -2164,22 +2152,17 @@ function showPublishProblems(refusal) {
 function showPublishStatus(message) {
   const el = document.createElement('div');
   el.className = 'notification notification-info';
-  el.style.cssText = `position:fixed;top:60px;right:20px;padding:12px 20px;background:#667eea;` +
-    `color:white;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:1000;` +
-    `font-size:14px;max-width:360px;`;
   el.textContent = message;
   document.body.appendChild(el);
   return {
     update(msg, { type = 'info', link = null, autoDismissMs = null } = {}) {
-      el.style.background = type === 'success' ? '#22c55e' : type === 'error' ? '#ef4444'
-        : type === 'warning' ? '#b45309' : '#667eea';
+      el.className = `notification notification-${type}`;
       el.textContent = msg;
       if (link) {
         el.appendChild(document.createTextNode(' '));
         const a = document.createElement('a');
         a.href = link; a.target = '_blank'; a.rel = 'noopener';
         a.textContent = 'View site →';
-        a.style.cssText = 'color:white;text-decoration:underline;font-weight:600;';
         el.appendChild(a);
       }
       if (autoDismissMs) setTimeout(() => el.remove(), autoDismissMs);
@@ -2362,7 +2345,23 @@ function initPanelResizer() {
 }
 
 // Initialize
+/**
+ * Keep `--topbar-bottom` at the header's bottom edge, so notices and panels
+ * fixed below it (see `.notification` in input.css) clear it at every width:
+ * the header is one row on a laptop and two below 64rem, and taller on touch.
+ */
+function trackTopbarBottom() {
+  const header = document.querySelector('.topbar-shopify');
+  if (!header) return;
+  const update = () => {
+    document.documentElement.style.setProperty('--topbar-bottom', `${header.getBoundingClientRect().bottom}px`);
+  };
+  update();
+  new ResizeObserver(update).observe(header);
+}
+
 async function init() {
+  trackTopbarBottom();
   await checkAuth();
   await loadConfig();
   await loadPages();

@@ -47,7 +47,8 @@ const functionsSource = ['showPublishStatus', 'fetchLiveHash', 'pollUntilLive'].
 /**
  * Run pollUntilLive to completion against live-status answers given by
  * `liveHashAt(pollNumber)` (a hash, or null for an unreachable site).
- * Returns the toast's final text, colour and link, and how many polls ran.
+ * Returns the toast's final text, type (its notification-* class) and link,
+ * and how many polls ran.
  */
 async function runPoll(liveHashAt, preHash = 'before') {
   const window = new Window();
@@ -94,19 +95,19 @@ async function runPoll(liveHashAt, preHash = 'before') {
   const link = toast.querySelector('a');
   return {
     text: toast.textContent,
-    background: toast.style.background,
+    type: [...toast.classList].find((name) => name.startsWith('notification-')),
     link: link ? link.getAttribute('href') : null,
     polls,
   };
 }
 
-const SUCCESS_GREEN = /#22c55e|rgb\(34, 197, 94\)/i;
+const SUCCESS = 'notification-success';
 
 await check('positive control: a live page that changes is reported live, in green', async () => {
   const result = await runPoll(poll => (poll < 3 ? 'before' : 'after'));
   assert.equal(result.polls, 3, `polling stops when the change appears (${result.polls} polls)`);
   assert.match(result.text, /Your changes are now live!/, result.text);
-  assert.match(result.background, SUCCESS_GREEN, result.background);
+  assert.equal(result.type, SUCCESS, result.type);
   assert.equal(result.link, 'https://example.com/about');
 });
 
@@ -115,7 +116,8 @@ await check('a live page that never changes is NOT reported as a success', async
   assert.ok(result.polls > 10, `positive control: polling ran until it gave up (${result.polls} polls)`);
   assert.doesNotMatch(result.text, /✅/, `no success tick: ${result.text}`);
   assert.doesNotMatch(result.text, /live shortly|now live/i, `no claim that it is live: ${result.text}`);
-  assert.doesNotMatch(result.background, SUCCESS_GREEN, `not the success colour: ${result.background}`);
+  assert.notEqual(result.type, SUCCESS, `not the success style: ${result.type}`);
+  assert.equal(result.type, 'notification-warning', result.type);
 });
 
 await check('the give-up message says the changes were sent, that we could not confirm them, and what to do', async () => {
@@ -131,7 +133,7 @@ await check('a live site that stays unreachable is not reported as a success eit
   const result = await runPoll(() => null);
   assert.ok(result.polls > 10, `polling ran until it gave up (${result.polls} polls)`);
   assert.doesNotMatch(result.text, /✅|live shortly|now live/i, result.text);
-  assert.doesNotMatch(result.background, SUCCESS_GREEN, result.background);
+  assert.notEqual(result.type, SUCCESS, result.type);
 });
 
 console.log('='.repeat(40));

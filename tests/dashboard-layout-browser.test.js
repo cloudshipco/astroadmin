@@ -212,11 +212,36 @@ try {
       assert.deepEqual(overlaps, []);
     });
 
+    // Notices open under the header, whatever its height: a real toast (Cmd/Ctrl+S
+    // saves the unchanged form and says so) and the publish-problems panel (shown
+    // after a refused publish, so placed here with its own class).
+    const headerBottom = await page.locator('.topbar-shopify').evaluate((header) => header.getBoundingClientRect().bottom);
+    await page.keyboard.press('Control+s');
+    await page.locator('.notification').first().waitFor();
+    // One at a time: they share a corner, and the toast is drawn over the panel.
+    const notices = await measure(page, ['.notification']);
+    await page.evaluate(() => {
+      document.querySelectorAll('.notification').forEach((notice) => notice.remove());
+      const panel = document.createElement('div');
+      panel.className = 'publish-problems-panel';
+      panel.textContent = 'This entry has a problem.';
+      document.body.appendChild(panel);
+    });
+    notices.push(...await measure(page, ['.publish-problems-panel']));
+    await page.evaluate(() => document.querySelector('.publish-problems-panel').remove());
+    await check(`${width}px: a toast and the publish-problems panel open below the header, on top`, () => {
+      assert.equal(notices.length, 2, `found ${notices.map((notice) => notice.name).join(', ')}`);
+      const misplaced = notices.filter((notice) => notice.box.top < headerBottom || !notice.inside || !notice.hit);
+      assert.deepEqual(misplaced.map((notice) => `${describe(notice)} (header ends at ${round(headerBottom)})`), []);
+    });
+
+    let closeButton = null;
     await check(`${width}px: the Changes panel opens inside the viewport, its close button on top`, async () => {
       await page.locator('#changesBtn').click();
       await page.locator('.changes-panel [data-close-changes]').waitFor();
       const [panel] = await measure(page, ['.changes-panel']);
       const [close] = await measure(page, ['.changes-panel [data-close-changes]']);
+      closeButton = close;
       assert.ok(panel.box.left >= 0 && panel.box.top >= 0 && panel.box.right <= width, `panel ${describe(panel)}`);
       assert.ok(close.inside && close.hit, `close ${describe(close)} covered by ${close.topmost}`);
       await page.locator('.changes-panel [data-close-changes]').click();
@@ -224,7 +249,8 @@ try {
 
     if (touch) {
       await check(`${width}px (touch): header and toolbar targets are at least ${MIN_TOUCH_TARGET}px`, () => {
-        const small = [...header, ...toolbar].filter((control) => control.box.width < MIN_TOUCH_TARGET || control.box.height < MIN_TOUCH_TARGET);
+        assert.ok(closeButton, 'control: the Changes panel close button was measured');
+        const small = [...header, ...toolbar, closeButton].filter((control) => control.box.width < MIN_TOUCH_TARGET || control.box.height < MIN_TOUCH_TARGET);
         assert.deepEqual(small.map(describe), []);
       });
     }

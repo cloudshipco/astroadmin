@@ -81,7 +81,10 @@
     @apply ml-auto mr-2 shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800;
   }
   .publish-problems-panel {
-    @apply fixed top-[60px] right-5 max-w-md max-h-[70vh] overflow-y-auto p-4 pr-8 rounded-lg shadow-lg bg-white border border-red-300 text-sm text-gray-800;
+    /* Just under the header, whatever its height (--topbar-bottom is the
+       header's measured bottom edge; see trackTopbarBottom in dashboard.js). */
+    top: calc(var(--topbar-bottom, 3.5rem) + 0.25rem);
+    @apply fixed right-5 max-w-md max-h-[70vh] overflow-y-auto p-4 pr-8 rounded-lg shadow-lg bg-white border border-red-300 text-sm text-gray-800;
     /* Above the primary modals (50), below stacked editors and pickers. */
     z-index: 55;
   }
@@ -1324,6 +1327,12 @@
     @apply text-gray-400 hover:text-gray-600 text-xl cursor-pointer;
   }
 
+  @media (pointer: coarse) {
+    .changes-panel-close {
+      @apply inline-flex items-center justify-center min-w-10 min-h-10;
+    }
+  }
+
   .changes-panel-body {
     @apply flex-1 overflow-y-auto p-4;
   }
@@ -1503,6 +1512,35 @@
   }
 
   /* Success Toast */
+  /* Top-right notices (showNotification, the publish status), just under the
+     header, whatever its height. */
+  .notification {
+    top: calc(var(--topbar-bottom, 3.5rem) + 0.25rem);
+    @apply fixed right-5 max-w-[360px] px-5 py-3 rounded-md shadow-lg text-sm text-white;
+    z-index: 1000;
+  }
+
+  .notification a {
+    @apply text-white underline font-semibold;
+  }
+
+  .notification-info {
+    background-color: #667eea;
+  }
+
+  .notification-success {
+    background-color: #22c55e;
+  }
+
+  .notification-error {
+    background-color: #ef4444;
+  }
+
+  /* White text on it is about 5:1. */
+  .notification-warning {
+    background-color: #b45309;
+  }
+
   .success-toast {
     @apply fixed bottom-6 right-6 bg-green-600 text-white px-4 py-3 rounded-lg shadow-lg z-50 transition-opacity duration-300;
   }

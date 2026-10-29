@@ -642,7 +642,9 @@ queue, so the old body is never written back.
   Changes, Logout) inside the viewport with `elementFromPoint` at its centre landing on
   it, also with the longest save status showing (which must move no button); every
   toolbar button and the expand button hit-testable with no two boxes intersecting; the
-  Changes panel inside the viewport; on touch, 40px targets. The dashboard clips its own
+  Changes panel inside the viewport; a real toast and the publish-problems panel below the
+  header's bottom edge (`--topbar-bottom`, measured by `trackTopbarBottom`; they were fixed
+  at 60px, under the second header row); on touch, 40px targets (the panel's × too). The dashboard clips its own
   overflow, so the scroll check alone passed while Publish was cut off at 390px: the hit
   test is what catches it. Below 64rem the header is two rows (`.topbar-left`/`-right`
   become `display: contents`; buttons in `.topbar-actions`). The toolbar sits ABOVE
