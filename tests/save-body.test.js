@@ -232,8 +232,8 @@ await check('editor: a markdown entry whose schema has blocks shows its body', a
 await check('editor: a new markdown entry whose schema has blocks has a body editor', () => {
   const render = extract('function renderEditorForNewEntry(schema, contentType, ctx)',
     ['document', 'generateForm', 'installSaver', 'setupFormHandlers', 'collapseAllBlocks', 'setupBlockFocus',
-      'showEntryProblems', 'setupFieldWidgets'],
-    [document, () => '<input name="title">', () => {}, () => {}, () => {}, () => {}, () => {}, () => {}]);
+      'showEntryProblems', 'setupFieldWidgets', 'newEntryValues'],
+    [document, () => '<input name="title">', () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => ({})]);
   document.body.innerHTML = '<div id="editorForm"></div>';
   render(BLOCKS_SCHEMA, 'content', { collection: 'pages', slug: 'new', locale: null });
   assert.ok(document.getElementById('markdown-body'), 'no body editor for a new entry with blocks');

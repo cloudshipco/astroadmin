@@ -12,6 +12,7 @@ import {
   setReferenceInputValue,
   REFERENCE_EMPTY_HTML,
   formatBlockType,
+  newEntryValues,
 } from './form-generator.js';
 import { resolvePreviewTarget, previewPathToSitePath, componentPreviewPath } from './preview-routes.js';
 import {
@@ -629,8 +630,9 @@ async function createNewEntry(collection, slug) {
 function renderEditorForNewEntry(schema, contentType, ctx) {
   const editorForm = document.getElementById('editorForm');
 
-  // Generate form from schema with empty data
-  const formHtml = generateForm(schema, {});
+  // Generate form from schema with empty data (but for the entry id, which
+  // is the name chosen for the new entry)
+  const formHtml = generateForm(schema, newEntryValues(schema, ctx.slug));
 
   // Every markdown entry gets a body editor, blocks or not: a page can have
   // both, and a body the editor does not show must never be saved as ''.

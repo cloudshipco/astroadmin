@@ -514,6 +514,13 @@ stored `[]` the editor leaves alone stays `[]` even where the schema says option
 an array the DOM produced (never stored, or emptied by the editor) is dropped. `save-body` also races a no-body save against a
 body save through the HTTP app: the store resolves `keepStoredBody` inside the file's write
 queue, so the old body is never written back.
+- `bun tests/file-entry-id.test.js` — a `file()` entry's declared `id` (#72): the store
+  always writes the entry under the id it was opened or created with, so the parser marks
+  that `id` (`x-astroadmin-entry-id`, file() collections only, top level, not a
+  `z.literal`) and the renderer shows it read-only with a line saying why; a new entry's
+  form shows the name chosen in the "Create New" dialog (`newEntryValues`). Through the
+  real parser, app and renderer, and the dashboard's `renderEditorForNewEntry`; control: a
+  `glob()` entry's `id` field stays editable and its edit is saved. ~1 s.
 - `bun tests/schema-references.test.js` — Astro's `reference()` parses (a string id;
   `z.array(reference(c))` a list) carrying `referenceCollection`, and `<base>Ids` resolves
   against the DECLARED collections (`<base>s`, `<base>`, `<base>es`, y->ies; nothing declared

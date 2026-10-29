@@ -35,6 +35,25 @@ const ZOD3_IMAGE_KEY = 'astroadminImage';
 export const IMAGE_MARKER = 'x-astroadmin-image';
 
 /**
+ * Marks a file() collection's top-level `id` in the JSON Schema. The store
+ * writes a file() entry under the id it was opened or created with (renaming
+ * it would orphan the entry and break references to it), so the form shows
+ * this field read-only rather than as a box whose edits are silently dropped
+ * (#72). Read by ui/form-generator.js. A glob() entry's `id`-named field is
+ * ordinary data and is not marked.
+ */
+export const ENTRY_ID_MARKER = 'x-astroadmin-entry-id';
+
+/** Mark the entry id of a file() collection's schema (see ENTRY_ID_MARKER). */
+function markFileEntryId(jsonSchema) {
+  const idSchema = jsonSchema?.properties?.id;
+  // A z.literal id is already a hidden input (form-generator's const branch).
+  if (idSchema && typeof idSchema === 'object' && idSchema.const === undefined) {
+    idSchema[ENTRY_ID_MARKER] = true;
+  }
+}
+
+/**
  * Minimal shim for astro:content virtual module.
  * astro:content just re-exports zod and provides defineCollection.
  */
@@ -292,6 +311,7 @@ export async function parseAstroSchemas(projectRoot) {
       try {
         // Convert Zod schema to JSON Schema (zod 3 and zod 4 — see toJsonSchema)
         const jsonSchema = toJsonSchema(zodSchema);
+        if (loaderType === 'file') markFileEntryId(jsonSchema);
 
         // Find discriminated unions for block UI
         const discriminatedUnions = findDiscriminatedUnions(zodSchema);

@@ -223,6 +223,27 @@ function parseStoredDate(value) {
   return new Date(ZONELESS_TIMESTAMP.test(text) ? `${text.replace(' ', 'T')}Z` : text);
 }
 
+/**
+ * The keyword the schema parser marks a file() collection's `id` with
+ * (ENTRY_ID_MARKER in server/utils/schema-parser.js).
+ */
+const ENTRY_ID_MARKER = 'x-astroadmin-entry-id';
+
+/**
+ * The values a NEW entry's form starts with: its entry id, when the schema
+ * declares one (a file() entry is saved under the name chosen in the "Create
+ * New" dialog, so its read-only id field shows that name). Empty otherwise.
+ * @param {object} schema - the collection's schema
+ * @param {string} entryName - the slug the new entry is created as
+ */
+export function newEntryValues(schema, entryName) {
+  const values = {};
+  for (const [key, fieldSchema] of Object.entries(schema?.properties || {})) {
+    if (fieldSchema?.[ENTRY_ID_MARKER] === true) values[key] = entryName;
+  }
+  return values;
+}
+
 /** JSON Schema numeric types: zod's z.number() is 'number', .int() is 'integer'. */
 function isNumericType(type) {
   return type === 'number' || type === 'integer';
@@ -279,6 +300,29 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
   // is kept (bindOriginalValues, `constants`).
   if (schema.const !== undefined) {
     return `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(String(schema.const))}" data-schema-const>`;
+  }
+
+  // A file() entry's id is fixed: the store writes the entry under the id it
+  // was opened or created with, so an editable box would take an edit the
+  // save then drops (#72). Shown read-only, so the editor can see it, and
+  // still named, so it is read back like any other control.
+  if (schema[ENTRY_ID_MARKER] === true) {
+    const hintId = `${id}_hint`;
+    return `
+      <div class="form-group">
+        <label for="${id}" class="form-label">${getFieldLabel(name, schema)}</label>
+        <input
+          type="${isNumericType(schema.type) ? 'number' : 'text'}"
+          name="${fullPath}"
+          id="${id}"
+          value="${escapeHtml(displayText(value))}"
+          class="form-input"
+          readonly
+          aria-describedby="${hintId}"
+        >
+        <span id="${hintId}" class="form-help form-help-after">Set when the entry was created. It cannot be changed here, because other content may refer to the entry by it.</span>
+      </div>
+    `;
   }
 
   // Handle blocks array (discriminated union)

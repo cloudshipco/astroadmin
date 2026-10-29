@@ -44,6 +44,16 @@
     @apply block text-xs text-gray-500 mb-2;
   }
 
+  /* Help under its control rather than above it */
+  .form-help-after {
+    @apply mt-1 mb-0;
+  }
+
+  /* A value shown but not editable (a file() entry's id) */
+  .form-input[readonly] {
+    @apply bg-gray-50 text-gray-600 cursor-default focus:ring-0 focus:border-gray-300;
+  }
+
   /* Content the site's build would reject (ui/content-problems.js) */
   .entry-problems {
     @apply mb-4 p-3 rounded-lg border border-red-200 bg-red-50 text-sm text-red-800;
