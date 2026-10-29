@@ -67,6 +67,16 @@ its DOM value even when it matches the stored one (an optional emptied list is t
 dropped, which is how a stored invalid `[]` gets unset). (3) **A widget's clear button
 records intent** (`setWidgetValue`, `data-cleared`): a hidden input's `defaultValue`
 follows its value, so in an unbound (new) form nothing else tells "cleared" from "never set".
+(4) **A const value is the schema's, not the editor's**: a `data-schema-const` value with
+nothing stored at its path is removed by cleanup wherever the schema proves its key optional,
+blocks included (#69); a required one is always written. (5) **A block's `""` is judged by the
+site's zod**: cleanup keeps a `""` inside a block at an optional key but names it
+(`blankOptionalPaths`, sent as `blankOptionals` by `savePayload`), and the content routes drop
+it only where the real zod refuses it at exactly its path and accepts it absent
+(`dropRefusedBlanks`, #70). (6) An empty non-nullable number input is absent, never `""`
+(#61); an inline list's item keeps its place. A list renders its items with the form's
+`idPrefix` (`data-id-prefix` for items added later); a new renderer path that calls
+`generateFields` for list items must pass it, or the item modal's labels focus the form behind.
 Verify a change here in a real browser too (recipe below): Chrome normalises values that
 happy-dom does not (`datetime-local` `.100` reads back as `.1`).
 
@@ -122,9 +132,8 @@ in Astro's glob loader, and a `file()` item by `(id ?? slug)`; or, for `[ImageNo
 entry whose OWN image reference (an `image()` field, or a markdown body image as the site's
 own markdown processor collects it) is that path and resolves `./`/`../` from the entry to a
 path absent from the commit. When the commit's schemas cannot be loaded (20 s cap), entries
-are listed with `validation: 'unchecked'` and no schema issues, never the live schema's. A production build and
-the build routes return status plus the same code sentences; build responses describe the
-command ("the site's production build"), never the configured command line; a deploy
+are listed with `validation: 'unchecked'` and no schema issues, never the live schema's. A production build
+returns status plus the same code sentences, never the configured command line; a deploy
 response carries chosen status fields (`deployResultForEditor`), never adapter output. The
 raw output goes to the server log; `checkHeadWithAstro`'s `rawOutput` is for the server and
 tests only. The doctor CLI prints a failed build's raw output to its own stderr (the site
@@ -177,23 +186,40 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   The rule it pins: an empty array survives `extractFormData` only when its key is REQUIRED;
   an empty array the schema proves optional is dropped (`[]` fails `.optional().min(1)`),
   inside block items too. A `""` the DOM produced in a key the schema proves optional is
-  dropped at the top level (every optional `""`; whether that is right is #69) and KEPT
-  inside a block. Do not narrow or widen that by reading the JSON Schema: it cannot say
-  which `""` the site's zod refuses (z.coerce, .catch(), z.preprocess and zod 4's
-  .base64() serialise as stricter than they are), and optional does not make `""` and
-  absent the same (`.default('x')` fills absent in). An editor-chosen "leave this out",
-  gated on the real validation, is #70. A const (`z.literal`) input is not the editor's,
-  but a value STORED at its path is kept when a sibling changes (`binding.constants`);
-  with nothing stored, the schema's value is used.
-- `bun tests/blank-optional-round-trip.test.js` — that block rule, through the real app,
-  zod 4 and zod 3: a block holding `.min(1).optional()`, `.optional()`, `.default('x')`,
-  `z.literal('').optional()`, an enum with `''`, `z.coerce.number().optional()`,
-  `.min(1).catch('c').optional()` and an optional object is saved with nothing edited, a
-  sibling edited, a new block left empty and every field cleared, by `ui/` at
+  dropped at the top level (every optional `""`, deliberately: absent is the one value every
+  optional key accepts, #69) and KEPT inside a block, where the server drops it only if the
+  site's real zod refuses it (#70, `refused-blanks`). Do not narrow or widen that by reading
+  the JSON Schema: it cannot say which `""` the site's zod refuses (z.coerce, .catch(),
+  z.preprocess and zod 4's .base64() serialise as stricter than they are). A const
+  (`z.literal`) input is not the editor's: a value STORED at its path is kept when a sibling
+  changes (`binding.constants`); with nothing stored, the schema's value is written only
+  where the key is required. A cleared non-nullable number is absent (#61); an edited number
+  reads back as a number, and an unchecked box as false.
+- `bun tests/blank-optional-round-trip.test.js` — the blank rules through the real app,
+  zod 4 and zod 3: a page and a block each holding `.min(1).optional()`, `.optional()`,
+  `.default('x')`, `z.literal('').optional()`, an enum with `''`,
+  `z.coerce.number().optional()`, `.min(1).catch('c').optional()` and an optional object,
+  saved through `savePayload` with nothing edited, a sibling edited, a new block left empty,
+  every block field cleared and every top-level field cleared, by `ui/` at
   `BLANK_OPTIONAL_BASE` (default 9ef8871, `git archive`), by this checkout and by a mutant
-  (the block exemption removed). This checkout must write the base's bytes in every
-  scenario; the mutant must differ somewhere (else the comparison is blind). Seen red
-  with the exemption removed from the real file. ~3 s.
+  (the block exemption removed). This checkout must write the base's bytes except the
+  changes listed in `DELIBERATE` (each names its path, asserts the base's value and states
+  the new one: #61 a cleared number, #69 an absent optional literal, #70 a refused block
+  `""`); never widen it. The mutant must differ somewhere (else the comparison is blind). ~3 s.
+- `bun tests/refused-blanks.test.js` — `dropRefusedBlanks` and the routes (#70): a block `""`
+  is dropped only at an exact-path zod issue (or an image() `""`), and only where absent is
+  accepted; a parent refinement, a non-empty value, a required key, prototype keys and
+  malformed or out-of-entry paths remove nothing; POST and PUT; a schema-load failure saves
+  as sent. ~1 s.
+- `bun tests/text-field-sizing.test.js` — a text area is sized to its content, two rows at
+  least (no 100px floor in the renderer, `autoGrowTextarea` or the CSS); setup fits each
+  once; borders are counted; an unlaid-out one keeps its rows. `.meta({ multiline:
+  false|true })` picks an input or a textarea, and a stored value with a line break stays a
+  textarea. <1 s.
+- `bun tests/nested-array-indexes.test.js` — lists inside list items (#56): Add counts the
+  list's own items (`directItems`); every `label[for]` resolves to the control in its form
+  group, on the form and in the item modal, after add/delete; references renumber through
+  the shared `reindexItems`. <1 s.
 - `bun tests/date-marker.test.js` — the schema parser's `x-astroadmin-date` marker for zod 3
   (`zod/v3`) and zod 4: a real date is marked through optional/nullable/default/catch, union
   and discriminated-union branches, intersections, objects and arrays; date-format strings
@@ -247,10 +273,37 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   and dropped the new commit); an inherited `rebase.autoStash` leaves no markers; and a save
   arriving mid-rebase waits, so the abort's hard reset cannot discard an acknowledged save;
   likewise a save during `/api/git/pull` and an image-details update during publish's commit
-  (the details the rebase brings in survive). Timed by barrier hooks the test releases, never
-  by sleeps, and each asserts the waiting request is still pending. An upload in progress is
+  (the details the rebase brings in survive); `/api/git/pull` waits for a publish's check
+  (the git lock, #59), and the commit route's refused check is a 422 that keeps the commit
+  local. Timed by a `git` wrapper first on the server's PATH (before/after one subcommand)
+  and an armable `build.check` the test releases, never by git hooks (the server disables
+  them) or sleeps, and each asserts the waiting request is still pending (~20 s). An upload in progress is
   never in the site (publish commits none of it; the finished image is installed whole; its
   staging folder is removed), and an abandoned upload leaves nothing and holds up nothing. Each check was seen red on the unfixed code.
+- `bun tests/git-paths-commit.test.js` — Publish and the commit route stage only git paths
+  strictly inside the site (`getAllowedGitPaths`, server/utils/git-paths.js; one staging
+  helper, `commitConfiguredPaths`): `'./'`, `'.'`, `''`, `'src/..'` commit nothing outside
+  the real entries and `'../other'` commits no sibling, for a site in a subdirectory of its
+  repo (#84). ~2 s.
+- `bun tests/publish-dirty-checkout.test.js` — publishing from a checkout holding someone's
+  uncommitted changes outside what the editor commits (#83), both routes: an unrelated
+  modified file no longer blocks a publish onto a moved remote and stays byte-identical; a
+  modified file the remote also changes, or an untracked file where the remote adds one, is
+  a fixed path-free 409 (`localChangesBody`) leaving the branch, the local commit and the
+  file as they were. Red with `reset --hard` in place of `--keep`. ~15 s, not in test:unit.
+- `bun tests/git-environment.test.js` — git's environment (#64), through a real publish:
+  `GIT_AUTHOR_*`/`GIT_COMMITTER_*` set the commit identity over the repo's user.name,
+  `GIT_SSH_COMMAND` carries the push (an ssh:// remote whose "ssh" is a script), and an
+  ambient `GIT_DIR`/`GIT_WORK_TREE` redirects nothing. ~2 s.
+- `bun tests/git-hardening.test.js` — no code a site repo plants in its git config or hooks
+  runs (#67): seven hooks, fsmonitor, a smudge/clean filter, textconv, diff.external, gpg
+  signing and an ext:: push URL each write a marker; the control shows each fires under
+  plain git; save, status, diff, show, revert, publish (including both worktrees), pull and
+  the commit route leave none. ~10 s.
+- `bun tests/check-linked-styles.test.js` — the publish check builds a site whose packages
+  ship `.astro` components with a `<style>` and a `<script>` (the real CmsVideo, and one a
+  directory down), with the site and the check's TMPDIR under different top directories
+  (#89). ~2 s, not in test:unit.
 - `bun tests/checkout-lock.test.js` — `server/utils/checkout-lock.js`: writes share the
   checkout, the exclusive hold waits for running writes and later writes wait for it, a
   failure releases either, nested writes run (reentrant), the exclusive hold from inside a
@@ -277,11 +330,17 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   `<site>,backup` or a `../` climb is not the site; an id keeps its own error's Location and
   no later error's), Astro's glob id for a file (a data `slug` wins), and every
   review-round leak shape producing no path. <1 s.
-- `bun tests/build-deploy-responses.test.js` — over HTTP: `/api/build/status` and
-  `/api/build/production` describe the build instead of the configured command (a script with
-  a server path), carry no output, and a failure carries the code sentences; `/api/publish`
-  with a real local rsync deploy returns `{success, adapter, dryRun}` while rsync's
-  "created directory <destination>" goes to the log. ~2 s.
+- `bun tests/build-deploy-responses.test.js` — over HTTP: the former `/api/build/*` routes are
+  gone (404, no build runs; #3); `/api/publish` with a real local rsync deploy returns
+  `{success, adapter, dryRun}` while rsync's "created directory <destination>" goes to the
+  log, and a failed build carries the code sentences. ~2 s.
+- `bun tests/production-build.test.js` — Publish's production build runs through
+  `runCommand`: no admin secrets in its environment, killed with its process group at
+  `build.productionTimeoutMs`. ~2 s.
+- `bun tests/deploy.test.js` — rsync destinations `--delete` must not touch are refused
+  (root, home and above, project and above, inside the project, dist and inside; remote `/`,
+  `~`, `..`), `allowDestructivePath: true` overrides; the key path and port reach a fake ssh
+  as single arguments through real rsync (#10).
 - `bun tests/astro-bin.test.js` — the default build commands run the site's OWN installed
   astro (`server/utils/astro-bin.js`), never a package runner: with no astro installed the
   publish check and the production build refuse and a fake `bunx`/`npx` first on PATH is
@@ -334,7 +393,9 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   dashboard polls the public page (`pollUntilLive`, extracted from dashboard.js, happy-dom,
   fake clock): a page whose HTML changes is reported live in green; one that never changes
   (a failed or slow host build, #54) or stays unreachable gets a plain warning that the
-  changes were sent but could not be confirmed live, never a success tick.
+  changes were sent but could not be confirmed live, never a success tick. With nothing to
+  poll (no publicUrl, or no page for the entry) a push is the same warning, never
+  "Published!" (`showPublishOutcome`); a commit with no remote is not green either.
 - `bun tests/error-paths.test.js` — API errors send a fixed, route-specific message, over
   HTTP: an image() preview whose file vanishes after its stat() (sendFile's callback, not the
   error middleware), an unreadable `/images` file (the app error middleware), upload, delete,
@@ -455,10 +516,28 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
 - `bun tests/rate-limit.test.js` — production-mode /api limits (server/utils/rate-limit.js):
   a signed-in session's burst of 150 passes (own budget, `sessionMax`, keyed by a session
   digest); not signed in and every login attempt keep 100 per address; a 429 is JSON with
-  Retry-After. `bun tests/api-response.test.js` — the dashboard's `readJson`
+  Retry-After. Failed logins also have their own budget per address (`loginMax`, 10; a
+  success does not count): failure 11 is a 429 while an anonymous GET still passes.
+  `bun tests/api-response.test.js` — the dashboard's `readJson`
   (ui/api-response.js) turns any 429 or non-JSON body into a readable error, and no ui/
   file calls `.json()` itself. `bun tests/login-log.test.js` — a login logs a session
-  fingerprint, never the session ID.
+  fingerprint, never the session ID; a failed login logs exactly one
+  `[<ISO time ±HH:MM>] auth.failed ip=<addr>` line (`server/utils/auth-log.js`; the hosts'
+  fail2ban matches `\] auth\.failed ip=<ADDR>$`) with no client text, so a username holding
+  a newline cannot forge a second; the address express sees through the trusted proxy; a
+  login regenerates the session (#40).
+- `bun tests/glob-files.test.js` — a glob() collection lists what Astro 7's loader lists
+  (tinyglobby, `cwd` the base, `expandDirectories: false`): negations, `[!_]`, dotfiles and
+  dot-dirs, braces; `matchesAnyPattern` agrees file by file; a symlink or `../` out of the
+  base is never listed (#19). <1 s. `bun tests/file-collection-listing.test.js` — a file()
+  collection's preview list and titles read and parse its file once (`listEntries`).
+- `bun tests/api-basics.test.js` — the basic HTTP surface on the real `createServer()` app:
+  health, `/api/config` (no credential in it), 401s without a session, a wrong login sets
+  no session, sign-in, collection listing, sign-out ends the session (#2). <1 s.
+- `bun tests/login-browser.test.js` — the sign-in pages in real Chromium (#77). ~2 s. Browser
+  tests take their Chromium from `tests/chromium-path.js` (CHROMIUM_PATH, else the newest
+  downloaded headless shell); playwright-core is pinned at 1.57.0 because 1.64.1 never exits
+  after `browser.close()` with the downloaded shell.
 - `bun tests/dev-toolbar.test.js` — the integration hides Astro's dev toolbar in the
   preview AstroAdmin runs (ASTROADMIN_PROJECT_ROOT naming the site: `astroadmin dev`, the
   hosted preview unit) and nowhere else (plain `astro dev` is the positive control). Real
@@ -676,14 +755,17 @@ queue, so the old body is never written back.
 `doctor-coverage` (built-HTML checks on a fixture page, each shown red on a mutated copy),
 `doctor-static` (config, lockfile, submodule, workspace and sharp checks on throwaway repos),
 `doctor-cli` (exit codes, `--json`, `--build`, the site's installed astro and never a fetched
-one; ~10 s), `doctor-publish` (the editor scans the publish check's own build in a child
+one; a failed build's details point at the output above, never a server log; the doctor
+builds under `<site>/node_modules/.cache`, since Astro 6.3 loses src/assets images when
+outDir is outside the root, #73; ~10 s), `doctor-publish` (the editor scans the publish check's own build in a child
 process rooted at the check's worktree, so it reads the commit's entries; a scan stuck in a
 synchronous loop is killed at its cap; an error is "unavailable" with a fixed reason and the
 error in the server log, never a failed publish; `unoptimised-images` is command-line
 only, absent from the editor scan but reported by `runDoctor`; ~15 s),
 `doctor-notice` (the editor notice, happy-dom) and `doctor-images` (unoptimised `/images/`
 originals in built HTML; CmsImage's prerequisites: the SITE's sharp, found by walking up
-`node_modules` from the site root, never Astro's nested copy, Astro >= 7, `cssTarget`). Run each with `bun tests/doctor-<name>.test.js`.
+`node_modules` from the site root, never Astro's nested copy, Astro >= 7, `cssTarget`; a
+`publicDir` other than `./public`, or unreadable, warns for CmsImage and CmsVideo, #86). Run each with `bun tests/doctor-<name>.test.js`.
 
 **The doctor and the publish check use synchronous fs, never `fs/promises`.** Under Bun 1.3.4
 on macOS an `fs/promises` call made while child processes start and exit can lose its completion
@@ -698,9 +780,20 @@ run git and builds, so they read with the `*Sync` calls; `doctor-static` fails i
 DB store **must pin db mode** (a `process.env.ASTROADMIN_CONTENT_STORE = 'db'` line
 before imports), since `files` is now the default.
 
-**Caveat:** `npm test` / the `test` script only runs `tests/api.test.js`, which
-needs a **running server** and is currently red (tracked as issue #2). Don't read
-that single red as the suite being broken: run `npm run test:unit`.
+`npm test` and `npm run test:unit` both run `bun tests/run-unit.js`. The live-server
+`tests/api.test.js` is gone (#2); its uncovered checks are `tests/api-basics.test.js`.
+
+**Every git process goes through `server/utils/git-exec.js`.** simple-git clients come from
+`createGitClient` (or `gitClientAt` for another worktree of the repo: simple-git refuses
+`-C`); anything else uses `runGit`/`runGitSync`; never `execFile('git')`. Both apply
+`HARDENING_CONFIG` (`core.hooksPath=/dev/null`, `core.fsmonitor=false`,
+`commit.gpgSign=false`, `protocol.ext.allow=never`) and `filterDriverOverrides` (every
+configured `filter.<name>` set to empty commands, `required=false`; LFS files are committed
+as their real bytes), because the site's code runs on the host and can write `.git/hooks`
+and `.git/config`. Every diff and show adds `NO_DIFF_PROGRAMS`. Only `GIT_ENVIRONMENT`'s
+variables reach git (simple-git 4 drops the other `GIT_*` ones); a new one an operator needs
+goes in that list. Never time a test with git hooks. Not covered yet: merge drivers,
+`core.sshCommand`, `credential.helper`, `url.*.insteadOf`.
 
 ## Schema validation: saves warn, the site's own Astro gates the push
 
@@ -714,8 +807,13 @@ Two layers, deliberately unequal:
 2. **Nothing is pushed until the site's own Astro accepts the exact commit**
    (`server/utils/astro-check.js`): `build.check`, else the site's `build.production`,
    else the site's own installed astro (`server/utils/astro-bin.js`), runs in a throwaway `git worktree` at HEAD, after the commit
-   and after `pull --rebase --no-autostash` (in that order: before the commit the saves are
-   unstaged and git refuses the pull, #57). The commit and the pull run in ONE exclusive
+   and after the commit is rebased onto the upstream (in that order: before the commit the
+   saves are unstaged, #57). The rebase runs in a throwaway detached worktree
+   (`--no-autostash --no-update-refs`) and the live checkout is moved to its result with
+   `git reset --keep`, so uncommitted changes elsewhere in the repository do not block it
+   (#83); `--keep` refuses, changing nothing, when an incoming change touches a locally
+   modified file or an untracked file is in the way (409, `localChangesBody`). Never a hard
+   reset or checkout there. The commit and the rebase run in ONE exclusive
    checkout hold (`server/utils/checkout-lock.js`, `commitInCheckout`): every write to the
    checkout (content store writes, revert/restore, image writes) takes a shared hold, so a
    save waits rather than landing between the commit and the pull or mid-rebase, where
@@ -771,7 +869,14 @@ other than `.bin`: Astro writes its content data store into `node_modules/.astro
 linking the whole directory would let the check overwrite the running preview's store. A
 custom `cacheDir` inside `node_modules` that does NOT start with a dot would still be
 shared; none of our sites set one. Hoisted `node_modules` above a monorepo site are
-mirrored too. A tracked `.env` is the committed one; only gitignored `.env*` files are
+mirrored too. A package that ships `.astro` files is not one link: it is a real directory
+down to each `.astro` file, which is COPIED, with links for everything else
+(`linkNodeModules`, #89). Vite names a linked module by its real path, and Astro looks up a
+component's `<style>`/`<script>` sub-module through `normalizeFilename`, which joins an
+absolute path sharing no top directory with the root onto the root, so a linked component
+with a `<style>` failed with "No cached compile metadata found". It passes by accident
+wherever the checkout and TMPDIR share a top directory (macOS `/private`), so test it with
+them apart. A tracked `.env` is the committed one; only gitignored `.env*` files are
 copied in from the live checkout.
 
 ## Releasing

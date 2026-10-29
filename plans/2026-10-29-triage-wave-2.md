@@ -1,0 +1,128 @@
+# Backlog triage 2 and the second fix wave
+
+Status: MERGED ON MAIN, NOT PUSHED OR RELEASED (2026-10-29). All six lanes
+plus #89 are on main, and the gate passed on the combined tree: `npm test`
+76/76, and every slow test by name. Decisions: #83 rebases in a throwaway
+worktree inside the exclusive hold (not the check's worktree, which would mean
+holding the lock through the build) and moves the live checkout with
+`reset --keep`; #70 drops a block `""` only where the site's real zod refuses it
+at that path (#69's top level kept and pinned); #3 deletes `server/api/build.js`.
+Triage of all 38 open issues at 32da2eb (main
+and origin/main), by four read-only agents reading the code, `git log` and
+the issue threads, plus a happy-dom probe of the real renderer. Follows
+plans/2026-10-29-backlog-triage.md (released as 1.10.0).
+
+## Triage
+
+Nothing is fixed outright. Partly fixed: #27 (doctor warns; the integration
+injects nothing), #37 (covered except a plain checkbox and a plain number),
+#47 (links navigate and focus nothing), #54 (the give-up case is amber), #59
+(the commit route is tested; the pull lock is not), #63 and #66 (umbrellas,
+below).
+
+| # | Size | Design first | Note |
+|---|---|---|---|
+| 83 | M | yes | Only fails when the remote moved: the push is rejected and the 502 says "try again", which never works |
+| 84 | S | no | `commitPublishPaths` and `commitConfiguredGitPaths` stage raw `getGitPaths`, not `getAllowedGitPaths` |
+| 67 | M-L | yes | The branch is not a port: simple-git 3.36 refuses `core.hooksPath`/`core.fsmonitor` without its `unsafe` opt-ins; five raw `execFile('git')` callers (worst: the check's `worktree add`) are outside it; the branch's test is vacuous (`--no-verify`) |
+| 64 | M | small | simple-git 4 deletes every ambient `GIT_*` variable unless allowed (`GIT_SSH_COMMAND`, author/committer, set by the NixOS unit). Same lane as #67 |
+| 59 | S | no | Pull-lock test. The barrier must move from git hooks to a `build.check` that waits on a file, since #67 disables hooks |
+| 51 | S-M | yes | Nothing ever fetches, so `behind` is 0 in exactly the drift case; needs a fetch policy |
+| 54 | S + M-L | yes (host API) | A push with no `publicUrl` still says "Published!" (S); host deploy-state needs a token (M-L) |
+| 10 | S-M | small | rsync `validate()` accepts `/`, the project root, `dist/`; `keyPath` unquoted in `-e` |
+| 3 | S | yes | `/api/build/*` has no caller in `ui/`: delete `server/api/build.js` rather than dedupe |
+| 2 | S | no | Point `npm test` at `test:unit`; port the few uncovered api.test.js checks in-process |
+| 49 | S-M | no | No `.github/`; blockers: macOS Chromium path (copied into 4 tests), git identity, `npm ci` |
+| 88 | S | no | `bannerImage` + `bannerAlt` gets a built-in box that saves undeclared `bannerImageAlt` (Astro strips it) |
+| 87 | S | small | Size textareas to content (min ~2 rows, three places); `.meta({ multiline: false })` forces an input |
+| 85 | M | no | Object-shaped `file()` JSON lists as empty (`listSlugs` swallows the throw); YAML `file()` too |
+| 69 | S | decided below | Keep the top-level rule, pin it, close. The issue text describes a reverted rule |
+| 70 | M | yes | Recommended: drop a block `""` at an optional key only when the site's real zod refuses it there |
+| 61 | S + S-M | small | A cleared non-nullable number saves `""` (probe-confirmed); the shim's `z` should be Astro's zod, bare `zod` the site's |
+| 60 | M | yes | Map zod's default messages by `code`; a site's own message passes through |
+| 56 | S | no | Add handlers count nested items; label `for` ids lose the form's `idPrefix` on reindex |
+| 46 | M-L | yes | Recommended: collapse optional fields empty in the stored entry under "Show N more" |
+| 47 | M | yes | Click focuses the field, a "Follow link" chip navigates |
+| 86 | S | decided below | Document and warn in the doctor; support only when a site asks |
+| 82 | M | yes | Key by the site path (`/images/team/x.jpg`), fall back to the bare name; phase 1 public uploads only; DELETE must remove the metadata entry |
+| 77 | S | no | Delete the stale Playwright e2e; keep `playwright-core` as a direct devDependency |
+| 75 | M | yes | Phase 1: Astro's 8 selector-only audit rules via htmlparser2 + css-select |
+| 74 | M-L | yes | Build on #62's single owner of preview state |
+| 73 | S | no | Not obsolete (peer dep is `astro >=6`): always use `<root>/node_modules/.cache` for the outDir; doctor's own failure wording, not "see the server log" |
+| 62 | L | settled in issue | One owner of editor/preview state; restart from reverting 5ca7081 |
+| 27 | S | small | Add the preview host to `vite.server.allowedHosts` when `isAstroAdminPreview` (whether the unit sets `PREVIEW_URL` is unverified) |
+| 40 | S-M | no | A login-only limiter (`skipSuccessfulRequests`), one `auth.failed ip=` line with a timestamp, `session.regenerate()` on login |
+| 52, 50 | M | light | Actionable here (`nixos/astroadmin-instance.nix`): a `runNixOSTest` in the Lima VM, then the checkout unit's hardening and limits |
+| 19 | S each | no | Our glob matcher ignores `!` negations and lists dotfiles: use `tinyglobby` as Astro does; `file()` preview listing parses the file once per entry |
+| 25 | - | - | Waitlist; leave open |
+
+#66 remaining: `schema-parser.js` imports `fs/promises`; nested and block
+`z.date()` written quoted when new; a new nullable list row saves `''`; stored
+top-level keys with no field are dropped (`.passthrough()`); an MDX syntax
+error names no entry; image listing follows symlinks; `build: null` and the
+commit summary. To decide: the `pages`/`home` special cases, locale-less i18n
+entries. Done: openArrayEditor (2002ab1). Won't-fix: `includeDb` (shelved
+store).
+
+#63 remaining: revert button on an untracked file; `ALLOWED_ORIGINS` vs
+`Sec-Fetch-Site` docs; doctor-publish's shared tmpdir flake; document the
+local doctor bin. Done: server paths in responses. Obsolete: the DB store
+item. Moved: staging is #84.
+
+## Proposed wave
+
+Each lane in its own worktree, red-first, integrated by the parent.
+
+1. **Publish staging** (`server/api/publish.js`, `git.js`): #84, #83, #54's
+   unverified toast.
+2. **Git client** (`createGitClient` + one `execFile` helper): #64 then #67,
+   with #59's barrier moved to `build.check` first.
+3. **Editor rendering** (form-generator render/handlers, field-widgets): #88,
+   #87, #56.
+4. **Editor read-back** (form-generator extract/cleanup, content-problems):
+   #61 part 1, #37's last test, #69 pinned, #70 option C.
+5. **Doctor and tests**: #73, #86's warning, #77 plus one shared
+   `chromiumPath()` helper, #2.
+6. **Server small**: #40, #19 (tinyglobby), #10's rsync guard, #3 (delete
+   `server/api/build.js`).
+
+Later: #82, #85, #60, #46, #47, the #62/#74 preview owner, #27, #75, #51,
+#49, #50/#52.
+
+## Done
+
+| Lane | Issues | Notes |
+|---|---|---|
+| 1 publish staging | #84, #83, #54 (toast) | 409 `localChangesBody` when an incoming change overlaps a hand edit |
+| 2 git client | #59, #64, #67 | `server/utils/git-exec.js`; simple-git 4.0.2; NixOS checkout unit hardened but NOT evaluated with Nix |
+| 3 editor rendering | #88, #87, #56 | textareas fit content; `.meta({ multiline })` |
+| 4 editor read-back | #61 (part 1), #37, #69, #70 | `DELIBERATE` byte changes in blank-optional-round-trip |
+| 5 doctor and tests | #73, #86 (warn), #77, #2 | playwright-core pinned 1.57.0 |
+| 6 server | #40, #19 (2 items), #10 (part 1), #3 | fail2ban regex `\] auth\.failed ip=<ADDR>$` |
+| - | #89 | Found by the ops rollout: CmsVideo's `<style>` through linked node_modules |
+
+Seams the parent fixed: the #83 worktree rebase used `git -C`, which simple-git 4
+refuses (own client, `gitClientAt`); publish-sync's barrier moved from `pull` to
+`rebase`.
+
+## Follow-ups
+
+Small, fix next:
+- A new block starts an optional number at 0 (`createEmptyBlock`).
+- A `z.literal(5)`/`z.literal(true)` with nothing stored saves `"5"`/`"true"`.
+- `/api/git/pull` still pulls in the live checkout (merge mode), so unrelated
+  dirty files still block it; move it onto the worktree rebase + `reset --keep`.
+- #90: CmsVideo's video glob emits every rendered video twice.
+- dashboard-layout-browser hung once after passing (1 in 5 runs); watch.
+
+Larger or to file:
+- Git hardening gaps: merge drivers, `core.sshCommand`, `credential.helper`,
+  `url.*.insteadOf`; the publish check's build still inherits ambient `GIT_*`.
+- LFS sites: the check's worktree holds pointer text (untested with git-lfs).
+- Upstream: Astro's `isPathInRoot`/compile-metadata key mismatch (#89).
+- rsync deploy has no timeout; `z.array(z.array(z.string()))` renders as text.
+
+Before release: the ops session retests #89 (and simple-git 4 on the box) on the
+test editor with the packed tarball; evaluate the NixOS module change; post the
+drafted issue comments and close #2, #3, #37, #40, #59, #61 (part 1), #64, #67,
+#69, #70, #73, #77, #83, #84, #86, #88, #89.
