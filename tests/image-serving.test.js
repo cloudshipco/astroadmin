@@ -150,11 +150,14 @@ await check('without a session, every admin-served folder refuses (draft files a
 // --- in a real browser ---------------------------------------------------
 // The headers above are only what the server says; what they do is the
 // browser's. A video opened directly is a media document: under `sandbox`
-// alone its origin is opaque and Chromium loads no media whatever media-src
-// says (measured on Chromium 151: networkState NO_SOURCE with media-src
-// 'self' and with media-src *), so a video gets `sandbox allow-same-origin`
-// and `media-src 'self'`. Without allow-scripts nothing runs, and the
-// sandbox's automatic-features flag stops autoplay: the viewer starts it.
+// alone its origin is opaque and its request for the video is cross-origin
+// (measured on Chromium 151: `Sec-Fetch-Site: cross-site`, no cookie whether
+// SameSite Strict or Lax, so /images answers 401; an ungated 206 is still
+// discarded, networkState NO_SOURCE, unless it carries
+// Access-Control-Allow-Origin; media-src 'self', * or none makes no
+// difference). So a video gets `sandbox allow-same-origin` and
+// `media-src 'self'`. Without allow-scripts nothing runs, and the sandbox's
+// automatic-features flag stops autoplay: the viewer starts it.
 const browser = await chromium.launch({ executablePath: chromiumPath() });
 const context = await browser.newContext();
 await context.addCookies([{ name: cookie.split('=')[0], value: cookie.slice(cookie.indexOf('=') + 1), url: base }]);

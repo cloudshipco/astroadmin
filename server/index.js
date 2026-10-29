@@ -258,12 +258,16 @@ export async function createServer() {
   // opaque origin and no script. nosniff keeps a file from being re-read as
   // HTML.
   //
-  // A video opened directly is a media document that loads the video itself.
-  // With an opaque origin Chromium loads no media whatever media-src allows
-  // (measured, Chromium 151), so a video, and only a video, keeps its own
-  // origin (`allow-same-origin`) and may load media from it. The sandbox still
-  // allows no script (no `allow-scripts`, which also stops autoplay: the
-  // viewer starts it), and nosniff keeps the file a video.
+  // A video opened directly is a media document that requests the video
+  // itself. From an opaque origin that request is cross-origin (measured,
+  // Chromium 151: `Sec-Fetch-Site: cross-site`), so it carries no session
+  // cookie (SameSite Strict or Lax) and this route answers 401; and even a
+  // 206 with the video is discarded unless it carries CORS permission. No
+  // media-src (`'self'`, `*`, or none) changes either. So a video, and only a
+  // video, keeps its own origin (`allow-same-origin`): its request is then
+  // same-origin, with the cookie. The sandbox still allows no script (no
+  // `allow-scripts`, which also stops autoplay: the viewer starts it), and
+  // nosniff keeps the file a video.
   const SITE_FILE_POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox";
   const VIDEO_FILE_POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; media-src 'self'; sandbox allow-same-origin";
   const siteFileOptions = {

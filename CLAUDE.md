@@ -350,8 +350,10 @@ runner aggregating them). Most run server-less and need env vars:
   Now checked in Chromium on every run: the SVG opened directly runs no script (seen red with
   its CSP removed), and a video (`.mp4`/`.webm` only) opened directly loads and plays when
   the viewer starts it (#80). A video gets `media-src 'self'; sandbox allow-same-origin`:
-  under an opaque-origin sandbox Chromium 151 loads no media whatever media-src says
-  (measured with `'self'` and `*`). Still no `allow-scripts`, so nothing runs and it does not
+  under an opaque-origin sandbox the media document's request is cross-origin (Chromium
+  151: `Sec-Fetch-Site: cross-site`), so it carries no session cookie (Strict or Lax) and
+  gets a 401, and even an ungated 206 is discarded without `Access-Control-Allow-Origin`;
+  media-src (`'self'`, `*`, none) changes neither. Still no `allow-scripts`, so nothing runs and it does not
   autoplay. Playwright's `waitForFunction` never settles in such a document (it polls by
   rAF in the page); poll with `evaluate()`. They also need a session (401 without one, like the API): `src/assets` and
   `src/content/assets` hold unpublished drafts. The editor's `<img>` requests are
