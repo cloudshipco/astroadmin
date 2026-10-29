@@ -5,7 +5,10 @@
  * ?.toString()` (astro/dist/content/loaders/file.js). The files store
  * compared `item.id === entryId` with the slug from the URL, always a string,
  * so an entry `{id: 1}` was never found: a save appended a duplicate, and a
- * match would have rewritten 1 as "1".
+ * match would have rewritten 1 as "1". An entry keyed by `slug` (no id) got
+ * `id: <slug>` added on every save, which a `.strict()` schema refuses, and
+ * its slug box took edits the store never honoured; it is now read-only, as
+ * a file() id is (#72), while a slug beside an id stays ordinary data.
  *
  * Through the real parser (a throwaway site, real zod 4), the real
  * createServer() app and the real renderer in happy-dom: each entry is opened,
@@ -55,8 +58,41 @@ export const collections = {
     loader: file('src/content/numbered.json'),
     schema: z.object({ id: z.number(), label: z.string() }),
   }),
+  // Keyed by slug: strict, so an \`id\` key the store adds is refused.
+  bySlug: defineCollection({
+    loader: file('src/content/by-slug.json'),
+    schema: z.object({ slug: z.string(), title: z.string() }).strict(),
+  }),
+  // Keyed by id, with a slug that is ordinary data (a URL part).
+  linked: defineCollection({
+    loader: file('src/content/linked.json'),
+    schema: z.object({ id: z.string(), slug: z.string(), title: z.string() }),
+  }),
 };
 `);
+const BY_SLUG_JSON = `[
+  {
+    "slug": "first",
+    "title": "First"
+  },
+  {
+    "slug": "second",
+    "title": "Second"
+  }
+]
+`;
+const bySlugPath = path.join(projectRoot, 'src/content/by-slug.json');
+writeProjectFile('src/content/by-slug.json', BY_SLUG_JSON);
+const LINKED_JSON = `[
+  {
+    "id": "about",
+    "slug": "about-us",
+    "title": "About"
+  }
+]
+`;
+const linkedPath = path.join(projectRoot, 'src/content/linked.json');
+writeProjectFile('src/content/linked.json', LINKED_JSON);
 
 // Indented by hand (four spaces, one entry inline): an untouched entry keeps
 // its own text only if the save leaves it alone.
@@ -88,7 +124,7 @@ async function check(name, fn) {
   }
 }
 
-const { generateForm, extractFormData, setupFormHandlers, bindOriginalValues } = await import('../ui/form-generator.js');
+const { generateForm, extractFormData, setupFormHandlers, bindOriginalValues, newEntryValues } = await import('../ui/form-generator.js');
 const { createServer } = await import('../server/index.js');
 const { app } = await createServer();
 const server = app.listen(0, '127.0.0.1');
@@ -165,6 +201,80 @@ try {
     const stored = JSON.parse(fs.readFileSync(numberedPath, 'utf8'));
     assert.equal(stored.length, 3);
     assert.deepEqual(stored[2], { id: 3, label: 'Trois' });
+  });
+
+  // --- Entries keyed by slug ---------------------------------------------------
+  // With no id, Astro keys an item by its slug. The save wrote `id: <slug>`
+  // into it, a key the entry never had and a .strict() schema refuses, and
+  // the slug box took edits the store never honoured as the entry's name.
+
+  /** An entry rendered and bound as the dashboard does. */
+  async function renderStoredEntry(collection, slug) {
+    const schema = (await loadCollection(collection)).schema;
+    const entry = await getJson(`/api/content/${collection}/${slug}`);
+    const form = document.createElement('form');
+    form.innerHTML = generateForm(schema, entry.data);
+    document.body.appendChild(form);
+    return form;
+  }
+
+  await check('slug-keyed: the slug is shown read-only, like a file() id', async () => {
+    const form = await renderStoredEntry('bySlug', 'second');
+    const slugControl = form.querySelector('[name="slug"]');
+    assert.ok(slugControl, 'control: the slug is in the form');
+    assert.equal(slugControl.value, 'second');
+    assert.equal(slugControl.readOnly, true, 'the slug control is editable');
+    assert.equal(form.querySelector('[name="title"]').readOnly, false, 'control: the title is editable');
+    form.remove();
+  });
+
+  await check('slug-keyed: a save adds no id, keeps the entry where it was, and is valid', async () => {
+    fs.writeFileSync(bySlugPath, BY_SLUG_JSON);
+    const { data } = await editEntry('bySlug', 'second', 'title', 'Second edit');
+    const result = await saveEntry('bySlug', 'second', data);
+    const text = fs.readFileSync(bySlugPath, 'utf8');
+    assert.equal(JSON.parse(text)[1].title, 'Second edit', 'positive control: the edit was saved');
+    assert.equal(text, BY_SLUG_JSON.replace('"Second"', '"Second edit"'), 'only the title changed');
+    assert.equal(result.validation?.status, 'valid', `the saved entry fails its schema: ${JSON.stringify(result.validation)}`);
+  });
+
+  await check('slug-keyed: a slug sent by another client does not rename the entry', async () => {
+    fs.writeFileSync(bySlugPath, BY_SLUG_JSON);
+    await saveEntry('bySlug', 'first', { slug: 'renamed', title: 'First' });
+    assert.equal(fs.readFileSync(bySlugPath, 'utf8'), BY_SLUG_JSON);
+  });
+
+  await check('slug-keyed: a new entry is created under its slug, with no id', async () => {
+    fs.writeFileSync(bySlugPath, BY_SLUG_JSON);
+    const schema = (await loadCollection('bySlug')).schema;
+    const startValues = newEntryValues(schema, 'third');
+    assert.deepEqual(startValues, { slug: 'third' }, 'the new-entry form does not start with the chosen slug');
+    const form = document.createElement('form');
+    form.innerHTML = generateForm(schema, startValues);
+    document.body.appendChild(form);
+    setupFormHandlers(form, () => {});
+    assert.equal(form.querySelector('[name="slug"]').readOnly, true, 'the new slug is editable');
+    const titleControl = form.querySelector('[name="title"]');
+    titleControl.value = 'Third';
+    titleControl.dispatchEvent(new Event('input', { bubbles: true }));
+    const result = await saveEntry('bySlug', 'third', extractFormData(form, schema));
+    form.remove();
+    const stored = JSON.parse(fs.readFileSync(bySlugPath, 'utf8'));
+    assert.deepEqual(stored[2], { slug: 'third', title: 'Third' });
+    assert.equal(result.validation?.status, 'valid', JSON.stringify(result.validation));
+  });
+
+  await check('id-keyed control: a slug beside an id is ordinary data, and its edit is saved', async () => {
+    fs.writeFileSync(linkedPath, LINKED_JSON);
+    const form = await renderStoredEntry('linked', 'about');
+    assert.equal(form.querySelector('[name="id"]').readOnly, true, 'control: the id is read-only');
+    assert.equal(form.querySelector('[name="slug"]').readOnly, false, 'a slug beside an id became read-only');
+    form.remove();
+    const schema = (await loadCollection('linked')).schema;
+    assert.deepEqual(newEntryValues(schema, 'contact'), { id: 'contact' }, 'a new entry names its id, not its slug');
+    const { data } = await editEntry('linked', 'about', 'slug', 'about-the-team');
+    await saveEntry('linked', 'about', data);
+    assert.equal(fs.readFileSync(linkedPath, 'utf8'), LINKED_JSON.replace('"about-us"', '"about-the-team"'));
   });
 } finally {
   server.close();

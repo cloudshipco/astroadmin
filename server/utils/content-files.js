@@ -177,6 +177,59 @@ export function fileEntryId(item) {
   return entryId === '' ? undefined : entryId;
 }
 
+/** Whether an item has a key Astro reads as its id (`??`: not null or undefined). */
+function hasIdentityValue(value) {
+  return value !== undefined && value !== null;
+}
+
+/**
+ * The key an existing item is keyed by: `id`, or `slug` when it has no id
+ * (Astro's `item.id ?? item.slug`).
+ * @returns {'id'|'slug'}
+ */
+function identityKeyOf(item) {
+  return hasIdentityValue(item.id) ? 'id' : 'slug';
+}
+
+/**
+ * The key a NEW entry is keyed by. An id the form sent wins (Astro reads it
+ * first); otherwise the collection's own convention: slug when every entry is
+ * keyed by slug, id when any is. An empty collection follows the form (the
+ * renderer starts a new entry with its id field, else its slug field).
+ * @returns {'id'|'slug'}
+ */
+function newEntryIdentityKey(arr, entryData) {
+  if (hasIdentityValue(entryData.id)) return 'id';
+  if (arr.length > 0) return arr.every((item) => identityKeyOf(item) === 'slug') ? 'slug' : 'id';
+  return hasIdentityValue(entryData.slug) ? 'slug' : 'id';
+}
+
+/**
+ * An entry as it is written: what the editor sent, with its identity fixed.
+ * An existing entry keeps the key it is keyed by, with its stored value and
+ * type (`id: 1` stays the number 1); renaming it would orphan the entry and
+ * break references to it. A slug-keyed entry gets no `id` it did not have (a
+ * `.strict()` schema refuses one, and Astro would key the entry by it). A new
+ * entry is written under the name it was created with, keeping the form's
+ * value when it is that name (a number input's 5 stays 5).
+ */
+function withEntryIdentity(storedItem, arr, entryId, entryData) {
+  const next = { ...entryData };
+  if (storedItem) {
+    const identityKey = identityKeyOf(storedItem);
+    next[identityKey] = storedItem[identityKey];
+    if (identityKey === 'slug') {
+      if ('id' in storedItem) next.id = storedItem.id;
+      else delete next.id;
+    }
+    return next;
+  }
+  const identityKey = newEntryIdentityKey(arr, entryData);
+  const sentValue = entryData[identityKey];
+  next[identityKey] = hasIdentityValue(sentValue) && String(sentValue) === entryId ? sentValue : entryId;
+  return next;
+}
+
 /** The index of the item whose entry id (fileEntryId) is `entryId`, or -1. */
 function findEntryIndex(arr, entryId) {
   return arr.findIndex((item) => fileEntryId(item) === entryId);
@@ -335,9 +388,7 @@ async function writeFileCollectionEntry(filePath, entryId, entryData) {
   await withFileWriteQueue(filePath, async () => {
     const { array: arr, raw } = await readFileCollection(filePath, { missingOk: true });
     const index = findEntryIndex(arr, entryId);
-    // The stored id, not the URL's text of it: `id: 1` stays the number 1.
-    const storedId = index >= 0 ? arr[index].id : undefined;
-    const next = { ...entryData, id: storedId ?? entryId };
+    const next = withEntryIdentity(index >= 0 ? arr[index] : null, arr, entryId, entryData);
     if (index >= 0) {
       // Preserve array order (position), and the entry's own key order: the
       // editor sends `id` last and keys in form order.

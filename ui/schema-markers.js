@@ -24,10 +24,13 @@ export const IMAGE_MARKER = 'x-astroadmin-image';
 export const DATE_MARKER = 'x-astroadmin-date';
 
 /**
- * A file() collection's top-level `id`. The store writes a file() entry under
- * the id it was opened or created with (renaming it would orphan the entry and break references to
- * it), so the form shows this field read-only rather than as a box whose
- * edits are silently dropped (#72). A glob() entry's `id`-named field is
- * ordinary data and is not marked.
+ * A file() collection's top-level `id` and `slug`: the keys Astro's file()
+ * loader can key an entry by (`id ?? slug`). The store writes a file() entry
+ * under the identity it was opened or created with (renaming it would orphan
+ * the entry and break references to it), so the form shows that field
+ * read-only rather than as a box whose edits are silently dropped (#72). A
+ * marked `slug` is the identity only of an entry with no id; beside an id it
+ * is ordinary data (ui/form-generator.js isEntryIdentityField). A glob()
+ * entry's `id` or `slug` field is ordinary data and is not marked.
  */
 export const ENTRY_ID_MARKER = 'x-astroadmin-entry-id';

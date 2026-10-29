@@ -2,7 +2,7 @@
  * A file() entry's `id` is shown, but cannot be edited (#72).
  *
  * The files store writes a file() entry under the id it was opened (or
- * created) with: `writeFileCollectionEntry` sets `id: entryId` over whatever
+ * created) with: `writeFileCollectionEntry` writes the stored id over whatever
  * the form sent, because a renamed id would orphan the entry and break every
  * reference to it. A schema that declares `id: z.string()` used to get an
  * ordinary text box: an edit autosaved with a 200, the file kept the old id,

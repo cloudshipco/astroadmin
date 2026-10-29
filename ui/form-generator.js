@@ -223,16 +223,33 @@ function parseStoredDate(value) {
 /**
  * The values a NEW entry's form starts with: its entry id, when the schema
  * declares one (a file() entry is saved under the name chosen in the "Create
- * New" dialog, so its read-only id field shows that name). Empty otherwise.
+ * New" dialog, so its read-only id field shows that name). The id, as Astro
+ * reads `id ?? slug`: a marked `slug` only when there is no marked `id`, so
+ * a slug beside an id stays the editor's to fill. Empty otherwise.
  * @param {object} schema - the collection's schema
  * @param {string} entryName - the slug the new entry is created as
  */
 export function newEntryValues(schema, entryName) {
-  const values = {};
-  for (const [key, fieldSchema] of Object.entries(schema?.properties || {})) {
-    if (fieldSchema?.[ENTRY_ID_MARKER] === true) values[key] = entryName;
-  }
-  return values;
+  const properties = schema?.properties || {};
+  const identityKey = ['id', 'slug'].find((key) => properties[key]?.[ENTRY_ID_MARKER] === true);
+  return identityKey ? { [identityKey]: entryName } : {};
+}
+
+/**
+ * Whether a field is the entry's identity, shown read-only: a field the
+ * parser marks (ENTRY_ID_MARKER, a file() collection's top-level `id` or
+ * `slug`), except a `slug` in an entry that has an id. Astro keys that entry
+ * by its id, so its slug is ordinary data. A marked `id` is always read-only,
+ * even when empty: an id typed into a slug-keyed entry would re-key it, and
+ * the store keeps the stored one.
+ * @param {string} name - the field's own name
+ * @param {object} schema - the field's schema, nullable unwrapped
+ * @param {object} siblingData - the values beside it (the entry's, at the top level)
+ */
+function isEntryIdentityField(name, schema, siblingData) {
+  if (schema[ENTRY_ID_MARKER] !== true) return false;
+  if (name !== 'slug') return true;
+  return siblingData.id === undefined || siblingData.id === null;
 }
 
 /** JSON Schema numeric types: zod's z.number() is 'number', .int() is 'integer'. */
@@ -293,11 +310,12 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     return `<input type="hidden" name="${fullPath}" id="${id}" value="${escapeHtml(String(schema.const))}" data-schema-const>`;
   }
 
-  // A file() entry's id is fixed: the store writes the entry under the id it
-  // was opened or created with, so an editable box would take an edit the
-  // save then drops (#72). Shown read-only, so the editor can see it, and
-  // still named, so it is read back like any other control.
-  if (schema[ENTRY_ID_MARKER] === true) {
+  // A file() entry's id (or the slug it is keyed by) is fixed: the store
+  // writes the entry under the identity it was opened or created with, so an
+  // editable box would take an edit the save then drops (#72). Shown
+  // read-only, so the editor can see it, and still named, so it is read back
+  // like any other control.
+  if (isEntryIdentityField(name, schema, siblingData)) {
     const hintId = `${id}_hint`;
     return `
       <div class="form-group">

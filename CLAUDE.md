@@ -551,7 +551,12 @@ queue, so the old body is never written back.
   `(id ?? slug)?.toString()` (`fileEntryId` in `server/utils/content-files.js`), and its
   stored id is written back with its own type: a numeric `id: 2` is listed and opened as
   `"2"`, and a save edits it in place (no appended duplicate), keeps it the number 2, and
-  leaves the other entries' text alone. Real parser, app and renderer. ~1 s.
+  leaves the other entries' text alone. An entry keyed by `slug` (no id) keeps that key:
+  a save adds no `id` (a `.strict()` schema stays valid) and a sent slug does not rename
+  it; the parser marks `slug` as well as `id`, and the renderer shows a marked `slug`
+  read-only only in an entry with no id (`isEntryIdentityField`; a new entry starts with
+  `id`, else `slug`). Control: a slug beside an id is ordinary data and its edit is
+  saved. Real parser, app and renderer. ~1 s.
 - `bun tests/schema-references.test.js` — Astro's `reference()` parses (a string id;
   `z.array(reference(c))` a list) carrying `referenceCollection`, and `<base>Ids` resolves
   against the DECLARED collections (`<base>s`, `<base>`, `<base>es`, y->ies; nothing declared

@@ -34,12 +34,21 @@ import { IMAGE_MARKER, ENTRY_ID_MARKER, DATE_MARKER } from '../../ui/schema-mark
 
 export { IMAGE_MARKER, ENTRY_ID_MARKER, DATE_MARKER };
 
-/** Mark the entry id of a file() collection's schema (see ENTRY_ID_MARKER). */
+/**
+ * Mark the keys a file() collection's entries can be keyed by (see
+ * ENTRY_ID_MARKER): Astro's file() loader keys an item by `id ?? slug`, so
+ * both `id` and `slug` are marked when declared. Which one an entry is keyed
+ * by depends on the entry, not the schema (an optional id, or an id the
+ * schema does not declare but the item carries), so the renderer decides per
+ * entry: a marked `slug` is the identity only of an entry with no id.
+ */
 function markFileEntryId(jsonSchema) {
-  const idSchema = jsonSchema?.properties?.id;
-  // A z.literal id is already a hidden input (form-generator's const branch).
-  if (idSchema && typeof idSchema === 'object' && idSchema.const === undefined) {
-    idSchema[ENTRY_ID_MARKER] = true;
+  for (const identityKey of ['id', 'slug']) {
+    const identitySchema = jsonSchema?.properties?.[identityKey];
+    // A z.literal is already a hidden input (form-generator's const branch).
+    if (identitySchema && typeof identitySchema === 'object' && identitySchema.const === undefined) {
+      identitySchema[ENTRY_ID_MARKER] = true;
+    }
   }
 }
 
