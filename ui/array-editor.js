@@ -1,13 +1,13 @@
 /**
- * Array Item Editor Component
- * Modal for editing complex arrays with drag-to-reorder
+ * Array Item Editor
+ * Modal for editing one item of an array of objects (an array card, an inline
+ * array item, a block's nested item).
  *
  * The fields inside an item are rendered, wired, and read back by form-generator
- * — the same code the main editor form uses. This modal owns the list (add,
- * remove, reorder) and nothing about how an individual field looks or behaves.
+ * — the same code the main editor form uses. This modal owns nothing about how
+ * an individual field looks or behaves.
  */
 
-import { escapeHtml } from './escape-html.js';
 import { pushModal, removeModal } from './modal-stack.js';
 
 import {
@@ -15,8 +15,6 @@ import {
   setupFieldHandlers,
   extractItem,
   bindOriginalValues,
-  getItemPreview,
-  createEmptyArrayItem,
 } from './form-generator.js';
 
 // Fields inside the modal get their ids prefixed so they can't collide with the
@@ -29,198 +27,8 @@ const ITEM_ID_PREFIX = 'item_';
 // band grow without limit would put an item editor above the pickers it opens.
 const MAX_STACK_DEPTH = 9;
 
-let currentCallback = null;
-let currentItems = [];
-let currentSchema = null;
-let draggedItem = null;
-let draggedIndex = null;
-let dropPosition = null;
-
 /**
- * Open the array editor modal
- * @param {string} fieldName - Display name for the array
- * @param {Array} items - Current array items
- * @param {Object} schema - Schema for array items
- * @param {Function} onSave - Callback when saved
- */
-export function openArrayEditor(fieldName, items, schema, onSave) {
-  currentCallback = onSave;
-  currentItems = JSON.parse(JSON.stringify(items || []));
-  currentSchema = schema;
-
-  let modal = document.getElementById('arrayEditorModal');
-  if (!modal) {
-    modal = createModal();
-    document.body.appendChild(modal);
-    setupModalEvents(modal);
-  }
-
-  // Update title
-  modal.querySelector('[data-title]').textContent = `Edit ${fieldName}`;
-
-  modal.classList.remove('hidden');
-  pushModal(modal, closeArrayEditor);
-
-  renderItems();
-}
-
-/**
- * Close the array editor modal
- */
-export function closeArrayEditor() {
-  const modal = document.getElementById('arrayEditorModal');
-  if (modal) {
-    modal.classList.add('hidden');
-    removeModal(modal);
-  }
-  currentCallback = null;
-  currentItems = [];
-  currentSchema = null;
-}
-
-/**
- * Create the modal HTML structure
- */
-function createModal() {
-  const modal = document.createElement('div');
-  modal.id = 'arrayEditorModal';
-  modal.className = 'array-editor-overlay hidden';
-  modal.innerHTML = `
-    <div class="array-editor-modal">
-      <div class="array-editor-header">
-        <h2 class="array-editor-title" data-title>Edit Items</h2>
-        <button type="button" class="array-editor-close" data-close>&times;</button>
-      </div>
-      <div class="array-editor-body">
-        <div class="array-editor-list" data-list></div>
-        <div class="array-editor-empty hidden" data-empty>
-          <p>No items yet. Add one below.</p>
-        </div>
-      </div>
-      <div class="array-editor-footer">
-        <button type="button" class="btn btn-secondary" data-add>+ Add Item</button>
-        <div class="array-editor-actions">
-          <button type="button" class="btn btn-secondary" data-cancel>Cancel</button>
-          <button type="button" class="btn btn-primary" data-save>Save Changes</button>
-        </div>
-      </div>
-    </div>
-  `;
-  return modal;
-}
-
-/**
- * Setup modal event listeners
- */
-function setupModalEvents(modal) {
-  modal.querySelector('[data-close]').addEventListener('click', closeArrayEditor);
-  modal.querySelector('[data-cancel]').addEventListener('click', closeArrayEditor);
-
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) closeArrayEditor();
-  });
-
-  modal.querySelector('[data-add]').addEventListener('click', () => {
-    currentItems.push(createEmptyArrayItem(currentSchema));
-    renderItems();
-    // Open editor for new item
-    openItemEditor(currentItems.length - 1, { isNew: true });
-  });
-
-  modal.querySelector('[data-save]').addEventListener('click', () => {
-    if (currentCallback) {
-      currentCallback(currentItems);
-      closeArrayEditor();
-    }
-  });
-
-  const list = modal.querySelector('[data-list]');
-
-  list.addEventListener('click', (e) => {
-    const editBtn = e.target.closest('[data-edit]');
-    if (editBtn) {
-      openItemEditor(parseInt(editBtn.dataset.edit, 10));
-      return;
-    }
-
-    const removeBtn = e.target.closest('[data-remove]');
-    if (removeBtn) {
-      currentItems.splice(parseInt(removeBtn.dataset.remove, 10), 1);
-      renderItems();
-    }
-  });
-
-  // Drag and drop
-  list.addEventListener('dragstart', handleDragStart);
-  list.addEventListener('dragend', handleDragEnd);
-  list.addEventListener('dragover', handleDragOver);
-  list.addEventListener('drop', handleDrop);
-}
-
-/**
- * Render items in the list
- */
-function renderItems() {
-  const modal = document.getElementById('arrayEditorModal');
-  const list = modal.querySelector('[data-list]');
-  const empty = modal.querySelector('[data-empty]');
-
-  if (currentItems.length === 0) {
-    list.innerHTML = '';
-    empty.classList.remove('hidden');
-    return;
-  }
-
-  empty.classList.add('hidden');
-
-  list.innerHTML = currentItems.map((item, index) => {
-    const preview = getItemPreview(item, currentSchema, 80);
-
-    return `
-      <div class="array-editor-item" draggable="true" data-index="${index}">
-        <div class="array-editor-item-handle" title="Drag to reorder">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/>
-            <circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/>
-            <circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>
-          </svg>
-        </div>
-        <div class="array-editor-item-content" data-edit="${index}">
-          <div class="array-editor-item-title">${escapeHtml(preview.title) || '<span class="text-gray-400">Untitled</span>'}</div>
-          ${preview.subtitle ? `<div class="array-editor-item-subtitle">${escapeHtml(preview.subtitle)}</div>` : ''}
-        </div>
-        <button type="button" class="array-editor-item-edit" data-edit="${index}" title="Edit">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-        </button>
-        <button type="button" class="array-editor-item-remove" data-remove="${index}" title="Remove">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
-        </button>
-      </div>
-    `;
-  }).join('');
-}
-
-/**
- * Open the editor for one item of the array currently being edited
- */
-function openItemEditor(index, { isNew = false } = {}) {
-  const item = currentItems[index];
-  if (!item) return;
-
-  openSingleItemEditor(item, currentSchema, (updatedItem) => {
-    currentItems[index] = updatedItem;
-    renderItems();
-  }, { isNew });
-}
-
-/**
- * Open an editor for a single item, with or without the array list behind it.
+ * Open an editor for a single item.
  * @param {Object} item - The item to edit
  * @param {Object} schema - Schema for the item
  * @param {Function} onSave - Called with the updated item
@@ -252,7 +60,7 @@ export function openSingleItemEditor(item, schema, onSave, { isNew = false } = {
 
   editModal.className = 'array-item-edit-overlay';
   // The CSS turns this into z-index 60 + depth, keeping every item editor above the
-  // array list (50) and below the gallery/textarea (70) and image library (80).
+  // primary modals (50) and below the gallery/textarea (70) and image library (80).
   editModal.style.setProperty('--stack-depth', String(depth));
   editModal.innerHTML = `
     <div class="array-item-edit-modal">
@@ -320,73 +128,3 @@ export function openSingleItemEditor(item, schema, onSave, { isNew = false } = {
     if (firstInput) firstInput.focus();
   }, 100);
 }
-
-/**
- * Drag handlers
- */
-function handleDragStart(e) {
-  const item = e.target.closest('.array-editor-item');
-  if (!item) return;
-
-  draggedItem = item;
-  draggedIndex = parseInt(item.dataset.index, 10);
-  item.classList.add('dragging');
-  e.dataTransfer.effectAllowed = 'move';
-}
-
-function handleDragEnd(e) {
-  const item = e.target.closest('.array-editor-item');
-  if (item) item.classList.remove('dragging');
-
-  draggedItem = null;
-  draggedIndex = null;
-  dropPosition = null;
-
-  document.querySelectorAll('.array-editor-item').forEach(el => {
-    el.classList.remove('drop-before', 'drop-after');
-  });
-}
-
-function handleDragOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-
-  const item = e.target.closest('.array-editor-item');
-  if (!item || item === draggedItem) return;
-
-  const rect = item.getBoundingClientRect();
-  const midY = rect.top + rect.height / 2;
-  const position = e.clientY < midY ? 'before' : 'after';
-  const itemIndex = parseInt(item.dataset.index, 10);
-
-  document.querySelectorAll('.array-editor-item').forEach(el => {
-    el.classList.remove('drop-before', 'drop-after');
-  });
-
-  item.classList.add(position === 'before' ? 'drop-before' : 'drop-after');
-  dropPosition = { index: itemIndex, position };
-}
-
-function handleDrop(e) {
-  e.preventDefault();
-
-  if (!draggedItem || !dropPosition) return;
-
-  const fromIndex = draggedIndex;
-  let toIndex = dropPosition.index;
-
-  if (dropPosition.position === 'after') toIndex += 1;
-  if (fromIndex < toIndex) toIndex -= 1;
-
-  if (fromIndex !== toIndex) {
-    const [moved] = currentItems.splice(fromIndex, 1);
-    currentItems.splice(toIndex, 0, moved);
-    renderItems();
-  }
-
-  document.querySelectorAll('.array-editor-item').forEach(el => {
-    el.classList.remove('drop-before', 'drop-after');
-  });
-  dropPosition = null;
-}
-

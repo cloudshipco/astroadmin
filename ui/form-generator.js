@@ -2453,42 +2453,6 @@ function setupArrayHandlers(formElement, onBlockChange) {
     }
   });
 
-  // Open array editor for complex arrays (compact trigger)
-  formElement.addEventListener('click', async (e) => {
-    const openBtn = e.target.closest('[data-open-array-editor]');
-    if (openBtn) {
-      const container = openBtn.closest('[data-array-editor]');
-      if (!container) return;
-
-      const fieldName = container.dataset.fieldName;
-      const schema = JSON.parse(container.dataset.schema || '{}');
-      const items = JSON.parse(container.dataset.items || '[]');
-      const hiddenInput = container.parentElement.querySelector('[data-array-data]');
-
-      // Dynamic import to avoid circular dependencies
-      const { openArrayEditor } = await import('./array-editor.js');
-
-      openArrayEditor(fieldName, items, schema, (updatedItems) => {
-        // Update hidden input and container data
-        if (hiddenInput) {
-          hiddenInput.value = JSON.stringify(updatedItems);
-        }
-        container.dataset.items = JSON.stringify(updatedItems);
-
-        // Update preview text
-        const info = container.querySelector('.array-field-compact-info');
-        if (info) {
-          const count = updatedItems.length;
-          info.textContent = count === 0 ? 'No items' :
-                            count === 1 ? '1 item' : `${count} items`;
-        }
-
-        // Trigger change callback
-        if (onBlockChange) onBlockChange();
-      });
-    }
-  });
-
   // Inline array cards - Edit card
   formElement.addEventListener('click', async (e) => {
     const editBtn = e.target.closest('[data-edit-card]');
