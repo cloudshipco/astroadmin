@@ -16,7 +16,7 @@ import express from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import { recordDoctorAfterCheck } from '../doctor/editor.js';
 import { getConfig } from '../config.js';
 import { deploy, validateDeployConfig } from '../utils/deploy.js';
@@ -28,12 +28,20 @@ import { resolveLiveUrl } from '../../ui/live-url.js';
 import { buildProblems } from '../utils/build-failure.js';
 import { withCheckoutExclusive } from '../utils/checkout-lock.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
+import { GIT_ENVIRONMENT } from '../utils/git-exec.js';
 
 const router = express.Router();
 // (Helpers are exported for reuse by api/git.js — keep one definition.)
 
+/**
+ * Every simple-git client the admin uses. simple-git 4 drops ambient GIT_*
+ * variables unless allowed: the allowed ones are GIT_ENVIRONMENT
+ * (utils/git-exec.js), shared with the execFile helpers.
+ */
 export function createGitClient(fullConfig) {
-  return simpleGit(fullConfig.paths.projectRoot);
+  return simpleGit(fullConfig.paths.projectRoot, {
+    allowEnvironment: [...GIT_ENVIRONMENT],
+  });
 }
 
 async function getStagedFilesForPaths(git, gitPaths) {

@@ -10,16 +10,13 @@
  * with auto-install off; when it is missing, the caller refuses.
  */
 
-import { execFile } from 'child_process';
 // Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
 // while child processes come and go can lose its completion and never settle,
 // hanging the process at 0% CPU. These paths run git and builds, so they use
 // the sync calls (small files, bounded walks).
 import fs from 'fs';
 import path from 'path';
-import { promisify } from 'util';
-
-const execFileAsync = promisify(execFile);
+import { runGit } from './git-exec.js';
 
 export const ASTRO_NOT_INSTALLED_MESSAGE = "astro is not installed in this site (no node_modules/astro in its directory or above it in the repository); run the site's install first.";
 
@@ -51,7 +48,7 @@ export async function findAstroExecutable(projectRoot) {
   let directory = fs.realpathSync(projectRoot);
   let top = directory;
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd: projectRoot });
+    const stdout = await runGit(projectRoot, ['rev-parse', '--show-toplevel']);
     top = fs.realpathSync(stdout.trim());
   } catch {
     // not a repository: only the site's own node_modules

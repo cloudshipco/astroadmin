@@ -16,7 +16,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import { buildResultForEditor, publishFailureMessage } from '../server/api/publish.js';
 import { runProductionBuildIn } from '../server/utils/build.js';
 import { readJson, failureText } from '../ui/api-response.js';

@@ -5,17 +5,15 @@
  */
 
 import { parse } from '@babel/parser';
-import { execFile, spawn } from 'child_process';
+import { spawn } from 'child_process';
 // Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
 // while child processes come and go can lose its completion and never settle,
 // hanging the process at 0% CPU. These paths run git and builds, so they use
 // the sync calls (small files, bounded walks).
 import fs from 'fs';
 import path from 'path';
-import { promisify } from 'util';
 import { bunExecutable } from '../utils/astro-bin.js';
-
-const execFileAsync = promisify(execFile);
+import { runGit } from '../utils/git-exec.js';
 
 const ASTRO_CONFIG_NAMES = ['astro.config.mjs', 'astro.config.js', 'astro.config.ts', 'astro.config.mts', 'astro.config.cjs'];
 const INTEGRATION_MODULE = 'astroadmin/integration';
@@ -264,7 +262,7 @@ export async function readAstroConfigFacts(projectRoot) {
 }
 
 async function git(cwd, args) {
-  const { stdout } = await execFileAsync('git', args, { cwd });
+  const stdout = await runGit(cwd, args);
   return stdout.trim();
 }
 

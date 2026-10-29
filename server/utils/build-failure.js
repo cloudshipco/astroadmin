@@ -30,17 +30,15 @@
  * (SCHEMA_LOAD_TIMEOUT_MS), and on a timeout nothing is validated.
  */
 
-import { execFile, execFileSync } from 'child_process';
 import fs from 'fs';
 import { createRequire } from 'module';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { promisify } from 'util';
 import {
   fileLoaderItems, findImageFields, formatIssuePath, parseCommittedText, validateCommittedText,
 } from './content-validation.js';
+import { runGit, runGitSync } from './git-exec.js';
 
-const execFileAsync = promisify(execFile);
 
 /** What the editor is told when the output carries no error code. */
 export const NO_CODE_MESSAGE = "The site's build failed without naming an error; see the server log.";
@@ -301,8 +299,7 @@ export async function describeRefusedEntries({ output, siteDirs, projectRoot, co
 }
 
 async function gitOutput(cwd, args) {
-  const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 20 * 1024 * 1024 });
-  return stdout;
+  return runGit(cwd, args, { maxBuffer: 20 * 1024 * 1024 });
 }
 
 /**
@@ -436,8 +433,7 @@ async function commitSite({ projectRoot, commit, fullConfig, checkSiteDir, loadC
   const readAll = (files) => {
     const wanted = files.filter((file) => !texts.has(file));
     if (wanted.length === 0) return;
-    const raw = execFileSync('git', ['cat-file', '--batch'], {
-      cwd: projectRoot,
+    const raw = runGitSync(projectRoot, ['cat-file', '--batch'], {
       input: wanted.map((file) => `${commit}:${inRepo(file)}\n`).join(''),
       maxBuffer: 100 * 1024 * 1024,
     });

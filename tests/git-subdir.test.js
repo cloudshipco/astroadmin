@@ -18,7 +18,7 @@ import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import {
   getRepoPrefix,
   scopeStatusFiles,

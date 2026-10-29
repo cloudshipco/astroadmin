@@ -24,7 +24,7 @@
  * rather than checked approximately.
  */
 
-import { execFile, spawn } from 'child_process';
+import { spawn } from 'child_process';
 // Synchronous fs on purpose: under Bun 1.3.4 on macOS an fs/promises call made
 // while child processes come and go can lose its completion and never settle,
 // hanging the process at 0% CPU. These paths run git and builds, so they use
@@ -32,11 +32,9 @@ import { execFile, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { promisify } from 'util';
 import { ASTRO_NOT_INSTALLED_MESSAGE, DEFAULT_BUILD_ARGS, defaultAstroCommand } from './astro-bin.js';
 import { buildProblems, describeRefusedEntries } from './build-failure.js';
-
-const execFileAsync = promisify(execFile);
+import { runGit } from './git-exec.js';
 
 const DEFAULT_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
@@ -126,7 +124,7 @@ async function copyEnvFiles(projectRoot, siteDir) {
 }
 
 async function git(cwd, args) {
-  const { stdout } = await execFileAsync('git', args, { cwd });
+  const stdout = await runGit(cwd, args);
   return stdout.trim();
 }
 
