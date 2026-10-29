@@ -48,8 +48,17 @@ export const collections = {
     loader: glob({ pattern: '**/*.md', base: './src/content/pages' }),
     schema: z.object({ title: z.string() }),
   }),
+  // A name with '..' inside it is one ordinary path segment.
+  'faq..old': defineCollection({ schema: z.object({ title: z.string() }) }),
+  // A name the store refuses (a '..' segment): only it is listed empty.
+  '..': defineCollection({
+    loader: glob({ pattern: '**/*.md', base: './src/content/dotdot' }),
+    schema: z.object({ title: z.string() }),
+  }),
 };
 `);
+writeProjectFile('src/content/faq..old/q1.md', '---\ntitle: Question one\n---\nA.\n');
+writeProjectFile('src/content/dotdot/x.md', '---\ntitle: X\n---\nX.\n');
 
 const ENTRY_COUNT = 50;
 const people = Array.from({ length: ENTRY_COUNT }, (_, index) => ({
@@ -146,6 +155,30 @@ await check('a glob() collection reads each entry file once', async () => {
   const counts = await countReads('.md', () => getCollectionEntriesWithPreview('pages'));
   assert.equal(counts.reads, 2, counts.allReads.join('\n'));
   assert.deepEqual(counts.result.map((entry) => [entry.slug, entry.title]), [['about', 'About'], ['home', 'Home']]);
+});
+
+await check('a collection named with ".." inside a segment (faq..old) is listed', async () => {
+  const entries = await getCollectionEntriesWithPreview('faq..old');
+  assert.deepEqual(entries.map((entry) => [entry.slug, entry.title]), [['q1', 'Question one']]);
+  const all = await getAllCollections();
+  assert.equal(all.find((item) => item.name === 'faq..old')?.entryCount, 1);
+});
+
+await check('a collection the store refuses degrades only itself in the collection list', async () => {
+  const errors = [];
+  const originalError = console.error;
+  console.error = (...args) => { errors.push(args.map(String).join(' ')); };
+  let all;
+  try {
+    all = await getAllCollections();
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(all.find((item) => item.name === '..')?.entryCount, 0, JSON.stringify(all.map((item) => item.name)));
+  assert.equal(all.find((item) => item.name === 'pages')?.entryCount, 2, 'the others are listed');
+  assert.ok(errors.some((line) => line.includes('..')), 'and the refusal is in the server log');
+  // Asked for by name, it is still the caller's 400.
+  await assert.rejects(() => getCollectionEntriesWithPreview('..'), (error) => error.code === 'INVALID_CONTENT_PATH');
 });
 
 await check('an undeclared collection is still refused', async () => {

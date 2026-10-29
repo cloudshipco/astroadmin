@@ -368,8 +368,17 @@ export async function getAllCollections() {
 
   const collections = await Promise.all(
     collectionNames.map(async (name) => {
-      // One pass lists the entries and reads their titles.
-      const listed = await getCollectionEntriesWithData(name);
+      // One pass lists the entries and reads their titles. A collection the
+      // store refuses by name is listed empty, as any other unreadable one
+      // is: the whole list must not fail for it.
+      let listed;
+      try {
+        listed = await getCollectionEntriesWithData(name);
+      } catch (error) {
+        if (!isContentPathError(error)) throw error;
+        console.error(`Collection ${JSON.stringify(name)} cannot be listed:`, error.message);
+        listed = [];
+      }
       const entries = listed.map(({ slug }) => slug);
       const entryTitles = entryTitlesOf(listed);
       const schemaInfo = schemas[name] || {};

@@ -424,7 +424,7 @@ await check('git control: a single file reverts, a deleted file reverts, and a f
 // collection is refused before containment is checked), so each layer is
 // also pinned directly.
 
-const { assertContainedPath, assertSafeSlug, assertDeclaredCollection, isContentPathError } = await import('../server/utils/glob-files.js');
+const { assertContainedPath, assertSafeSlug, assertDeclaredCollection, isContentPathError, sanitizePath } = await import('../server/utils/glob-files.js');
 const articlesRoot = path.join(projectRoot, 'src/content/articles');
 async function refuses(promiseOrFn, label) {
   try {
@@ -452,6 +452,25 @@ await check('assertContainedPath: symlinks out (directory, file, dangling) are r
 await check('assertContainedPath control: existing, missing and nested-missing files inside are accepted', async () => {
   const inside = [path.join(articlesRoot, 'flat.md'), path.join(articlesRoot, 'nope.md'), path.join(articlesRoot, 'a/b/c.md')];
   for (const candidate of inside) assert.equal(await assertContainedPath(articlesRoot, candidate), candidate);
+});
+
+await check('sanitizePath: ".." is refused as a segment, not as a substring', async () => {
+  for (const value of ['..', '../x', 'x/..', 'a/../..', '../../etc', '..\\x', 'a\\..\\..\\b', 'a/..\\..', 42, null]) {
+    await refuses(() => sanitizePath(value), `sanitizePath ${JSON.stringify(value)}`);
+  }
+  for (const value of ['faq..old', 'v1..2', '..a', 'a..', 'x/a..b/y', '...']) {
+    assert.equal(sanitizePath(value), value, value);
+  }
+});
+
+await check('control: a slug with ".." inside a segment reads and saves', async () => {
+  const saved = await request('/api/content/articles/release-1..2', {
+    method: 'POST', body: JSON.stringify({ data: { title: 'Release' }, body: 'Notes.\n', type: 'content' }),
+  });
+  assert.equal(saved.status, 200, await saved.text());
+  assert.ok(fs.existsSync(path.join(projectRoot, 'src/content/articles/release-1..2.md')), 'its own file, in the collection');
+  assert.equal((await (await request('/api/content/articles/release-1..2')).json()).data.title, 'Release');
+  assert.equal((await request('/api/content/articles/release-1..2', { method: 'DELETE' })).status, 200);
 });
 
 await check('assertSafeSlug and assertDeclaredCollection', async () => {

@@ -48,13 +48,19 @@ export function isContentPathError(error) {
  * which is why collections are also checked against the declared set
  * (assertDeclaredCollection) and every final path for containment
  * (assertContainedPath).
+ *
+ * `..` is refused as a SEGMENT of the value as given (split on `/` and `\`,
+ * so a Windows-style `..\x` is one too), not as a substring: `faq..old` and
+ * `v1..2` are one ordinary name each, while `a/../b` is refused.
  */
 export function sanitizePath(userPath) {
   if (typeof userPath !== 'string') {
     throw new ContentPathError('Invalid path');
   }
+  // The value as given: normalising first would hide `x/..` (it becomes
+  // `.`), and normalising never creates a `..` segment that was not there.
   const normalized = path.normalize(userPath);
-  if (normalized.includes('..')) {
+  if (userPath.split(/[\\/]/).includes('..')) {
     throw new ContentPathError('Invalid path: directory traversal not allowed');
   }
   return normalized;
