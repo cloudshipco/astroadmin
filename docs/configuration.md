@@ -107,8 +107,12 @@ In development, sessions are kept in memory and there is no rate limit.
 The limit is per 15 minutes: 100 requests per address for anyone not signed
 in and for every login attempt, 10 failed logins per address (a successful
 login does not count), and 3,000 per signed-in session, which continuous
-autosaving stays well under. A refused request gets a JSON 429 with
-`Retry-After`, and the editor says when to try again. Each login starts a new
+autosaving stays well under. "Per address" means per IPv4 address, and per
+IPv6 /56 network: one IPv6 client is usually given at least a /64, and could
+otherwise move to a fresh address for every ten guesses. (An IPv4-mapped
+address such as `::ffff:203.0.113.9` counts as `203.0.113.9`.) A refused
+request gets a JSON 429 with `Retry-After`, and the editor says when to try
+again. Each login starts a new
 session, so a session ID from before the login is never the signed-in one.
 
 Every failed login writes one line to standard output, in this fixed form:
@@ -119,7 +123,10 @@ Every failed login writes one line to standard output, in this fixed form:
 
 The time is local with its UTC offset. The address is the one Express sees:
 the connecting address, or in production (which trusts one proxy) the address
-the proxy passed in `X-Forwarded-For`. An address that does not parse is
+the proxy passed in `X-Forwarded-For`. It is the client's own address, IPv6
+included, not the /56 the rate limit counts it in, since fail2ban bans single
+addresses; an IPv4-mapped address is written in its IPv4 form. An address
+that does not parse is
 written as `ip=invalid`. Nothing the client sent, such as the username, is in
 the line, so a request cannot forge a second line. The line is written after
 the same-origin check, so another site cannot make a visitor's browser produce

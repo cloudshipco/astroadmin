@@ -15,7 +15,7 @@
  * (unlike a status code in the web server's access log).
  */
 
-import net from 'net';
+import { clientAddress } from './client-address.js';
 
 /** `2026-10-29T14:03:07.412+01:00`: local time with its UTC offset. */
 export function isoWithOffset(date) {
@@ -28,11 +28,13 @@ export function isoWithOffset(date) {
     + `${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
 }
 
-/** The address as fail2ban should see it: IPv4-mapped IPv6 unwrapped. */
+/**
+ * The address as fail2ban should see it: the client's own (IPv4-mapped IPv6
+ * unwrapped), never the /56 the rate limits group it into, since fail2ban
+ * bans single addresses (server/utils/client-address.js).
+ */
 export function loggableAddress(address) {
-  if (typeof address !== 'string') return 'invalid';
-  const unwrapped = address.startsWith('::ffff:') && net.isIPv4(address.slice(7)) ? address.slice(7) : address;
-  return net.isIP(unwrapped) ? unwrapped : 'invalid';
+  return clientAddress(address) ?? 'invalid';
 }
 
 /**

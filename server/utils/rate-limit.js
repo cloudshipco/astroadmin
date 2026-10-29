@@ -13,6 +13,10 @@
  *   by the session, so an editor's autosaves never use up the address's
  *   budget and cannot reach it in normal work.
  *
+ * "Per address" is per IPv4 address, and per IPv6 /56 network
+ * (`rateLimitKey`, server/utils/client-address.js): one IPv6 client holds a
+ * whole /64 or more, and could otherwise rotate addresses past every budget.
+ *
  * Mount after the session middleware: the split needs `req.session`.
  *
  * A refusal is JSON (`{ error, message, retryAfter }`, status 429) with a
@@ -22,6 +26,7 @@
 
 import { createHash } from 'crypto';
 import rateLimit from 'express-rate-limit';
+import { rateLimitKey } from './client-address.js';
 
 /** Login paths as Express routes them (case-insensitive, optional trailing slash). */
 const LOGIN_PATH = /^\/login\/?$/i;
@@ -45,6 +50,11 @@ function refuse(req, res, _next, options) {
   res.status(429).json({ error: message, message, retryAfter });
 }
 
+/** The per-address budgets' key: an IPv4 address or an IPv6 /56. */
+function addressKey(req) {
+  return `address:${rateLimitKey(req.ip)}`;
+}
+
 /** A signed-in session's request, other than a login attempt. */
 function isSessionRequest(req) {
   return req.session?.authenticated === true && !LOGIN_PATH.test(req.path);
@@ -59,6 +69,7 @@ export function apiRateLimiters({ windowMs, max, sessionMax, loginMax }) {
     windowMs,
     limit: max,
     skip: isSessionRequest,
+    keyGenerator: addressKey,
     handler: refuse,
   });
   const perSession = rateLimit({
@@ -73,6 +84,7 @@ export function apiRateLimiters({ windowMs, max, sessionMax, loginMax }) {
     windowMs,
     limit: loginMax,
     skip: (req) => !LOGIN_PATH.test(req.path),
+    keyGenerator: addressKey,
     // A login answered below 400 is a success and gives its count back.
     skipSuccessfulRequests: true,
     handler: refuse,

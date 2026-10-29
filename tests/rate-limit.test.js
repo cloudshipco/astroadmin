@@ -9,8 +9,12 @@
  * - every login attempt, even from a signed-in session, still counts against
  *   the address's 100, and a FAILED one also against the address's login
  *   budget (loginMax, 10), so password guessing stops long before the 100;
+ * - "per address" is per IPv4 address and per IPv6 /56: failed logins from
+ *   many addresses in one /56 share a budget, and an IPv4-mapped address
+ *   shares its IPv4 address's (an attacker with a /64 used to rotate);
  * - a failed login logs one `auth.failed ip=<address>` line, the address being
- *   the one express sees through the trusted proxy;
+ *   the one express sees through the trusted proxy (the client's own, not
+ *   its /56);
  * - a refusal is JSON ({ error, message }) with a Retry-After header, not the
  *   plain text the dashboard failed to parse.
  *
@@ -155,6 +159,56 @@ await check('failed logins get 10 per address, then a JSON 429, while other requ
   assert.equal(anonymous.status, 200, 'an anonymous GET from the same address');
   // Another address has its own login budget.
   assert.equal((await login('10.0.0.30', 'wrong')).status, 401, 'another address');
+});
+
+await check('failed logins from many addresses in one IPv6 /56 share one budget', async () => {
+  // An IPv6 client is usually given a /64 or more: counting each address on
+  // its own let it make 10 guesses per address, without end. Spread over
+  // two /64s inside one /56, written in different spellings.
+  const addresses = Array.from({ length: limits.loginMax }, (_, index) =>
+    index % 2 === 0 ? `2001:db8:aa:10::${index + 1}` : `2001:0db8:00aa:0011:0:0:0:${(index + 1).toString(16)}`);
+  const statuses = [];
+  for (const address of addresses) {
+    const response = await login(address, 'wrong');
+    await response.arrayBuffer();
+    statuses.push(response.status);
+  }
+  assert.deepEqual([...new Set(statuses)], [401]);
+  await assertJsonRefusal(await login('2001:db8:aa:ff:1234:5678:9abc:def0', 'wrong'));
+  // Another /56 has its own budget (positive control).
+  assert.equal((await login('2001:db8:ab::1', 'wrong')).status, 401, 'another /56');
+});
+
+await check('an IPv4-mapped IPv6 address shares its IPv4 address\'s budget', async () => {
+  const statuses = await burst(limits.loginMax, () => login('192.0.2.44', 'wrong'));
+  assert.deepEqual([...new Set(statuses)], [401]);
+  await assertJsonRefusal(await login('::ffff:192.0.2.44', 'wrong'));
+  assert.equal((await login('::ffff:192.0.2.45', 'wrong')).status, 401, 'the next IPv4 address is its own');
+});
+
+await check('a failed login from IPv6 logs the client\'s own address, not its /56', async () => {
+  const lines = await captureLog(async () => {
+    assert.equal((await login('2001:db8:cc::abcd', 'wrong')).status, 401);
+    assert.equal((await login('::ffff:198.51.100.24', 'wrong')).status, 401);
+  });
+  const failures = lines.filter((line) => line.includes('auth.failed'));
+  assert.deepEqual(failures.map((line) => line.split('] ')[1]), ['auth.failed ip=2001:db8:cc::abcd', 'auth.failed ip=198.51.100.24']);
+});
+
+await check('rateLimitKey: one key per IPv4 address and per IPv6 /56, whatever the spelling', async () => {
+  const { rateLimitKey, clientAddress } = await import('../server/utils/client-address.js');
+  assert.equal(rateLimitKey('203.0.113.9'), 'ipv4:203.0.113.9');
+  assert.equal(rateLimitKey('::ffff:203.0.113.9'), 'ipv4:203.0.113.9');
+  assert.equal(rateLimitKey('::FFFF:203.0.113.9'), 'ipv4:203.0.113.9');
+  assert.equal(rateLimitKey('2001:db8:1234:5600::1'), 'ipv6:2001:db8:1234:5600::/56');
+  assert.equal(rateLimitKey('2001:db8:1234:56ff:ffff:ffff:ffff:ffff'), 'ipv6:2001:db8:1234:5600::/56');
+  assert.equal(rateLimitKey('2001:DB8:1234:56AB::1%en0'), 'ipv6:2001:db8:1234:5600::/56');
+  assert.equal(rateLimitKey('64:ff9b::203.0.113.9'), 'ipv6:64:ff9b:0:0::/56');
+  assert.notEqual(rateLimitKey('2001:db8:1234:5700::1'), rateLimitKey('2001:db8:1234:5600::1'), 'the next /56');
+  assert.equal(rateLimitKey('::1'), 'ipv6:0:0:0:0::/56');
+  for (const junk of [undefined, '', 'not-an-address', '1.2.3.4.5']) assert.equal(rateLimitKey(junk), 'invalid', String(junk));
+  assert.equal(clientAddress('::ffff:203.0.113.9'), '203.0.113.9');
+  assert.equal(clientAddress('2001:db8::1'), '2001:db8::1', 'the log keeps the whole address');
 });
 
 await check('successful logins do not use the login budget', async () => {
