@@ -97,12 +97,44 @@ export function generateFields(properties, data = {}, options = {}) {
 }
 
 /**
+ * The key a top-level list is rendered and bound under. A form's controls are
+ * named by path from an object, so a list whose items are edited inline (see
+ * generateTopLevelArrayForm) is drawn as this one field, `items[0]`, `items[1]`,
+ * and extractFormData unwraps it again. bindOriginalValues wraps a stored list
+ * the same way, so its paths find the stored items.
+ */
+const TOP_LEVEL_LIST_KEY = 'items';
+
+/**
+ * Whether a top-level list is one of primitives (strings, numbers, booleans,
+ * nullable or not), whose items are edited inline rather than as object cards.
+ * @param {object} schema - the collection's JSON Schema
+ */
+function isPrimitiveTopLevelList(schema) {
+  if (schema?.type !== 'array' || !schema.items) return false;
+  const itemType = unwrapNullable(schema.items).type;
+  return itemType === 'string' || itemType === 'boolean' || isNumericType(itemType);
+}
+
+/** The object schema a primitive top-level list is rendered and read as. */
+function topLevelListWrapper(schema) {
+  return { type: 'object', properties: { [TOP_LEVEL_LIST_KEY]: schema }, required: [TOP_LEVEL_LIST_KEY] };
+}
+
+/**
  * Generate a form for top-level array schemas
- * The entire content is an array of items, rendered as editable cards
+ * The entire content is an array of items. A list of primitives is the same
+ * inline list a primitive array field is (generateField), one control of the
+ * item's type per item: an object card's item modal has no fields to show for
+ * a string, and saved it as an object (#34). Any other list is object cards.
  */
 function generateTopLevelArrayForm(schema, data) {
   const items = Array.isArray(data) ? data : [];
   const itemSchema = schema.items || {};
+
+  if (isPrimitiveTopLevelList(schema)) {
+    return generateField(TOP_LEVEL_LIST_KEY, schema, items);
+  }
 
   // Use the array card UI for complex items
   return `
@@ -1412,6 +1444,12 @@ export function humanizeName(value) {
  * Returns an array directly for top-level array schemas
  */
 export function extractFormData(formElement, schema) {
+  // A top-level list of primitives is read as the one field it is drawn as,
+  // by the same rules as any field (untouched items as stored).
+  if (isPrimitiveTopLevelList(schema)) {
+    return extractValues(formElement, topLevelListWrapper(schema)).data[TOP_LEVEL_LIST_KEY] ?? [];
+  }
+
   // Check for top-level array schema
   const topLevelArrayInput = formElement.querySelector('input[data-top-level-array="true"]');
   if (topLevelArrayInput) {
@@ -1421,8 +1459,9 @@ export function extractFormData(formElement, schema) {
     // settled them, so nothing here is cleaned again.
     const binding = boundContainers.get(formElement);
     if (binding) recordStructuralEdits(binding);
-    if (binding && Array.isArray(binding.original) && controlUnchanged(binding, topLevelArrayInput)) {
-      return cloneValue(binding.original);
+    const storedList = binding?.original[TOP_LEVEL_LIST_KEY];
+    if (binding && Array.isArray(storedList) && controlUnchanged(binding, topLevelArrayInput)) {
+      return cloneValue(storedList);
     }
     try {
       return JSON.parse(topLevelArrayInput.value || '[]');
@@ -1710,7 +1749,9 @@ export function bindOriginalValues(container, original) {
   boundContainers.get(container)?.observer?.disconnect();
   /** @type {ContainerBinding} */
   const binding = {
-    original: cloneValue(original ?? {}),
+    // A top-level list is drawn as one field (TOP_LEVEL_LIST_KEY), so its
+    // controls' paths start there.
+    original: cloneValue(Array.isArray(original) ? { [TOP_LEVEL_LIST_KEY]: original } : original ?? {}),
     controls: new Map(),
     containers: new Map(),
     constants: new Map(),
