@@ -540,7 +540,8 @@ queue, so the old body is never written back.
   ^0.35.5, then `astro build` (~10 s warm; the first install needs the network): AVIF and
   WebP sources of several widths capped at the original, a JPEG fallback smaller than the
   original, `class`/`data-aa-field` on the `<img>`, a `.JPG` in a subfolder optimised,
-  SVG/external URLs plain, a missing or mis-cased path failing the build by name, and an
+  SVG/external URLs plain (under `base: '/blog'` a local one is `/blog/images/...`, an
+  external one untouched), a missing or mis-cased path failing the build by name, and an
   original wider than 2560 stopping at 2560w. Quality: each emitted AVIF/WebP/JPEG is
   byte-compared with the site's sharp re-running Astro's pipeline (rotate, resize, encode)
   at q50 and q80 (deterministic per sharp build): default 80 everywhere, `quality={50}`

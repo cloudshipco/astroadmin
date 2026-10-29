@@ -17,7 +17,9 @@
  *   (a PNG quality makes Sharp quantise to a palette);
  * - an upper-case `.JPG` upload in a subfolder is optimised too (the glob
  *   matches extensions in any case);
- * - SVG and external URLs stay plain <img>s with their original src;
+ * - SVG and external URLs stay plain <img>s with their original src; under
+ *   `base: '/blog'` a local one is served under the base (/blog/images/...)
+ *   and an external one is untouched;
  * - a /images/ path with no file, and one that differs only in case, each
  *   fail the build with an error naming the content value;
  * - a build with NODE_ENV=test (Astro then sets DEV=true, MODE stays
@@ -358,6 +360,23 @@ try {
   });
   writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
   writeSiteFile('src/pages/index.astro', goodPage);
+
+  // --- a site with a `base` ----------------------------------------------
+  // Public files are then served at /blog/images/..., so the files CmsImage
+  // leaves unoptimised need the base too; an external URL does not.
+  writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({ base: '/blog' });\n");
+  const based = buildSite();
+  assert.strictEqual(based.status, 0, based.output);
+  const basedHtml = fs.readFileSync(path.join(siteDir, 'dist', 'index.html'), 'utf8');
+  check("with a `base`, an SVG's src is under it; an external URL and Astro's own URLs are as they were", () => {
+    assert.ok(/<img src="\/blog\/images\/logo.svg" alt="Logo"/.test(basedHtml), basedHtml);
+    assert.ok(/<img src="https:\/\/example.com\/remote.jpg" alt="Remote"/.test(basedHtml), basedHtml);
+    const basedPhoto = (basedHtml.match(/<picture>.*?<\/picture>/gs) || []).find((picture) => picture.includes('alt="Photo"'));
+    assert.ok(basedPhoto, basedHtml);
+    assert.ok(sourceSrcset(basedPhoto, 'avif').split(',').every((candidate) => candidate.trim().startsWith('/blog/_astro/')), basedPhoto);
+    assert.ok(!basedHtml.includes('/blog/blog/'), 'the base is added once');
+  });
+  writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
 
   // --- astro dev ---------------------------------------------------------
   // A file added after the dev server starts is not in the glob yet: it

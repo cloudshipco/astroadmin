@@ -17,7 +17,10 @@
  *   SOURCE_FORMATS), an explicit fallback format and
  *   width cap, widths capped at the original's width (and at the largest
  *   candidate width), and a required `sizes`.
- * - External URLs, SVG and GIF: a plain <img>.
+ * - External URLs, SVG and GIF: a plain <img>. Every plain <img> (these and
+ *   the dev original below) has a local path served under the site's `base`
+ *   (`/blog/images/...` with `base: '/blog'`), as public files are; an
+ *   external URL is used as it is. (Astro's own URLs carry the base already.)
  * - A local raster path with no glob entry:
  *     build: an error naming the content value;
  *     dev:   (`astro dev`, by MODE; see IS_ASTRO_DEV) if the file exists
@@ -39,7 +42,7 @@
  */
 import { Picture, imageConfig } from 'astro:assets';
 import type { ImageMetadata } from 'astro';
-import { existsInPublic } from './site-files.js';
+import { existsInPublic, withBase } from './site-files.js';
 
 interface Props {
   src?: string;
@@ -156,6 +159,6 @@ const fallbackHeight = image ? Math.round((image.height * fallbackWidth) / image
       {...rest}
     />
   ) : (
-    <img src={src} alt={alt} data-cms-image={devOriginal ? 'dev-original' : undefined} {...rest} />
+    <img src={withBase(src)} alt={alt} data-cms-image={devOriginal ? 'dev-original' : undefined} {...rest} />
   )
 }
