@@ -37,7 +37,7 @@ import { spawn, spawnSync } from 'child_process';
 import net from 'net';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
-import { chromiumPath } from './chromium-path.js';
+import { launchChromium } from './chromium-path.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const fixtures = path.join(repoRoot, 'tests/fixtures/video');
@@ -114,6 +114,9 @@ try {
   writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
   writeSiteFile('public/images/hero.mp4', fs.readFileSync(path.join(fixtures, 'clip.mp4')));
   writeSiteFile('public/images/loop.webm', fs.readFileSync(path.join(fixtures, 'clip.webm')));
+  // In public/images but on no page: the glob bundled these too (#90).
+  writeSiteFile('public/images/unused/spare.webm', fs.readFileSync(path.join(fixtures, 'clip.webm')));
+  writeSiteFile('public/images/spare.png', await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 0, g: 0, b: 0 } } }).png().toBuffer());
   const POSTER_WIDTH = 2400;
   writeSiteFile('public/images/still.png', await sharp({
     create: { width: POSTER_WIDTH, height: 1350, channels: 3, background: { r: 30, g: 90, b: 160 } },
@@ -233,9 +236,21 @@ import CmsVideo from 'astroadmin/components/CmsVideo.astro';
     assert.match(videos.find((tag) => tag.includes('id="loop"')), /poster="https:\/\/example\.com\/still\.jpg"/);
   });
 
+  // #90: the existence check must not make Vite bundle the videos. A glob
+  // entry is a module importing the file, so each video was emitted a second
+  // time as _astro/<name>.<hash>.mp4, beside the copy public/ already serves.
+  await check('each video ships once, from /images/: no copy under _astro/ (#90)', () => {
+    const emitted = fs.readdirSync(path.join(siteDir, 'dist', '_astro'));
+    assert.deepStrictEqual(emitted.filter((name) => /\.(mp4|webm)$/i.test(name)), [], `videos under _astro/: ${emitted.join(', ')}`);
+    // Positive control: the videos the page plays are in the build, under /images/.
+    for (const name of ['hero.mp4', 'loop.webm', 'unused/spare.webm']) assert.ok(fs.existsSync(path.join(siteDir, 'dist', 'images', name)), `dist/images/${name}`);
+    assert.ok(emitted.some((name) => name.endsWith('.webp')), 'the _astro/ listing is the real one (the optimised poster is in it)');
+    console.log(`  (info) _astro/ images: ${emitted.filter((name) => /\.(png|jpe?g|webp|avif)$/i.test(name)).join(', ')}`);
+  });
+
   // --- the browser ------------------------------------------------------
   server = serveDist();
-  browser = await chromium.launch({ executablePath: chromiumPath() });
+  browser = await launchChromium(chromium);
   const pageUrl = `http://127.0.0.1:${server.port}/`;
 
   /** Wait until the loop video's state matches, or fail with what it is. */
@@ -413,7 +428,7 @@ import CmsVideo from 'astroadmin/components/CmsVideo.astro';
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }
-    browser = await chromium.launch({ executablePath: chromiumPath() });
+    browser = await launchChromium(chromium);
     await check('in astro dev (the preview) the script loads and the video plays', async () => {
       const tab = await browser.newPage();
       await tab.goto(`http://127.0.0.1:${port}/`);

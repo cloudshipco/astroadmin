@@ -18,7 +18,7 @@
  * meant to read files from a deployed server.
  */
 import { root } from 'astro:config/server';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,6 +36,22 @@ export function publicFile(sitePath) {
   const file = normalize(join(publicDir, decoded));
   if (!file.startsWith(publicDir + sep)) return undefined;
   return existsSync(file) && statSync(file).isFile() ? file : undefined;
+}
+
+/**
+ * True when `sitePath` names a file under public/ with exactly that case in
+ * every segment below public/, as a case-sensitive filesystem (the server a
+ * site deploys to) would find it, also on macOS's case-insensitive one.
+ */
+export function existsInPublicExactCase(sitePath) {
+  const file = publicFile(sitePath);
+  if (file === undefined) return false;
+  let directory = publicDir;
+  for (const segment of file.slice(publicDir.length + 1).split(sep)) {
+    if (!readdirSync(directory).includes(segment)) return false;
+    directory = join(directory, segment);
+  }
+  return true;
 }
 
 /** True when `sitePath` (e.g. /images/x.jpg) is a file under public/. */
