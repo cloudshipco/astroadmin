@@ -40,7 +40,7 @@ const FAST_TESTS = [
   'git-paths-scope', 'git-paths-commit', 'git-log-limit', 'checkout-lock', 'publish-sync',
   'publish-message', 'publish-api', 'publish-failure', 'publish-live-status',
   'deploy',
-  'build-failure', 'build-deploy-responses',
+  'build-failure', 'build-deploy-responses', 'production-build',
 ];
 
 const filters = process.argv.slice(2);

@@ -209,7 +209,9 @@ does not stop it running while a publish is committing. The check's
 worktree gets the site's `node_modules` linked in (without Astro's and Vite's
 caches) and the site's gitignored `.env*` files copied in. AstroAdmin's own
 variables (`ASTROADMIN_*`, `ADMIN_*`, `SESSION_SECRET`) are removed from its
-environment. Sites that use git submodules, or workspace packages linked back
+environment, and from the production build's before a deploy. That build
+times out after `build.productionTimeoutMs` (default 300000, five minutes);
+on a timeout its whole process group is stopped and nothing is deployed. Sites that use git submodules, or workspace packages linked back
 into the same repository, are refused, because the worktree cannot reproduce
 them; `npx astroadmin doctor` reports both.
 

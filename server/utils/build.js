@@ -4,14 +4,18 @@
  * (server/utils/astro-bin.js). The only production build runner; the
  * publish check's build is a separate one, in a worktree
  * (server/utils/astro-check.js).
+ *
+ * It runs through the check's runCommand: in its own process group, killed
+ * whole at `build.productionTimeoutMs` (default five minutes), its output
+ * capped, and without the admin's own secrets and settings in its
+ * environment (buildEnvironment).
  */
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { config, getConfig } from '../config.js';
 import { resolveBuildCommand } from './astro-bin.js';
+import { buildEnvironment, runCommand } from './astro-check.js';
 
-const execAsync = promisify(exec);
+const DEFAULT_PRODUCTION_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Run the production build for deployment.
@@ -36,6 +40,7 @@ export async function runProductionBuild() {
 export async function runProductionBuildIn(fullConfig, projectRoot) {
   console.log('🔨 Starting production build for deployment...');
   const startTime = Date.now();
+  const timeoutMs = fullConfig.build?.productionTimeoutMs || DEFAULT_PRODUCTION_TIMEOUT_MS;
 
   try {
     const { command: buildCommand, error } = await resolveBuildCommand(fullConfig.build?.production, 'production', projectRoot);
@@ -44,30 +49,26 @@ export async function runProductionBuildIn(fullConfig, projectRoot) {
       return { success: false, duration: Date.now() - startTime, error, output: '' };
     }
 
-    const { stdout, stderr } = await execAsync(buildCommand, {
-      cwd: projectRoot,
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-    });
-
+    const { exitCode, output, timedOut } = await runCommand(buildCommand, projectRoot, timeoutMs, buildEnvironment());
     const duration = Date.now() - startTime;
-    console.log(`✅ Production build completed in ${duration}ms. Its output:\n${stdout}${stderr}`);
 
-    return {
-      success: true,
-      duration,
-      output: (stdout + stderr).slice(-1000),
-    };
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error(`❌ Production build failed: ${error.message}\nIts output:\n${error.stdout || ''}${error.stderr || ''}`);
+    if (exitCode === 0 && !timedOut) {
+      console.log(`✅ Production build completed in ${duration}ms. Its output:\n${output}`);
+      return { success: true, duration, output: output.slice(-1000) };
+    }
 
+    console.error(`❌ Production build ${timedOut ? `timed out after ${timeoutMs}ms` : `failed with exit code ${exitCode}`}. Its output:\n${output}`);
     return {
       success: false,
       duration,
-      // Not error.message: it is `Command failed: <resolved command line>`,
-      // which holds server paths. The output is what says why.
-      error: 'The build command failed.',
-      output: (error.stdout || '') + (error.stderr || ''),
+      // Never the command line, which holds server paths. The output is what
+      // says why.
+      error: timedOut ? 'The build command did not finish in time.' : 'The build command failed.',
+      output,
     };
+  } catch (error) {
+    // The shell could not be started at all.
+    console.error('❌ Production build could not start:', error);
+    return { success: false, duration: Date.now() - startTime, error: 'The build command failed.', output: '' };
   }
 }
