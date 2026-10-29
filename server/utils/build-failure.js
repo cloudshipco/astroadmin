@@ -39,10 +39,13 @@ import {
 } from './content-validation.js';
 import { runGit, runGitSync } from './git-exec.js';
 
+const SERVER_LOG_HINT = 'see the server log';
+
+/** The sentence for output that carries no error code, pointing at `outputHint`. */
+const noCodeMessage = (outputHint) => `The site's build failed without naming an error; ${outputHint}.`;
 
 /** What the editor is told when the output carries no error code. */
-export const NO_CODE_MESSAGE = "The site's build failed without naming an error; see the server log.";
-const SERVER_LOG_HINT = 'see the server log';
+export const NO_CODE_MESSAGE = noCodeMessage(SERVER_LOG_HINT);
 
 /** The most entries a refusal lists (and validates). */
 const MAX_ENTRIES = 20;
@@ -132,7 +135,7 @@ export function describeCode(code, outputHint = SERVER_LOG_HINT) {
  */
 export function buildProblems(output, outputHint = SERVER_LOG_HINT) {
   const codes = findErrorCodes(output);
-  if (codes.length === 0) return [{ code: null, message: `The site's build failed without naming an error; ${outputHint}.` }];
+  if (codes.length === 0) return [{ code: null, message: noCodeMessage(outputHint) }];
   return codes.map((code) => ({ code, message: describeCode(code, outputHint) }));
 }
 
