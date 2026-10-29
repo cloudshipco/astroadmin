@@ -272,6 +272,24 @@ await check('deploy: a local path starting with "-" is a path, not an rsync opti
   assert.equal(fs.readFileSync(path.join(guardProject, '--version', 'index.html'), 'utf8'), '<h1>hi</h1>');
 });
 
+// rsync reads a destination with a `:` before its first `/` as REMOTE, so a
+// `user@host:/dir` written into `path` with no `host` would sync over ssh
+// without the user and host checks.
+for (const destination of ['deploy@server.example.com:/var/www', 'server.example.com:/var/www', 'server:www', 'rsync://server/module']) {
+  await check(`validate: a remote spec in path with no host is refused with the fields to use (${destination})`, () => {
+    for (const extra of [{}, { allowDestructivePath: true }]) {
+      const result = validateLocal(destination, extra);
+      assert.equal(result.valid, false, JSON.stringify(extra));
+      assert.deepEqual(result.errors, ['rsync.path looks like a remote destination (host:path); put the server in rsync.host, the user in rsync.user and only the directory in rsync.path'], JSON.stringify(extra));
+    }
+  });
+}
+
+await check('validate: a local path with a colon after a slash is local (positive control)', () => {
+  assert.deepEqual(validateLocal(path.join(guardRoot, 'www:2')), { valid: true, errors: [] });
+  assert.deepEqual(validateLocal('../www:2'), { valid: true, errors: [] });
+});
+
 await check('validate: a port that is not a whole number is refused', () => {
   for (const port of ['22 -oProxyCommand=x', 0, 70000, 'abc']) {
     const result = validateDeployConfig({ adapter: 'rsync', rsync: { host: 'h', user: 'u', path: '/srv/www', port } }, guardContext);

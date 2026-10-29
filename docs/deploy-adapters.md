@@ -43,7 +43,10 @@ path is quoted, so it may contain spaces, and `port` must be a whole number.
 IPv4 address, or an IPv6 address in brackets (`[2001:db8::1]`, which needs
 rsync 3: the `openrsync` macOS ships as `/usr/bin/rsync` does not parse it).
 Neither may start with `-`: rsync passes `user@host` to ssh as one argument,
-where a leading `-` would be read as an ssh option.
+where a leading `-` would be read as an ssh option. Put the server and user
+in their own fields, not in `path`: without `host`, a `path` such as
+`deploy@server.example.com:/var/www` (a `:` before the first `/`) is
+refused.
 
 Publish refuses a destination where `--delete` would destroy something, and
 says why, before it commits or builds anything:

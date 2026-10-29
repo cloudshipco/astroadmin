@@ -147,6 +147,12 @@ function isRemoteHost(host) {
 }
 
 /**
+ * rsync's own rule: a destination with a `:` before its first `/` is remote
+ * (`host:dir`, `user@host:dir`, `host::module`, `rsync://host/...`).
+ */
+const LOOKS_REMOTE = /^[^/]*:/;
+
+/**
  * One argument of rsync's `-e` command. rsync splits that string on spaces
  * itself and honours quotes: inside single quotes a doubled '' is one quote
  * (rsync(1), --rsh).
@@ -180,7 +186,12 @@ function validate(config, context = {}) {
   if (config?.host && sshPort(config.port) === null) {
     errors.push('rsync.port must be a whole number from 1 to 65535');
   }
-  if (config?.path) {
+  if (config?.path && !config.host && LOOKS_REMOTE.test(String(config.path))) {
+    // Before the destination check (whose "inside the project" would be the
+    // wrong reason) and regardless of allowDestructivePath: rsync would sync
+    // over ssh to a user and host nobody checked.
+    errors.push('rsync.path looks like a remote destination (host:path); put the server in rsync.host, the user in rsync.user and only the directory in rsync.path');
+  } else if (config?.path) {
     const problem = destinationProblem(config, { distDir: 'dist', ...context });
     if (problem) errors.push(problem);
   }
