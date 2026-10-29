@@ -446,7 +446,7 @@ function setupTextareas(container, onChange) {
   // Fit each one to its content now: the rows the renderer chose are a guess
   // from the character count, and a long value wraps sooner than that on a
   // narrow screen. One that is not laid out yet keeps its rows.
-  container.querySelectorAll('textarea.textarea-autogrow').forEach(autoGrowTextarea);
+  fitTextareas(container);
 
   container.addEventListener('input', (e) => {
     if (e.target.classList.contains('textarea-autogrow')) {
@@ -471,6 +471,16 @@ function setupTextareas(container, onChange) {
  * (with `height: auto` the box is at least that tall, so scrollHeight is too),
  * not a fixed 100px: a two-row field stays two rows until it needs more (#87).
  */
+/**
+ * Fit every auto-growing textarea inside an element to its content. For
+ * whatever was not laid out when its form was set up, or has changed width
+ * since: a block when it is opened or added (autoGrowTextarea leaves an
+ * unmeasurable one at its rows).
+ */
+export function fitTextareas(root) {
+  root.querySelectorAll('textarea.textarea-autogrow').forEach(autoGrowTextarea);
+}
+
 export function autoGrowTextarea(textarea) {
   const maxHeight = 400; // ~16 rows
   textarea.style.height = 'auto';

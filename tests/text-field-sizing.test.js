@@ -129,6 +129,49 @@ await check('each textarea is fitted to its content when the form is set up', ()
   }
 });
 
+// A layout stand-in: a textarea inside a collapsed block measures 0 (it is
+// not laid out), anything else the height of its text.
+function withLayout(fn) {
+  const prototype = window.HTMLTextAreaElement.prototype;
+  const own = Object.getOwnPropertyDescriptor(prototype, 'scrollHeight');
+  Object.defineProperty(prototype, 'scrollHeight', { configurable: true, get() { return this.closest('.collapsed') ? 0 : 200; } });
+  try {
+    return fn();
+  } finally {
+    if (own) Object.defineProperty(prototype, 'scrollHeight', own); else delete prototype.scrollHeight;
+  }
+}
+
+const blockSchema = (() => {
+  const note = toSchema(z.object({ type: z.literal('note'), body: z.string() }));
+  return { type: 'object', properties: { blocks: { type: 'array', blockTypes: { note }, items: { anyOf: [note] } } }, required: ['blocks'] };
+})();
+
+await check('a textarea in a collapsed block is fitted when the block is opened', () => withLayout(() => {
+  // Collapsed before setup, so the setup's own fit cannot measure it (as for
+  // a form that is not laid out when it is set up); the dashboard collapses
+  // every block after setup (collapseAllBlocks), and a width change since
+  // then needs the same refit.
+  document.body.innerHTML = '';
+  const form = document.createElement('form');
+  form.innerHTML = generateForm(blockSchema, { blocks: [{ type: 'note', body: 'x'.repeat(300) }, { type: 'note', body: 'y' }] });
+  document.body.appendChild(form);
+  form.querySelectorAll('.block-item').forEach((block) => block.classList.add('collapsed'));
+  setupFormHandlers(form, () => {});
+  const body = control(form, 'blocks[0].body');
+  assert.notEqual(body.style.height, '200px', 'positive control: not fitted while collapsed');
+  body.closest('.block-item').querySelector('.toggle-block-header').click();
+  assert.ok(!body.closest('.block-item').classList.contains('collapsed'), 'the block opened');
+  assert.equal(body.style.height, '200px', 'fitted on opening');
+}));
+
+await check('a textarea in a newly added block is fitted', () => withLayout(() => {
+  const form = render(blockSchema, { blocks: [] });
+  form.querySelector('.add-block-type').value = 'note';
+  form.querySelector('.add-block-btn').click();
+  assert.equal(control(form, 'blocks[0].body').style.height, '200px');
+}));
+
 await check('.meta({ multiline: false }) is a one-line input, even for a description', () => {
   const schema = toSchema(z.object({
     attribution: z.string().meta({ multiline: false }),

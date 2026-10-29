@@ -8,7 +8,7 @@
  * widget added here shows up on all three.
  */
 
-import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, isPreviewableVideo, setWidgetValue, CLEARED_ATTRIBUTE, colorToHex, colourSwatchTitle, COLOUR_NONE_ATTRIBUTE, COLOUR_CLEAR_BUTTON } from './field-widgets.js';
+import { setupFieldWidgets, decodeGalleryValue, resolveImageUrl, isPreviewableImage, isPreviewableVideo, setWidgetValue, CLEARED_ATTRIBUTE, colorToHex, colourSwatchTitle, COLOUR_NONE_ATTRIBUTE, COLOUR_CLEAR_BUTTON, fitTextareas } from './field-widgets.js';
 
 import { escapeHtml, textareaContent } from './escape-html.js';
 // The keywords the schema parser marks a real date, a file() entry's id and
@@ -2352,6 +2352,7 @@ function setupBlockHandlers(formElement, onBlockChange) {
       newBlockEl.classList.remove('collapsed');
       const icon = newBlockEl.querySelector('.block-expand-icon');
       if (icon) icon.textContent = '▼';
+      fitTextareas(newBlockEl);
 
       // Focus first input and scroll into view
       const firstInput = newBlockEl.querySelector('input:not([type="hidden"]), textarea');
@@ -2404,6 +2405,8 @@ function setupBlockHandlers(formElement, onBlockChange) {
       if (icon) {
         icon.textContent = blockItem.classList.contains('collapsed') ? '▶' : '▼';
       }
+      // Its textareas could not be measured while it was closed.
+      if (!blockItem.classList.contains('collapsed')) fitTextareas(blockItem);
     }
   });
 
