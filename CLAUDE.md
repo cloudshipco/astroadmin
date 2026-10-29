@@ -543,7 +543,11 @@ queue, so the old body is never written back.
   inlines a small component `<script>` (`shouldInlineScriptChunk`, under
   assetsInlineLimit, and a site's `vite.build.assetsInlineLimit: 0` did not stop it), which a
   site's `script-src 'self'` blocks silently in production. The built page is served under
-  such a CSP and must play; seen red with the inline version. Also: markup (muted/loop/playsinline, no `autoplay`
+  such a CSP and must play; seen red with the inline version. Its CSS is in `@layer
+  components` (unlayered CSS beats every layer, so it overrode Tailwind v4 utilities on
+  `wrapperClass`), and the button's look is on its inner face (a `button` reset in `base`
+  wins when CmsVideo's CSS is met first); a layered page checks both CSS orders in the
+  browser. Also: markup (muted/loop/playsinline, no `autoplay`
   attribute, the button), the poster optimised to WebP at `posterWidth`, missing video or
   poster failing the build; then in Chromium: it plays by itself, the button pauses and
   resumes it, and under reduced motion it never starts until Play, and it plays under

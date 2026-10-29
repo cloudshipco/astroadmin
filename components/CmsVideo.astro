@@ -13,8 +13,11 @@
  *   poster shows and the browser's own controls stay off.
  * - A pause/play button is part of the component (WCAG 2.2.2: motion longer
  *   than five seconds must be pausable), hidden until the script wires it.
- *   Its styles are `:where()` rules (zero specificity), so any site rule
- *   overrides them; restyle it through `.cms-video-toggle`.
+ *   Its styles are `:where()` rules in the `components` cascade layer, so a
+ *   site's unlayered rules and its utilities (Tailwind v4's `utilities`
+ *   layer) override them. Its look is on `.cms-video-toggle-face`; set
+ *   `--cms-video-toggle-background` and `--cms-video-toggle-color` to
+ *   restyle it, or position `.cms-video-toggle`.
  * - `poster`: a `/images/...` raster path is optimised through Astro's image
  *   pipeline (one WebP at up to `posterWidth`), as CmsImage optimises its
  *   images; an external URL or SVG is used as is.
@@ -145,7 +148,7 @@ const type = /\.webm$/i.test(srcPath) ? 'video/webm' : /\.mp4$/i.test(srcPath) ?
         <source src={withBase(src)} type={type} />
       </video>
       <button type="button" class="cms-video-toggle" data-cms-video-toggle data-label={label} aria-label={`Play ${label}`} hidden>
-        <span aria-hidden="true" data-cms-video-icon>▶</span>
+        <span class="cms-video-toggle-face" aria-hidden="true" data-cms-video-icon>▶</span>
       </button>
       <script is:inline type="module" src={clientScriptUrl}></script>
     </div>
@@ -153,29 +156,48 @@ const type = /\.webm$/i.test(srcPath) ? 'video/webm' : /\.mp4$/i.test(srcPath) ?
 }
 
 <style is:global>
-  :where(.cms-video) {
-    position: relative;
-  }
-  :where(.cms-video > video) {
-    display: block;
-    width: 100%;
-  }
-  :where(.cms-video-toggle) {
-    position: absolute;
-    right: 0.75rem;
-    bottom: 0.75rem;
-    min-width: 2.75rem;
-    min-height: 2.75rem;
-    border: 0;
-    border-radius: 999px;
-    background: rgb(0 0 0 / 0.6);
-    color: #fff;
-    font: inherit;
-    cursor: pointer;
-  }
-  :where(.cms-video-toggle:focus-visible) {
-    outline: 2px solid #fff;
-    outline-offset: 2px;
+  /* In the `components` layer, not unlayered: unlayered CSS beats every
+     layer whatever its specificity, so these defaults would override a
+     layered site's utilities (Tailwind v4's wrapperClass="absolute inset-0").
+     Where the site's layer order statement comes first (Astro puts a site's
+     own CSS before a package component's), Tailwind v4 orders `components`
+     below `utilities`; where it comes later, `components` is the lowest
+     layer, still below utilities. The button's look is on its inner face,
+     not the <button>: a reset (Tailwind's preflight strips every button's
+     background and radius) would otherwise win in the second order. Restyle
+     it with the two custom properties, which no layer order can undo. */
+  @layer components {
+    :where(.cms-video) {
+      position: relative;
+    }
+    :where(.cms-video > video) {
+      display: block;
+      width: 100%;
+    }
+    :where(.cms-video-toggle) {
+      position: absolute;
+      right: 0.75rem;
+      bottom: 0.75rem;
+      padding: 0;
+      border: 0;
+      background: none;
+      font: inherit;
+      cursor: pointer;
+    }
+    :where(.cms-video-toggle-face) {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2.75rem;
+      min-height: 2.75rem;
+      border-radius: 999px;
+      background: var(--cms-video-toggle-background, rgb(0 0 0 / 0.6));
+      color: var(--cms-video-toggle-color, #fff);
+    }
+    :where(.cms-video-toggle:focus-visible) {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
   }
 </style>
 

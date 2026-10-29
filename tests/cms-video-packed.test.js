@@ -137,6 +137,52 @@ try {
     '<CmsVideo src="https://cdn.example.com/loop.mp4?v=2" id="remote" />',
   ].join('\n'));
   writeSiteFile('src/pages/index.astro', goodPage);
+  // A site whose CSS is in cascade layers, as every Tailwind v4 site's is:
+  // the layer order statement, a reset in `base` (Tailwind's preflight strips
+  // a button's background), utilities in `utilities`, and one UNLAYERED site
+  // rule. Unlayered CSS beats every layer whatever its specificity, so the
+  // component's own rules must be layered below utilities, or
+  // wrapperClass="absolute inset-0" is ignored.
+  // The same site with its stylesheet linked from public/ at the end of the
+  // body, so CmsVideo's CSS reaches the page first and its \`components\`
+  // layer is declared before the site's layer order statement. (Astro puts
+  // a site's own imported CSS before a package component's, so a site gets
+  // this order only by loading its CSS late, as here.)
+  writeSiteFile('public/site.css', `@layer theme, base, components, utilities;
+@layer base { button { background: transparent; border-radius: 0; } }
+@layer utilities { .absolute { position: absolute; } .inset-0 { inset: 0; } .h-full { height: 100%; } }
+.hero { position: relative; width: 800px; height: 450px; display: flex; }
+.restyled { --cms-video-toggle-background: rgb(255, 0, 0); }
+`);
+  writeSiteFile('src/pages/layers-late.astro', `---
+import CmsVideo from 'astroadmin/components/CmsVideo.astro';
+---
+<html><head></head><body>
+<section class="hero" id="hero"><CmsVideo src="/images/loop.webm" wrapperClass="absolute inset-0" class="h-full" id="covering" /><h1>Title</h1></section>
+<div class="restyled"><CmsVideo src="/images/loop.webm" id="restyled" /></div>
+<link rel="stylesheet" href="/site.css" is:inline>
+</body></html>
+`);
+  writeSiteFile('src/pages/layers.astro', `---
+import CmsVideo from 'astroadmin/components/CmsVideo.astro';
+---
+<html><head>
+<style is:global>
+  @layer theme, base, components, utilities;
+  @layer base { button { background: transparent; border-radius: 0; } }
+  @layer utilities {
+    .absolute { position: absolute; }
+    .inset-0 { inset: 0; }
+    .h-full { height: 100%; }
+  }
+  .hero { position: relative; width: 800px; height: 450px; display: flex; }
+  .restyled { --cms-video-toggle-background: rgb(255, 0, 0); }
+</style>
+</head><body>
+<section class="hero" id="hero"><CmsVideo src="/images/loop.webm" wrapperClass="absolute inset-0" class="h-full" id="covering" /><h1>Title</h1></section>
+<div class="restyled"><CmsVideo src="/images/loop.webm" id="restyled" /></div>
+</body></html>
+`);
 
   const install = run('bun', ['install', '--no-save'], siteDir);
   assert.strictEqual(install.status, 0, install.output);
@@ -263,6 +309,49 @@ try {
     await tab.waitForFunction(() => !document.querySelector('#loop').paused, null, { timeout: 5000 });
     await context.close();
   });
+  await check("in a layered (Tailwind v4) site, in either CSS order, utilities on wrapperClass win and the button keeps its look", async () => {
+    // layers/: the site's CSS first (a layout importing it before any
+    // component); layers-late/: CmsVideo's first. Both orders must hold.
+    for (const route of ['layers/', 'layers-late/']) {
+    const tab = await browser.newPage();
+    await tab.goto(`${pageUrl}${route}`);
+    await tab.waitForLoadState('load');
+    // Which stylesheet the page met first: the site's (its layer order
+    // statement) or CmsVideo's (its :where(.cms-video-toggle) rule).
+    const siteFirst = await tab.evaluate(() => {
+      const sheets = [...document.styleSheets].map((sheet) => [...sheet.cssRules].map((rule) => rule.cssText).join('\n'));
+      const site = sheets.findIndex((text) => text.includes('@layer theme'));
+      const component = sheets.findIndex((text) => text.includes(':where(.cms-video-toggle)'));
+      if (site === component) {
+        const text = sheets[site];
+        return text.indexOf('@layer theme') < text.indexOf(':where(.cms-video-toggle)');
+      }
+      return site < component;
+    });
+    assert.strictEqual(siteFirst, route === 'layers/', `${route}: the CSS order this page is meant to test`);
+    const measured = await tab.evaluate(() => {
+      const hero = document.querySelector('#hero').getBoundingClientRect();
+      const wrapper = document.querySelector('#covering').closest('[data-cms-video]');
+      const box = wrapper.getBoundingClientRect();
+      // The visible circle is the button's face (the <button> itself is bare).
+      const toggleStyle = (id) => getComputedStyle(document.querySelector(id).closest('[data-cms-video]').querySelector('.cms-video-toggle-face'));
+      return {
+        position: getComputedStyle(wrapper).position,
+        covers: [box.left - hero.left, box.top - hero.top, box.width - hero.width, box.height - hero.height],
+        defaultBackground: toggleStyle('#covering').backgroundColor,
+        defaultRadius: toggleStyle('#covering').borderRadius,
+        restyledBackground: toggleStyle('#restyled').backgroundColor,
+      };
+    });
+    assert.strictEqual(measured.position, 'absolute', `${route}: the utility on wrapperClass`);
+    assert.deepStrictEqual(measured.covers, [0, 0, 0, 0], `${route}: the wrapper covers the hero`);
+    assert.strictEqual(measured.defaultBackground, 'rgba(0, 0, 0, 0.6)', `${route}: the button keeps its look over a base-layer reset`);
+    assert.notStrictEqual(measured.defaultRadius, '0px', `${route}: the button stays round over a base-layer reset`);
+    assert.strictEqual(measured.restyledBackground, 'rgb(255, 0, 0)', `${route}: the site's custom property restyles it`);
+    await tab.close();
+    }
+  });
+
   await browser.close();
   browser = undefined;
   server.stop(true);

@@ -70,8 +70,14 @@ it from a small script:
   not start; the poster shows, and the visitor can press Play.
 - **A pause button.** Motion longer than five seconds must be pausable (WCAG
   2.2.2), so every video has a pause/play button in its bottom-right corner.
-  Its styles have zero specificity, so a rule on `.cms-video-toggle` in the
-  site's CSS replaces them.
+  Its styles sit in the `components` cascade layer, below Tailwind v4's
+  `utilities`, so `wrapperClass="absolute inset-0"` and other utilities win,
+  as does any unlayered rule in the site's CSS. To restyle the button, set
+  `--cms-video-toggle-background` and `--cms-video-toggle-color` (on the
+  page or any ancestor), or move it with a rule on `.cms-video-toggle`. Its
+  circle is drawn by the inner `.cms-video-toggle-face`, so a reset that
+  strips every `<button>`'s background (Tailwind's preflight) cannot remove
+  it.
 - **The poster** is shown before the video plays. A `/images/...` raster
   poster is resized to `posterWidth` (default 1920) and encoded as WebP.
 - **Missing files fail the build**, naming the content value, as
