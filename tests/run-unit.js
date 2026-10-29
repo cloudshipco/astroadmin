@@ -9,7 +9,7 @@
  * Not listed: the shelved SQLite store (`npm run test:db`), and the slow ones that run full
  * Astro builds or a browser (publish-check, publish-refusal-*, cms-*-packed,
  * component-preview, dev-toolbar, cli-dev, doctor-*, video-picker-browser,
- * dashboard-layout-browser,
+ * dashboard-layout-browser, login-browser,
  * image-*-astro builds). Run those by name before a release.
  *
  *   bun tests/run-unit.js            every file below

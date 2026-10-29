@@ -20,6 +20,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { chromium } from 'playwright-core';
+import { chromiumPath } from './chromium-path.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const fixtures = path.join(repoRoot, 'tests/fixtures/video');
@@ -52,17 +53,6 @@ const HOME_TEXT = '---\ntitle: Home\nheroImage: /images/still.png\n---\n';
 writeProjectFile(HOME_FILE, HOME_TEXT);
 writeProjectFile('public/images/still.png', Buffer.from('89504e470d0a1a0a', 'hex'));
 writeProjectFile('public/images/waves.webm', fs.readFileSync(path.join(fixtures, 'clip.webm')));
-
-function chromiumPath() {
-  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
-  const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
-  const shells = fs.existsSync(cache) ? fs.readdirSync(cache).filter((name) => name.startsWith('chromium_headless_shell-')).sort().reverse() : [];
-  for (const shell of shells) {
-    const candidate = path.join(cache, shell, 'chrome-headless-shell-mac-arm64/chrome-headless-shell');
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return undefined;
-}
 
 let passed = 0;
 async function check(name, fn) {

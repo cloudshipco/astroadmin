@@ -20,6 +20,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { chromium } from 'playwright-core';
+import { chromiumPath } from './chromium-path.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-image-serving-')));
@@ -50,18 +51,6 @@ writeProjectFile('src/assets/images/source.svg', HOSTILE_SVG);
 writeProjectFile('src/content/assets/posts/rel.svg', HOSTILE_SVG);
 writeProjectFile('src/assets/project.svg', HOSTILE_SVG);
 writeProjectFile('public/images/photo.png', Buffer.from('89504e470d0a1a0a', 'hex'));
-
-/** A Chromium Playwright can drive: CHROMIUM_PATH, else a downloaded headless shell. */
-function chromiumPath() {
-  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
-  const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
-  const shells = fs.existsSync(cache) ? fs.readdirSync(cache).filter((name) => name.startsWith('chromium_headless_shell-')).sort().reverse() : [];
-  for (const shell of shells) {
-    const candidate = path.join(cache, shell, 'chrome-headless-shell-mac-arm64/chrome-headless-shell');
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return undefined; // Playwright's own default
-}
 
 let uploadedVideoUrl;
 let passed = 0;

@@ -22,10 +22,7 @@
     "watch:css": "tailwindcss -i ./ui/input.css -o ./ui/styles.css --watch",
     "test": "bun tests/run-unit.js",
     "test:unit": "bun tests/run-unit.js",
-    "test:db": "rm -rf /tmp/aa-unit-cs /tmp/aa-unit-loader; mkdir -p /tmp/aa-unit-cs /tmp/aa-unit-loader; ASTROADMIN_PROJECT_ROOT=/tmp/aa-unit-cs ASTROADMIN_DB=/tmp/aa-unit-cs/content.db bun tests/content-store.test.js && ASTROADMIN_PROJECT_ROOT=/tmp/aa-unit-loader ASTROADMIN_DB=/tmp/aa-unit-loader/content.db bun tests/loader.test.js && bun tests/schema-parser-db.test.js",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "test:e2e:headed": "playwright test --headed"
+    "test:db": "rm -rf /tmp/aa-unit-cs /tmp/aa-unit-loader; mkdir -p /tmp/aa-unit-cs /tmp/aa-unit-loader; ASTROADMIN_PROJECT_ROOT=/tmp/aa-unit-cs ASTROADMIN_DB=/tmp/aa-unit-cs/content.db bun tests/content-store.test.js && ASTROADMIN_PROJECT_ROOT=/tmp/aa-unit-loader ASTROADMIN_DB=/tmp/aa-unit-loader/content.db bun tests/loader.test.js && bun tests/schema-parser-db.test.js"
   },
   "keywords": [
     "astro",
@@ -78,10 +75,10 @@
     "bun": ">=1.0.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.1",
     "@tailwindcss/cli": "^4.1.17",
     "autoprefixer": "^10.4.22",
     "happy-dom": "^20.14.5",
+    "playwright-core": "1.57.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.17"
   },

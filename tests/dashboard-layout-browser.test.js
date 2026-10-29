@@ -31,6 +31,7 @@ import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { chromium } from 'playwright-core';
+import { chromiumPath } from './chromium-path.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-dashboard-layout-')));
@@ -67,17 +68,6 @@ const runGit = (...args) => execFileSync('git', ['-c', 'user.name=Test', '-c', '
 runGit('init', '-q', '-b', 'main');
 runGit('add', '-A');
 runGit('commit', '-q', '-m', 'Initial');
-
-function chromiumPath() {
-  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
-  const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
-  const shells = fs.existsSync(cache) ? fs.readdirSync(cache).filter((name) => name.startsWith('chromium_headless_shell-')).sort().reverse() : [];
-  for (const shell of shells) {
-    const candidate = path.join(cache, shell, 'chrome-headless-shell-mac-arm64/chrome-headless-shell');
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return undefined;
-}
 
 let passed = 0;
 async function check(name, fn) {

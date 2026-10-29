@@ -37,6 +37,7 @@ import { spawn, spawnSync } from 'child_process';
 import net from 'net';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
+import { chromiumPath } from './chromium-path.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const fixtures = path.join(repoRoot, 'tests/fixtures/video');
@@ -69,18 +70,6 @@ function buildSite() {
 
 function page(body) {
   return `---\nimport CmsVideo from 'astroadmin/components/CmsVideo.astro';\n---\n<html><body>\n${body}\n</body></html>\n`;
-}
-
-/** A Chromium Playwright can drive: CHROMIUM_PATH, else a downloaded headless shell. */
-function chromiumPath() {
-  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
-  const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
-  const shells = fs.existsSync(cache) ? fs.readdirSync(cache).filter((name) => name.startsWith('chromium_headless_shell-')).sort().reverse() : [];
-  for (const shell of shells) {
-    const candidate = path.join(cache, shell, 'chrome-headless-shell-mac-arm64/chrome-headless-shell');
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return undefined; // Playwright's own default
 }
 
 /**
