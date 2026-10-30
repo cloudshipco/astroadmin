@@ -62,17 +62,31 @@ const defaultPaths = {
  * An address-based setting means a client that reaches the app directly
  * cannot choose the address the rate limits and the auth.failed log see;
  * a hop count trusted ANY peer's header.
- * @param {string | undefined} value TRUST_PROXY
+ * The same normalisation applies to `trustProxy` from astroadmin.config.js,
+ * which may also be a boolean, a number, an array or a function (passed on
+ * as they are, an array's blank entries dropped).
+ * @param {unknown} value TRUST_PROXY, or the config's trustProxy
  * @param {boolean} production
- * @returns {boolean | number | string}
+ * @returns {boolean | number | string | Function}
  */
 export function trustProxySetting(value, production) {
-  const text = typeof value === 'string' ? value.trim() : '';
-  if (text === '') return production ? 'loopback' : false;
-  if (text === 'true') return true;
-  if (text === 'false') return false;
-  if (/^\d+$/.test(text)) return Number(text);
-  return text;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === 'function') return value; // express's own custom form
+  // A list, as a string or an array: blank entries dropped (express throws
+  // "invalid IP address" on one), and nothing left means unset.
+  const entries = (Array.isArray(value) ? value : [typeof value === 'string' ? value : ''])
+    .flatMap((entry) => String(entry).split(','))
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+  if (entries.length === 0) return production ? 'loopback' : false;
+  if (entries.length === 1) {
+    const [text] = entries;
+    if (text === 'true') return true;
+    if (text === 'false') return false;
+    if (/^\d+$/.test(text)) return Number(text);
+  }
+  return entries.join(', ');
 }
 
 // Default configuration
@@ -321,6 +335,10 @@ export async function getConfig() {
 
   if (typeof process.env.TRUST_PROXY === 'string' && process.env.TRUST_PROXY.trim() !== '') {
     merged.trustProxy = trustProxySetting(process.env.TRUST_PROXY, IS_PROD);
+  } else if (Object.hasOwn(user, 'trustProxy')) {
+    // The config's value as the env var's would be: '1' is a hop count, not
+    // the address 0.0.0.1, and 'true' / 'loopback,,' do not throw.
+    merged.trustProxy = trustProxySetting(user.trustProxy, IS_PROD);
   }
 
   return merged;

@@ -45,7 +45,7 @@ const FAST_TESTS = [
   'content-traversal', 'glob-files', 'file-collection-listing', 'live-url', 'live-status', 'preview-live-link',
   'preview-click', 'preview-cache-bust', 'preview-routes',
   'markdown-transforms', 'markdown-body-not-named', 'focus-editor-field',
-  'api-basics', 'api-response', 'login-log', 'rate-limit', 'untrusted-proxy', 'cross-origin', 'auth',
+  'api-basics', 'api-response', 'login-log', 'rate-limit', 'untrusted-proxy', 'trust-proxy-config', 'cross-origin', 'auth',
   'error-paths', 'image-serving', 'image-symlink', 'image-picker-astro',
   'video-upload', 'git-api', 'git-subdir', 'git-subdir-routes',
   'git-paths-scope', 'git-paths-commit', 'git-log-limit', 'git-environment', 'git-hardening', 'checkout-lock', 'publish-sync', 'publish-dirty-checkout', 'publish-filters',
