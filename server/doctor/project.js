@@ -279,17 +279,38 @@ function staticString(node) {
   return null;
 }
 
-/** The local names `fileURLToPath` is imported under from url / node:url. */
+/**
+ * How the config can call url's `fileURLToPath`: the local names it is
+ * imported under (`import { fileURLToPath as toPath } from 'node:url'`), and
+ * the names url itself is imported under (`import * as url` or a default
+ * import), for `url.fileURLToPath(...)`.
+ * @returns {{functions: Set<string>, modules: Set<string>}}
+ */
 function urlHelperNames(ast) {
-  const names = new Set();
+  const functions = new Set();
+  const modules = new Set();
   for (const statement of ast.program.body) {
     if (statement.type !== 'ImportDeclaration' || !['url', 'node:url'].includes(statement.source.value)) continue;
     for (const specifier of statement.specifiers) {
+      if (specifier.type === 'ImportNamespaceSpecifier' || specifier.type === 'ImportDefaultSpecifier') {
+        modules.add(specifier.local.name);
+        continue;
+      }
       const imported = specifier.type === 'ImportSpecifier' ? (specifier.imported.name ?? specifier.imported.value) : null;
-      if (imported === 'fileURLToPath') names.add(specifier.local.name);
+      if (imported === 'fileURLToPath') functions.add(specifier.local.name);
     }
   }
-  return names;
+  return { functions, modules };
+}
+
+/** Is the call `fileURLToPath(x)` or `url.fileURLToPath(x)`, by the config's own imports? */
+function isFileURLToPathCall(node, urlHelpers) {
+  if (node?.type !== 'CallExpression' || node.arguments.length !== 1) return false;
+  const callee = node.callee;
+  if (callee.type === 'Identifier') return urlHelpers.functions.has(callee.name);
+  return callee.type === 'MemberExpression' && !callee.computed
+    && callee.object.type === 'Identifier' && urlHelpers.modules.has(callee.object.name)
+    && callee.property.type === 'Identifier' && callee.property.name === 'fileURLToPath';
 }
 
 /** Is the node `import.meta.url`? */
@@ -303,17 +324,15 @@ function isImportMetaUrl(node) {
  * A path-valued config option as a path relative to the project root, or null
  * when it cannot be read statically. Reads a string (or expression-free
  * template literal), and `new URL('<string>', import.meta.url)`, bare or
- * inside `fileURLToPath(...)`, resolved against the config file as Node
+ * inside `fileURLToPath(...)` or `url.fileURLToPath(...)`, resolved against the config file as Node
  * would. A plain string is returned as written (Astro resolves it against
  * the root).
  */
-function readPath(node, resolve, fileURLToPathNames, configFile, projectRoot) {
+function readPath(node, resolve, urlHelpers, configFile, projectRoot) {
   let value = resolve(node);
   const text = staticString(value);
   if (text !== null) return text;
-  if (value?.type === 'CallExpression' && value.callee.type === 'Identifier' && fileURLToPathNames.has(value.callee.name) && value.arguments.length === 1) {
-    value = resolve(value.arguments[0]);
-  }
+  if (isFileURLToPathCall(value, urlHelpers)) value = resolve(value.arguments[0]);
   if (value?.type !== 'NewExpression' || value.callee.type !== 'Identifier' || value.callee.name !== 'URL' || value.arguments.length !== 2) return null;
   const relative = staticString(resolve(value.arguments[0]));
   if (relative === null || !isImportMetaUrl(value.arguments[1])) return null;

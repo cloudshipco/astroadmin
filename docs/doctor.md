@@ -237,7 +237,8 @@ cannot read statically, or when it cannot read the config well enough to
 find `publicDir` at all (a syntax error, a function passed to
 `defineConfig`, a spread of another object). It reads a string, a template
 literal with no `${}`, and `new URL('./public', import.meta.url)`, bare or
-inside `fileURLToPath(...)`. Both components find `/images/...` files only in
+inside `fileURLToPath(...)` (or `url.fileURLToPath(...)` with url imported
+whole). Both components find `/images/...` files only in
 `public/images/`. See
 [The public folder](./optimised-images.md#the-public-folder).
 
