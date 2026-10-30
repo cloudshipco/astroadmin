@@ -400,9 +400,12 @@ try {
     file: POST_FILE,
     originalText: POST_TEXT,
     titleLine: 1,
+    // DELIBERATE (review round 2): no `count`, `rank` or `meta` (required
+    // nullable numbers holding null, `meta.score` too), see the file() JSON
+    // matrix below.
     lossyKeys: [
-      'summary', 'label', 'count', 'rank', 'flag', 'featured' /* absent */, 'kind', 'stamp', 'image', 'heroVideo', 'cover',
-      'accentColor', 'author', 'reviewer', 'coauthors', 'teamIds', 'photos', 'seo', 'meta', 'sponsors',
+      'summary', 'label', 'flag', 'featured' /* absent */, 'kind', 'stamp', 'image', 'heroVideo', 'cover',
+      'accentColor', 'author', 'reviewer', 'coauthors', 'teamIds', 'photos', 'seo', 'sponsors',
       'points', 'blocks', 'when',
     ],
   });
@@ -443,7 +446,11 @@ try {
     file: EVENTS_FILE,
     originalText: EVENTS_TEXT,
     titleLine: 3,
-    lossyKeys: ['count', 'flag', 'at', 'author', 'reviewer', 'seo', 'points'],
+    // DELIBERATE (review round 2): `count` (a required z.number().nullable()
+    // holding null) is no longer lossy unbound. An empty nullable number box
+    // nobody cleared now saves null where the key is required (it saved '',
+    // which no number accepts), so the DOM reproduces this null by itself.
+    lossyKeys: ['flag', 'at', 'author', 'reviewer', 'seo', 'points'],
   });
 
   const { entry: legacy, schema: legacySchema } = await titleOnlyMatrix({
@@ -453,7 +460,8 @@ try {
     file: LEGACY_FILE,
     originalText: LEGACY_TEXT,
     titleLine: 1,
-    lossyKeys: ['count', 'flag', 'label', 'seo', 'items', 'points'],
+    // DELIBERATE (review round 2): `count` dropped, as for file() JSON.
+    lossyKeys: ['flag', 'label', 'seo', 'items', 'points'],
   });
 
   // --- Edited controls ---------------------------------------------------------

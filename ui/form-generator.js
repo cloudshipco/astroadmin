@@ -294,6 +294,14 @@ function isNumericType(type) {
 }
 
 /**
+ * Whether a field is a nullable number (`type: ['number', 'null']`, or the
+ * anyOf shape): its empty box means null, or nothing, but never ''.
+ */
+function isNullableNumber(schema) {
+  return Boolean(schema) && isNullableSchema(schema) && isNumericType(unwrapNullable(schema).type);
+}
+
+/**
  * A value as the text a textarea or text input shows. Anything that is not a
  * string (a number in a field the schema calls text, an object in a field whose
  * type the parser could not represent) must not crash the whole entry.
@@ -2212,7 +2220,14 @@ export function cleanEmptyValues(obj, schemaNode, isBlockItem = false, kept = nu
       if (schemaKnown && !isRequired) delete obj[key];
       continue;
     }
-    if (value === '') {
+    if (value === '' && schemaKnown && isNullableNumber(props[key])) {
+      // An empty nullable number box nobody cleared (a new block, card or
+      // entry; a cleared one is already null): '' fails every number, so it
+      // is null where the key is required and left out where it is optional,
+      // inside a block too.
+      if (isRequired) obj[key] = null;
+      else delete obj[key];
+    } else if (value === '') {
       // Only ever drop a value the schema proves optional. Inside a block it
       // is kept, and named for the server to judge by the site's zod (#70).
       if (!isBlockItem && schemaKnown && !isRequired) delete obj[key];
@@ -2887,6 +2902,10 @@ export function createEmptyArrayItem(schema) {
   for (const [key, propSchema] of Object.entries(props)) {
     if (propSchema.default !== undefined) {
       item[key] = propSchema.default;
+    } else if (isNullableNumber(propSchema)) {
+      if (required.has(key)) item[key] = null;
+    } else if (propSchema.type === 'object' && required.has(key)) {
+      item[key] = createEmptyArrayItem(propSchema);
     } else if (propSchema.type === 'string') {
       item[key] = '';
     } else if (isNumericType(propSchema.type)) {
@@ -3017,10 +3036,15 @@ export function createEmptyBlock(blockType, blockSchema) {
 
       if (schema.default !== undefined) {
         block[key] = schema.default;
+      } else if (isNullableNumber(schema)) {
+        // A nullable number has no empty value but null: '' fails it.
+        if (required.has(key)) block[key] = null;
       } else if (schema.type === 'array') {
         block[key] = [];
       } else if (schema.type === 'object') {
-        block[key] = {};
+        // A required object's own required numbers start at 0, as the
+        // block's do, rather than as an empty box left out of the save.
+        block[key] = required.has(key) ? createEmptyArrayItem(schema) : {};
       } else if (isNumericType(schema.type)) {
         // An optional number starts empty: 0 is a value nobody chose, and an
         // empty box is left out of the save (#61).
