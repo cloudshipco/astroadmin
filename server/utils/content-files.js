@@ -36,7 +36,7 @@ import {
   CONTENT_EXTENSIONS,
 } from './glob-files.js';
 import { withCheckoutWrite } from './checkout-lock.js';
-import { isSupersededSave, recordWrittenSave } from './save-order.js';
+import { saveOrderVerdict, recordWrittenSave } from './save-order.js';
 
 async function getI18n() {
   // Must be the merged config — i18n is only enableable via astroadmin.config.js.
@@ -312,7 +312,7 @@ function newEntryExtension(effectiveType, allowedExtensions) {
  *   old one would be written back.
  *   `saveOrder`: the editor page's number for this save (save-order.js). A save
  *   older than one that page already had written here is not written, and the
- *   result says `superseded: true`.
+ *   result says `superseded: true`; a repeat of the newest is not written again.
  */
 export async function writeContent(collection, slug, { data, body, type, keepStoredBody = false, saveOrder = null }, locale = null) {
   sanitizePath(collection);
@@ -359,7 +359,8 @@ export async function writeContent(collection, slug, { data, body, type, keepSto
   // is the latest write: existing keys keep their place, unchanged values their
   // text, and dates their type (content-format.js).
   const superseded = await withFileWriteQueue(filePath, async () => {
-    if (isSupersededSave(filePath, saveOrder)) return true;
+    const verdict = saveOrderVerdict(filePath, saveOrder);
+    if (verdict !== 'write') return verdict === 'superseded';
     const originalText = await readExistingText(filePath);
     let content;
     if (isJson) {
@@ -394,7 +395,8 @@ export async function writeFileCollectionArray(filePath, array) {
 async function writeFileCollectionEntry(filePath, entryId, entryData, saveOrder = null) {
   const orderKey = `${filePath}\0${entryId}`;
   const superseded = await withFileWriteQueue(filePath, async () => {
-    if (isSupersededSave(orderKey, saveOrder)) return true;
+    const verdict = saveOrderVerdict(orderKey, saveOrder);
+    if (verdict !== 'write') return verdict === 'superseded';
     const { array: arr, raw } = await readFileCollection(filePath, { missingOk: true });
     const index = findEntryIndex(arr, entryId);
     const next = withEntryIdentity(index >= 0 ? arr[index] : null, arr, entryId, entryData);

@@ -285,8 +285,12 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   with every save, and inside the file's write queue a save older than one the same page
   already had written there is acknowledged (`superseded: true`) and not written; another
   page's save, or one with no or a malformed `saveOrder`, is written as it arrives; a failed
-  write records nothing (its retry is written); a file() collection orders each entry on its
-  own; ten numbered saves sent at once, shuffled, leave the highest. The ordering lives on
+  write records nothing (its retry is written); the same number again is a repeat (a re-sent
+  request), answered as written and not written twice, and a superseded save is not
+  validated; a file() collection orders each entry on its own; ten numbered saves sent at
+  once, shuffled, leave the highest. A read of an entry waits (10 s at most: saves register
+  on arrival, before sign-in) for a save of it still arriving (`trackEntrySaves`), so a
+  reload after a leave save does not bind its form to the old values. The ordering lives on
   the server because the client cannot wait: a save sent as the page goes away and one
   already in flight race on separate connections. <1 s.
 - `bun tests/save-body.test.js` — a markdown entry's body survives a save: the editor shows
@@ -651,9 +655,15 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   `express.json()` refuses (a JSON primitive, malformed JSON, over the size limit) is its
   own 400/413/415 with a fixed sentence per refusal and at most one warning a minute (they
   come before auth and the rate limit), never a 500 or the parser's message, which quotes
-  the body (#104). An entry save (`/api/content`) is parsed only after sign-in, up to 5 MB
-  (`CONTENT_BODY_LIMIT`; a 6 MB one without a session is a 401, a 200 KB one saves); every
-  other route keeps express.json()'s 100 KB. <1 s.
+  the body (#104). An entry save (`/api/content`) is READ as it arrives, up to 5 MB, and PARSED only after
+  sign-in (`server/utils/content-body.js`: Bun drops a body no one read once a closing page
+  ends its connection, which lost leave saves; without a session an unparseable body is a
+  401, never a 400; a 200 KB entry saves); every other route keeps express.json()'s 100 KB.
+  A response sent before its request's body was read destroys the connection
+  (`server/utils/unread-body.js`): Bun 1.3.4 does not discard the leftover bytes, which were
+  read as the next request on the kept-alive connection (a 431, or a hang); checked with a
+  6 MB anonymous image upload and a 6 MB non-JSON save, each followed by a request, red
+  without it. <1 s.
 - `bun tests/login-browser.test.js` — the sign-in pages in real Chromium (#77). ~2-3 s. Browser
   tests take their Chromium from `tests/chromium-path.js` (CHROMIUM_PATH, else a headless
   shell in Playwright's cache on macOS or Linux: the revision playwright-core's
@@ -959,9 +969,13 @@ queue, so the old body is never written back.
   one, or a leave save arriving after the next save, is not written over it; picking another
   entry then closing keeps the edit; an ordinary autosave is keepalive, with savePayload's
   keys plus `saveOrder` on the wire; a failed leave save is saved again; a leave save reports
-  validation and turns a new entry into an ordinary one (title, picker, Delete); an untouched
-  entry is not rewritten. Seen red at each version before and by one mutant per mechanism
-  (server order, quota count, navigation flush). An over-cap save on a page closed without
+  validation and turns a new entry into an ordinary one (title, picker, Delete); a failed
+  navigation flush is sent once more, and one that cannot be saved raises a notice naming the
+  entry; logout sends an unsent edit and waits for every save first; an untouched entry is
+  not rewritten; and no server error is logged (a dropped body). Seen red at each version
+  before and by one mutant per mechanism (server order, quota count, navigation flush,
+  logout wait, the retry, the notice). A browser without keepalive (Firefox before 133)
+  counts every save as cancellable, so beforeunload always asks while one is in flight. An over-cap save on a page closed without
   beforeunload (a phone) can still be cancelled. ~25 s, not in test:unit.
 - `bun tests/dashboard-layout-browser.test.js` — the dashboard header and the markdown body
   toolbar in real Chromium at 360, 390, 768 (touch), 1024 and 1280 px, by measurement:

@@ -201,14 +201,38 @@ try {
     assert.match(warnings[0], /^Refused a request body \(entity\.parse\.failed\) on PUT \/api\/images\/photo\.png\/metadata$/);
     assert.ok(warnings.every((line) => !line.includes('oops') && !line.includes('xxxx')), 'the warning quotes the body');
     assert.equal(fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf8'), homeBefore);
-    // An entry save is parsed only once signed in: a 6 MB one without a
-    // session is a 401, not a parse.
-    const anonymous = await fetch(`${base}/api/content/pages/home`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: { title: 'x'.repeat(6 * 1024 * 1024) } }),
-    });
-    assert.equal(anonymous.status, 401);
+    // An entry save is read as it arrives but parsed only once signed in:
+    // without a session, a body that would not parse is a 401, never a 400.
+    for (const unparsed of ['42', '{"title": oops']) {
+      const anonymous = await fetch(`${base}/api/content/pages/home`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: unparsed,
+      });
+      assert.equal(anonymous.status, 401, `${unparsed}: ${anonymous.status}`);
+      await anonymous.text();
+    }
+    // A refusal sent before the body was read leaves nothing on the
+    // connection: Bun reuses it, and the leftover bytes used to be read as
+    // the next request (a 431, or a hang). Bodies no parser reads: an image
+    // upload without a session (401 before multer), and a non-JSON body. Each
+    // refusal is followed by a request on the same pool.
+    const upload = new FormData();
+    upload.append('image', new Blob([new Uint8Array(6 * 1024 * 1024)], { type: 'image/png' }), 'big.png');
+    const unreadRefusals = [
+      ['POST', '/api/images', {}, upload, 401],
+      ['PUT', '/api/content/pages/home', { 'Content-Type': 'text/plain' }, 'x'.repeat(6 * 1024 * 1024), 401],
+    ];
+    for (let round = 0; round < 4; round++) {
+      for (const [method, route, headers, body, expectedStatus] of unreadRefusals) {
+        const refused = await fetch(base + route, { method, headers, body, signal: AbortSignal.timeout(5000) });
+        assert.equal(refused.status, expectedStatus, `round ${round}`);
+        await refused.text();
+        const health = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(5000) });
+        assert.equal(health.status, 200, `the request after a ${expectedStatus} in round ${round}: ${health.status}`);
+        await health.text();
+      }
+    }
     // An entry over express.json()'s default 100 KB saves (up to 5 MB).
     const longBody = 'A long post line.\n'.repeat(12000); // ~200 KB
     const long = await fetch(`${base}/api/content/pages/home`, {

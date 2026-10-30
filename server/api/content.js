@@ -127,12 +127,55 @@ function entryForEditor(content) {
 }
 
 /**
+ * Saves of each entry still being received or written, by request path and
+ * locale (#103). A save sent as a page is left (keepalive) can still be
+ * arriving when that page's reload reads the entry; a read waits for it, or
+ * the reloaded form would be bound to the old values and its next save would
+ * write them back.
+ * @type {Map<string, Set<Promise<void>>>}
+ */
+const savesInProgress = new Map();
+const saveKey = (req) => `${req.baseUrl}${req.path}\0${typeof req.query.locale === 'string' ? req.query.locale : ''}`;
+// A read waits this long at most: saves are registered as they arrive, before
+// sign-in, so a slow anonymous upload must not hold reads of an entry.
+const READ_WAIT_MS = 10_000;
+
+/**
+ * Register a POST or PUT of an entry until its response is sent. Mounted at
+ * the app level before the body is read, so a save counts from the moment it
+ * arrives.
+ */
+export function trackEntrySaves(req, res, next) {
+  if (req.method !== 'POST' && req.method !== 'PUT') return next();
+  const key = saveKey(req);
+  let finish;
+  const done = new Promise((resolve) => { finish = resolve; });
+  const saves = savesInProgress.get(key) ?? new Set();
+  saves.add(done);
+  savesInProgress.set(key, saves);
+  const release = () => {
+    saves.delete(done);
+    if (saves.size === 0 && savesInProgress.get(key) === saves) savesInProgress.delete(key);
+    finish();
+  };
+  res.once('finish', release);
+  res.once('close', release);
+  next();
+}
+
+/**
  * GET /api/content/:collection/:slug
  * Read a content entry
  * Query params: ?locale=en (optional, uses default locale if i18n enabled)
  */
 router.get('/:collection/:slug', async (req, res) => {
   try {
+    const pendingSaves = savesInProgress.get(saveKey(req));
+    if (pendingSaves) {
+      let timer;
+      await Promise.race([Promise.all(pendingSaves), new Promise((resolve) => { timer = setTimeout(resolve, READ_WAIT_MS); })]);
+      clearTimeout(timer);
+    }
     const { collection, slug } = req.params;
     const locale = await getLocaleFromRequest(req);
 
@@ -198,9 +241,10 @@ router.post('/:collection/:slug', async (req, res) => {
       collection,
       slug,
       locale: result.locale,
-      // This page had a newer save of the entry written already (save-order.js).
+      // This page had a newer save of the entry written already (save-order.js):
+      // that save reports on the entry, so this one is not validated.
       superseded: result.superseded === true,
-      validation: await validateSavedEntry(collection, slug, locale),
+      validation: result.superseded ? null : await validateSavedEntry(collection, slug, locale),
       message: 'Content saved successfully',
     });
   } catch (error) {
@@ -249,9 +293,10 @@ router.put('/:collection/:slug', async (req, res) => {
       collection,
       slug,
       locale: result.locale,
-      // This page had a newer save of the entry written already (save-order.js).
+      // This page had a newer save of the entry written already (save-order.js):
+      // that save reports on the entry, so this one is not validated.
       superseded: result.superseded === true,
-      validation: await validateSavedEntry(collection, slug, locale),
+      validation: result.superseded ? null : await validateSavedEntry(collection, slug, locale),
       message: 'Content updated successfully',
     });
   } catch (error) {

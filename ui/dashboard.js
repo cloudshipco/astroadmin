@@ -1350,16 +1350,6 @@ function debounce(func, wait) {
     timeout = null;
     lastArgs = null;
   };
-  // Run a queued call NOW (used before navigating away, so a pending autosave
-  // lands on its own entry rather than the next one).
-  debounced.flush = () => {
-    if (timeout === null) return undefined;
-    clearTimeout(timeout);
-    timeout = null;
-    const args2 = lastArgs;
-    lastArgs = null;
-    return func(...(args2 || []));
-  };
   return debounced;
 }
 
@@ -1373,11 +1363,14 @@ const SAVE_CLIENT = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte
 let saveCount = 0;
 
 // Browsers refuse a keepalive request once the bodies of the page's keepalive
-// requests in flight, counted together, would pass 64 KiB.
-const KEEPALIVE_QUOTA = 64 * 1024;
+// requests in flight, counted together, would pass 64 KiB. A browser without
+// keepalive (Firefox before 133) cancels every save on unload: none fit.
+const KEEPALIVE_QUOTA = new Request('/', { keepalive: true }).keepalive === true ? 64 * 1024 : 0;
 let keepaliveBytesInFlight = 0;
 // Saves in flight in an ordinary request, which a closing page may cancel.
 let cancellableSavesInFlight = 0;
+// Every save POST of the page until it is answered (logout waits for them).
+const savePostsInFlight = new Set();
 
 /**
  * POST a save. With keepalive while the page's keepalive quota has room for it,
@@ -1399,12 +1392,19 @@ function postSave(url, body) {
     cancellableSavesInFlight++;
     return send(false).finally(() => { cancellableSavesInFlight--; });
   };
-  if (keepaliveBytesInFlight + bytes > KEEPALIVE_QUOTA) return sendOrdinary();
-  keepaliveBytesInFlight += bytes;
-  const attempt = send(true);
-  const release = () => { keepaliveBytesInFlight -= bytes; };
-  attempt.then(release, release);
-  return attempt.catch(sendOrdinary);
+  let request;
+  if (keepaliveBytesInFlight + bytes > KEEPALIVE_QUOTA) {
+    request = sendOrdinary();
+  } else {
+    keepaliveBytesInFlight += bytes;
+    const attempt = send(true);
+    const release = () => { keepaliveBytesInFlight -= bytes; };
+    attempt.then(release, release);
+    request = attempt.catch(sendOrdinary);
+  }
+  const answered = request.then(() => {}, () => {}).finally(() => savePostsInFlight.delete(answered));
+  savePostsInFlight.add(answered);
+  return request;
 }
 
 // Send a saver's unsent edit now (a debounced autosave, a save queued behind
@@ -1561,7 +1561,7 @@ function makeSaver(target) {
           updateSaveStatus('Error');
           if (!silent) showNotification('Failed to save: ' + result.error, 'error');
         }
-        if (now) retryAfterSendNow();
+        if (!(now && retryAfterSendNow())) reportOffScreenFailure();
         return;
       }
       // A newer snapshot of this page was written first; that save does the rest.
@@ -1625,12 +1625,27 @@ function makeSaver(target) {
         const rateLimited = error instanceof ApiResponseError && error.rateLimited;
         if (!silent || rateLimited) showNotification(failureText('Failed to save changes', error), 'error');
       }
-      if (now) retryAfterSendNow();
+      if (!(now && retryAfterSendNow())) reportOffScreenFailure();
     }
   };
-  // The page lived on (a hidden tab) and a save sent at once failed: it took
-  // the place of any queued save, so save the form again the ordinary way.
-  const retryAfterSendNow = () => { if (!disabled) saver(true); };
+  // A save sent at once failed and the page lived on: it took the place of any
+  // queued save, so save the form again, the ordinary way while the form is on
+  // screen, else once more at once (its saver was disabled when the editor
+  // moved to another entry). Returns whether it retried.
+  let retriedAfterSendNow = false;
+  const retryAfterSendNow = () => {
+    if (!disabled) { saver(true); return true; }
+    if (retriedAfterSendNow) return false;
+    retriedAfterSendNow = true;
+    runOnce(true, { now: true });
+    return true;
+  };
+  // A save of an entry no longer on screen failed for good: nothing shows its
+  // status, so say so.
+  const reportOffScreenFailure = () => {
+    if (isTargetCurrent()) return;
+    showNotification(`Your last change to "${entryDisplayTitle(target.collection, target.slug)}" could not be saved.`, 'error');
+  };
 
   // Serialize + coalesce: while a save runs, a further request sets `again` so
   // exactly one more save runs afterward with the latest form state. Once
@@ -2146,6 +2161,10 @@ document.getElementById('deleteEntryBtn').addEventListener('click', async () => 
 // Logout
 document.getElementById('logoutBtn').addEventListener('click', async () => {
   try {
+    // Send an unsent edit and let every save be answered first: logging out
+    // ends the session, and a save sent after it is refused (401).
+    sendUnsentEdit(activeSaver, activeDebouncedSave);
+    await Promise.all(savePostsInFlight);
     await fetch('/api/logout', { method: 'POST' });
     window.location.href = '/login';
   } catch (error) {

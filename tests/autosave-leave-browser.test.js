@@ -63,7 +63,7 @@ export const collections = {
   }),
 };
 `);
-const ENTRY_FILES = ['reload', 'close', 'navigate', 'large', 'stale', 'retry', 'invalid', 'order', 'quota', 'navflush', 'navflush-b', 'keepalive', 'untouched'];
+const ENTRY_FILES = ['reload', 'close', 'navigate', 'large', 'stale', 'retry', 'invalid', 'order', 'quota', 'navflush', 'navflush-b', 'navfail', 'navlost', 'logout', 'keepalive', 'untouched'];
 for (const slug of ENTRY_FILES) writeProjectFile(`src/content/pages/${slug}.md`, `---\ntitle: Start\n---\nBody.\n`);
 
 let passed = 0;
@@ -89,6 +89,16 @@ async function waitForEntry(slug, predicate, what) {
   }
   throw new Error(`${what}; ${slug}.md is:\n${entryText(slug)}`);
 }
+
+// Every server error, so a save the server failed (a body dropped before it
+// was read) fails the run even when a later save covers the edit.
+const serverErrors = [];
+const originalConsoleError = console.error;
+console.error = (...args) => {
+  const text = args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(' ');
+  if (/^(Server error|Error writing content|Error updating content)/.test(text)) serverErrors.push(text);
+  originalConsoleError(...args);
+};
 
 const { createServer } = await import('../server/index.js');
 const { app } = await createServer();
@@ -264,10 +274,12 @@ try {
     const halfQuota = 'Quota body line.\n'.repeat(2400); // ~40 KB: one fits, two do not
     await page.locator('#markdown-body').evaluate((textarea, value) => { textarea.value = value; }, halfQuota);
     let held = 0;
+    let releaseFirst;
+    const firstHeld = new Promise((resolve) => { releaseFirst = resolve; });
     await page.route('**/api/content/pages/quota', async (route) => {
       if (route.request().method() === 'POST' && held === 0) {
         held++;
-        await new Promise((resolve) => setTimeout(resolve, 3000)); // the first stays in flight
+        await firstHeld; // the first stays in flight until the prompt has been seen
       }
       return route.continue();
     });
@@ -281,9 +293,10 @@ try {
     const dialogs = [];
     page.on('dialog', (dialog) => { dialogs.push([dialog.type(), posts.length]); dialog.dismiss(); });
     await page.reload({ timeout: 2000 }).catch(() => { /* dismissed: no navigation */ });
+    releaseFirst();
     assert.deepEqual(dialogs, [['beforeunload', 2]]);
     await waitForEntry('quota', (text) => text.includes('title: Quota two'), 'the second save was not written');
-    await page.waitForTimeout(3000); // past the held first save
+    await page.waitForTimeout(1000); // past the released first save
     assert.ok(entryText('quota').includes('title: Quota two'), entryText('quota'));
     await page.close();
   });
@@ -303,6 +316,46 @@ try {
     });
     await page.close({ runBeforeUnload: true });
     await waitForEntry('navflush', (text) => text.includes('title: Flushed'), 'the flushed edit was lost');
+  });
+
+  /** Refuse the entry's first `times` saves with a 500; let the rest through. */
+  async function refuseSaves(page, slug, times) {
+    let refused = 0;
+    await page.route(`**/api/content/pages/${slug}`, (route) => {
+      if (route.request().method() === 'POST' && refused < times) {
+        refused++;
+        return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"Internal server error"}' });
+      }
+      return route.continue();
+    });
+    return () => refused;
+  }
+  const pickEntry = (page, value) => page.evaluate((entry) => {
+    const select = document.getElementById('pageSelector');
+    select.value = entry;
+    select.dispatchEvent(new Event('change'));
+  }, value);
+
+  await check('an edit flushed by picking another entry whose save fails is sent once more', async () => {
+    const page = await openEntry('navfail');
+    const refusedCount = await refuseSaves(page, 'navfail', 1);
+    await typeTitle(page, 'Second try');
+    await pickEntry(page, 'pages/navflush-b');
+    await waitForEntry('navfail', (text) => text.includes('title: Second try'), 'the failed flush was not retried');
+    assert.equal(refusedCount(), 1);
+    await page.close();
+  });
+
+  await check('an edit flushed by picking another entry that cannot be saved says so, naming the entry', async () => {
+    const page = await openEntry('navlost');
+    await refuseSaves(page, 'navlost', 99);
+    await typeTitle(page, 'Never saved');
+    await pickEntry(page, 'pages/navflush-b');
+    const notice = page.locator('.notification-error', { hasText: 'Your last change to' });
+    await notice.waitFor({ timeout: 5000 });
+    assert.match(await notice.textContent(), /"Start" could not be saved/);
+    assert.ok(entryText('navlost').includes('title: Start'));
+    await page.close();
   });
 
   await check('an ordinary autosave is sent with keepalive, so a POST in flight outlives the page', async () => {
@@ -379,8 +432,24 @@ try {
     await page.close();
   });
 
-  await check('no page errors', async () => {
+  // Last: it ends the session the other checks share.
+  await check('logging out with an edit inside the debounce saves it before the session ends', async () => {
+    const page = await openEntry('logout');
+    const statuses = [];
+    page.on('response', (response) => {
+      if (response.request().method() === 'POST' && response.url().includes('/api/content/')) statuses.push(response.status());
+    });
+    await typeTitle(page, 'Before logout');
+    await Promise.all([page.waitForURL(/\/login/), page.locator('#logoutBtn').click()]);
+    await waitForEntry('logout', (text) => text.includes('title: Before logout'), 'the edit was lost on logout');
+    assert.deepEqual(statuses, [200]);
+    await page.close();
+  });
+
+  await check('no page errors, and no server errors', async () => {
     assert.deepEqual(pageErrors, []);
+    // The refused saves above are routed in the browser and never reach it.
+    assert.deepEqual(serverErrors, []);
   });
 } finally {
   await browser.close();

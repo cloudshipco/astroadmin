@@ -6,9 +6,12 @@
  * the file's write queue the store skips a save older than one the same page
  * already had written there (`superseded: true`, nothing written); a save from
  * another page, or with no or a malformed `saveOrder`, is written as it
- * arrives. A failed write records nothing, so its retry is written. A file()
+ * arrives. The same number again is a repeat: answered as written (validated),
+ * not written twice; a superseded save is not validated. A failed write records
+ * nothing, so its retry is written. A file()
  * collection orders each entry on its own. Ten numbered saves sent at once,
- * in shuffled order, leave the highest number on disk.
+ * in shuffled order, leave the highest number on disk. A read of an entry
+ * waits for a save of it that is still arriving (trackEntrySaves).
  *
  *   bun tests/save-order.test.js     (<1 s)
  */
@@ -41,7 +44,7 @@ export const collections = {
   people: defineCollection({ loader: file('src/data/people.json'), schema: z.object({ id: z.string(), name: z.string() }) }),
 };
 `);
-for (const slug of ['ordered', 'clients', 'malformed', 'failed', 'burst']) writeProjectFile(`src/content/pages/${slug}.md`, '---\ntitle: Start\n---\nBody.\n');
+for (const slug of ['ordered', 'clients', 'malformed', 'failed', 'burst', 'reading', 'idle']) writeProjectFile(`src/content/pages/${slug}.md`, '---\ntitle: Start\n---\nBody.\n');
 writeProjectFile('src/data/people.json', JSON.stringify([{ id: 'ada', name: 'Ada' }, { id: 'bo', name: 'Bo' }], null, 2) + '\n');
 
 let passed = 0;
@@ -98,8 +101,13 @@ try {
     assert.equal(older.body.success, true);
     assert.equal(older.body.superseded, true);
     assert.match(pageText('ordered'), /title: Second/);
-    // The same number again is not newer either; a higher one is written.
-    assert.equal((await save('pages', 'ordered', { title: 'Again' }, { client: CLIENT_A, number: 2 })).body.superseded, true);
+    // The same number again is a repeat (a re-sent request): answered as
+    // written, with its validation, and not written twice.
+    const repeat = await save('pages', 'ordered', { title: 'Again' }, { client: CLIENT_A, number: 2 });
+    assert.equal(repeat.body.superseded, false);
+    assert.equal(repeat.body.validation.status, 'valid');
+    assert.match(pageText('ordered'), /title: Second/);
+    assert.equal(older.body.validation, null, 'a superseded save is not validated');
     assert.equal((await save('pages', 'ordered', { title: 'Third' }, { client: CLIENT_A, number: 3 })).body.superseded, false);
     assert.match(pageText('ordered'), /title: Third/);
   });
@@ -154,6 +162,45 @@ try {
     const results = await Promise.all(numbers.map((number) => save('pages', 'burst', { title: `Save ${number}` }, { client: CLIENT_B, number })));
     assert.ok(results.every((result) => result.status === 200));
     assert.match(pageText('burst'), /title: Save 10\n/);
+  });
+  await check('a read of an entry waits for a save of it still arriving (a reload after a leave save)', async () => {
+    const encoder = new TextEncoder();
+    const payload = JSON.stringify({ data: { title: 'Arrived' }, body: 'Body.\n', type: 'content', saveOrder: { client: CLIENT_A, number: 1 } });
+    let sendRest;
+    const rest = new Promise((resolve) => { sendRest = resolve; });
+    const stream = new ReadableStream({
+      async start(controller) {
+        controller.enqueue(encoder.encode(payload.slice(0, 20)));
+        await rest;
+        controller.enqueue(encoder.encode(payload.slice(20)));
+        controller.close();
+      },
+    });
+    const saving = fetch(`${base}/api/content/pages/reading`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie, 'Content-Length': String(Buffer.byteLength(payload)) },
+      body: stream,
+      duplex: 'half',
+    });
+    let readSettled = false;
+    let reading;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      reading = fetch(`${base}/api/content/pages/reading`, { headers: { cookie } })
+        .then((response) => response.json())
+        .finally(() => { readSettled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(readSettled, false, 'the read answered while the save was still arriving');
+    } finally {
+      sendRest(); // never leave the save half sent: server.close() would wait for it
+    }
+    assert.equal((await saving).status, 200);
+    const read = await reading;
+    assert.equal(read.data.title, 'Arrived');
+    // Control: with no save in progress a read answers at once.
+    const started = Date.now();
+    assert.equal((await (await fetch(`${base}/api/content/pages/idle`, { headers: { cookie } })).json()).data.title, 'Start');
+    assert.ok(Date.now() - started < 1000);
   });
 } finally {
   server.close();

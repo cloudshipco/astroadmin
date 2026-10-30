@@ -12,7 +12,8 @@
  * (publish-check, publish-refusal-reasons, publish-refusal-paths,
  * check-linked-styles, cms-image-packed, cms-video-packed, astro-bin,
  * component-preview, dev-toolbar, cli-dev, doctor-*, video-picker-browser,
- * dashboard-layout-browser, login-browser, image-astro-fields,
+ * dashboard-layout-browser, autosave-leave-browser, login-browser,
+ * image-astro-fields,
  * image-field-astro). Run those by name before a release. Every other
  * tests/*.test.js file is in FAST_TESTS below.
  *
