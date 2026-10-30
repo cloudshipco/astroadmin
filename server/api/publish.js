@@ -12,6 +12,7 @@
  * /api/git/publish (git.js) for backwards compatibility when git is enabled.
  */
 
+import crypto from 'crypto';
 import express from 'express';
 import fs from 'fs';
 import os from 'os';
@@ -312,6 +313,8 @@ async function gitPath(git, name) {
 async function rebaseOntoUpstream(git, upstream) {
   const localHead = (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
   if (!localHead) return 'synced'; // an unborn branch has nothing to rebase
+  // What the upstream was known to be BEFORE this fetch moves anything.
+  const knownBefore = await knownUpstreamValues(git, upstream);
   let upstreamHead;
   try {
     await git.raw(['fetch', ...FETCH_PROGRAMS, '--no-tags', '--quiet', upstream.remote, upstream.ref]);
@@ -320,6 +323,7 @@ async function rebaseOntoUpstream(git, upstream) {
     console.log('Fetch skipped:', fetchError.message);
     return 'synced';
   }
+  await recordUpstream(git, upstream, upstreamHead);
   if (await isAncestor(git, upstreamHead, localHead)) return 'synced';
 
   // `reset --keep` resets the index. A file staged as one version and
@@ -333,7 +337,7 @@ async function rebaseOntoUpstream(git, upstream) {
     return 'local-changes';
   }
 
-  const rebased = await rebaseInWorktree(git, localHead, upstreamHead, await forkPointRef(git, upstreamHead));
+  const rebased = await rebaseInWorktree(git, localHead, upstreamHead, await lastKnownBase(git, localHead, knownBefore));
   if (rebased === null) return 'conflict';
 
   // The exclusive hold keeps the editor out; this keeps a person's commit
@@ -371,18 +375,59 @@ async function isAncestor(git, ancestor, descendant) {
 }
 
 /**
- * The branch's remote-tracking ref (refs/remotes/<remote>/<branch>) when the
- * fetch just moved it to `upstreamHead`, else null. Its reflog is what lets
- * the rebase tell the editor's commits from ones the upstream has since
- * dropped (a force-push): see rebaseInWorktree. A fetch naming the branch
- * updates the tracking ref only when the remote's fetch refspec maps it.
+ * Where the admin records the last value it saw the upstream branch have
+ * (fetched, or pushed by it): one ref per remote and branch, named by a
+ * digest since the remote can be a URL.
+ * @param {{remote: string, ref: string}} upstream
+ */
+function upstreamRecordRef(upstream) {
+  const digest = crypto.createHash('sha256').update(`${upstream.remote}\0${upstream.ref}`).digest('hex').slice(0, 32);
+  return `refs/astroadmin/upstream/${digest}`;
+}
+
+/** Record that the upstream branch was seen at `commit`. Best effort. */
+async function recordUpstream(git, upstream, commit) {
+  await git.raw(['update-ref', '--no-deref', upstreamRecordRef(upstream), commit])
+    .catch((error) => console.log('Could not record the upstream commit:', error.message));
+}
+
+/**
+ * Commits the upstream branch is known to have pointed at, read before a
+ * fetch: the admin's own record (upstreamRecordRef, kept whatever the
+ * remote's configuration) and the branch's remote-tracking ref, when it has
+ * one (a person's `git fetch` or `git pull` moves it).
+ * @returns {Promise<string[]>}
+ */
+async function knownUpstreamValues(git, upstream) {
+  const values = [];
+  const resolve = async (name) => (await git.raw(['rev-parse', '--verify', '--quiet', `${name}^{commit}`]).catch(() => '')).trim();
+  const recorded = await resolve(upstreamRecordRef(upstream));
+  if (recorded) values.push(recorded);
+  const trackingRef = (await git.raw(['rev-parse', '--symbolic-full-name', '@{upstream}']).catch(() => '')).trim();
+  if (trackingRef.startsWith('refs/')) {
+    const tracking = await resolve(trackingRef);
+    if (tracking) values.push(tracking);
+  }
+  return values;
+}
+
+/**
+ * Of the known upstream values, the newest that `localHead` contains, or
+ * null. The commits after it are the checkout's own; those before it were
+ * the upstream's, so one the upstream has since dropped (a force-push) is
+ * not replayed and pushed back. (A value `localHead` does not contain says
+ * nothing about it and is skipped.) Null means nothing is known, and the
+ * rebase falls back to the merge-base.
+ * @param {string[]} candidates
  * @returns {Promise<string|null>}
  */
-async function forkPointRef(git, upstreamHead) {
-  const trackingRef = (await git.raw(['rev-parse', '--symbolic-full-name', '@{upstream}']).catch(() => '')).trim();
-  if (!trackingRef.startsWith('refs/')) return null;
-  const trackingHead = (await git.raw(['rev-parse', '--verify', '--quiet', `${trackingRef}^{commit}`]).catch(() => '')).trim();
-  return trackingHead === upstreamHead ? trackingRef : null;
+async function lastKnownBase(git, localHead, candidates) {
+  let newest = null;
+  for (const candidate of candidates) {
+    if (!(await isAncestor(git, candidate, localHead))) continue;
+    if (newest === null || await isAncestor(git, newest, candidate)) newest = candidate;
+  }
+  return newest;
 }
 
 /**
@@ -390,18 +435,19 @@ async function forkPointRef(git, upstreamHead) {
  * Returns the rebased commit, or null when the rebase stopped on a conflict
  * (after aborting it). The worktree is removed either way.
  *
- * With a `trackingRef` (pointing at `upstreamHead`) the rebase is
- * `--fork-point`, as `git pull --rebase` was: the commits replayed are those
- * after the newest commit the tracking ref ever pointed at that `localHead`
- * contains, so a commit that was pushed and then force-pushed away upstream
- * is dropped, not replayed and pushed back. With no reflog entry to use, git
- * falls back to the merge-base; with no tracking ref, so do we.
+ * With a `base` (lastKnownBase: an upstream commit `localHead` contains) the
+ * commits replayed are those after it (`rebase --onto upstreamHead base`),
+ * so a commit that was pushed and then force-pushed away upstream is dropped,
+ * not replayed and pushed back. `git pull --rebase` did this with the
+ * tracking ref's reflog (--fork-point), which a URL remote, a fetch refspec
+ * that does not map the branch or a missing reflog left without one. With no
+ * base, the rebase is onto `upstreamHead` from the merge-base.
  *
  * `--no-autostash` and `--no-update-refs` override inherited config: the
  * worktree has nothing to stash, and update-refs would move the live
  * checkout's branch (it points at `localHead`) without its files.
  */
-export async function rebaseInWorktree(git, localHead, upstreamHead, trackingRef = null) {
+export async function rebaseInWorktree(git, localHead, upstreamHead, base = null) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-rebase-'));
   const worktreeDir = path.join(tempDir, 'worktree');
   try {
@@ -413,7 +459,7 @@ export async function rebaseInWorktree(git, localHead, upstreamHead, trackingRef
     const worktreeGit = gitClientAt(worktreeDir);
     await worktreeGit.raw(['reset', '--quiet', '--hard', localHead]);
     try {
-      const onto = trackingRef ? ['--fork-point', trackingRef] : [upstreamHead];
+      const onto = base ? ['--onto', upstreamHead, base] : [upstreamHead];
       await worktreeGit.raw(['rebase', '--quiet', '--no-autostash', '--no-update-refs', ...onto]);
     } catch (rebaseError) {
       // Stopped on a conflict when there is a rebase to abort; any other
@@ -457,6 +503,8 @@ async function findUpstream(git) {
  */
 async function pushCheckedCommit(git, commit, upstream) {
   await git.raw(['push', ...PUSH_PROGRAMS, '--no-follow-tags', upstream.remote, `${commit}:${upstream.ref}`]);
+  // The upstream is now this commit: the next rebase's base (lastKnownBase).
+  await recordUpstream(git, upstream, commit);
 }
 
 /**
