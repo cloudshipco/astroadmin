@@ -154,7 +154,7 @@ over-redaction in every version of "show the output with server paths removed or
 
 Tests are standalone scripts under `tests/`, each run as its own process.
 `npm run test:unit` (`bun tests/run-unit.js [word...]`) runs the fast server-less
-ones in turn and prints a summary (93 files in FAST_TESTS, ~300 s on a loaded machine, measured
+ones in turn and prints a summary (94 files in FAST_TESTS, ~300 s on a loaded machine, measured
 2026-10-30; review lanes may add more); a new fast test
 goes in its list, and its header names every file it leaves out. The
 slow ones (full Astro builds, a browser) are run by name before a release, and the
@@ -280,6 +280,15 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   save still writes invalid content and reports why. Also: a bigint literal's accepted value
   (`1n`) formats without throwing, a YAML error's line is the FILE's line, and with no
   schemas at the commit nothing is checked against a schema.
+- `bun tests/save-order.test.js` — a page's saves land in the order it numbered them (#103,
+  `server/utils/save-order.js`), over HTTP: the dashboard sends `saveOrder: {client, number}`
+  with every save, and inside the file's write queue a save older than one the same page
+  already had written there is acknowledged (`superseded: true`) and not written; another
+  page's save, or one with no or a malformed `saveOrder`, is written as it arrives; a failed
+  write records nothing (its retry is written); a file() collection orders each entry on its
+  own; ten numbered saves sent at once, shuffled, leave the highest. The ordering lives on
+  the server because the client cannot wait: a save sent as the page goes away and one
+  already in flight race on separate connections. <1 s.
 - `bun tests/save-body.test.js` — a markdown entry's body survives a save: the editor shows
   the body whatever the schema (it used to hide it when the schema had `blocks`, and the save
   then wrote `body: ''`), the save payload carries `body` only when the form shows one
@@ -640,8 +649,9 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   health, `/api/config` (no credential in it), 401s without a session, a wrong login sets
   no session, sign-in, collection listing, sign-out ends the session (#2). A body
   `express.json()` refuses (a JSON primitive, malformed JSON, over the size limit) is its
-  own 400/413 with fixed text and a warning, never a 500 or the parser's message, which
-  quotes the body (#104). <1 s.
+  own 400/413/415 with a fixed sentence per refusal and at most one warning a minute (they
+  come before auth and the rate limit), never a 500 or the parser's message, which quotes
+  the body (#104). <1 s.
 - `bun tests/login-browser.test.js` — the sign-in pages in real Chromium (#77). ~2-3 s. Browser
   tests take their Chromium from `tests/chromium-path.js` (CHROMIUM_PATH, else a headless
   shell in Playwright's cache on macOS or Linux: the revision playwright-core's
@@ -936,17 +946,21 @@ queue, so the old body is never written back.
   (a union holding an object crashed the entry; form-generator.test.js). A typed clear
   in a new entry saves null (untouched-structure). ~10 s.
 - `bun tests/autosave-leave-browser.test.js` — an edit made inside the 1 s autosave debounce
-  survives leaving the page (#103), in real Chromium: a reload, a close and a navigation each
-  save it, sent by `sendUnsavedEditOnLeave` (beforeunload, pagehide, a hidden tab) through the
-  saver's own `runOnce` in its leaving mode (`sendOnLeave`: POST before any await, no preview
-  fetch first, keepalive), so it reports and finishes like an autosave (validation, a new
-  entry's title, picker and Delete). A body over the keepalive cap (64 KiB) is POSTed before
-  the browser asks to confirm leaving; a queued save holding an older snapshot skips its POST
-  (each snapshot is numbered, for a page restored from the back/forward cache); later leave
-  events send nothing more; the next save waits for the leave POST's answer (`leavePosts`,
-  never the whole run, whose preview refresh takes 2 s); a leave save that fails is saved
-  again the ordinary way; an untouched entry is not rewritten. Seen red at the first version
-  (5 of 11) and by one mutant per guard. ~18 s, not in test:unit.
+  survives leaving the page (#103), in real Chromium. Every save goes through `postSave`:
+  keepalive while the page's keepalive requests in flight stay under 64 KiB together (else an
+  ordinary request, counted in `cancellableSavesInFlight`), numbered for the server's save
+  order (`save-order`). beforeunload, pagehide, a hidden tab and a navigation flush send an
+  unsent edit at once (`sendUnsentEdit` -> `saver.sendNow`: no preview fetch first), and
+  beforeunload asks to confirm leaving while a cancellable save is in flight. Checked: a
+  reload, a close and a navigation save the edit; an over-cap body, and two saves that pass
+  the quota together, are POSTed before the prompt; an older snapshot POSTed after a newer
+  one, or a leave save arriving after the next save, is not written over it; picking another
+  entry then closing keeps the edit; an ordinary autosave is keepalive, with savePayload's
+  keys plus `saveOrder` on the wire; a failed leave save is saved again; a leave save reports
+  validation and turns a new entry into an ordinary one (title, picker, Delete); an untouched
+  entry is not rewritten. Seen red at each version before and by one mutant per mechanism
+  (server order, quota count, navigation flush). An over-cap save on a page closed without
+  beforeunload (a phone) can still be cancelled. ~25 s, not in test:unit.
 - `bun tests/dashboard-layout-browser.test.js` — the dashboard header and the markdown body
   toolbar in real Chromium at 360, 390, 768 (touch), 1024 and 1280 px, by measurement:
   no horizontal page scroll; every header control (picker, View live site, Publish,

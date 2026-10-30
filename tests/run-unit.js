@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 const testsDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 const FAST_TESTS = [
-  'content-files', 'content-round-trip', 'serializer-fidelity', 'save-body',
+  'content-files', 'content-round-trip', 'serializer-fidelity', 'save-body', 'save-order',
   'file-entry-id', 'file-entry-keys', 'export-files', 'import-files',
   'form-generator', 'extract-fields', 'untouched-fields', 'untouched-structure',
   'primitive-top-level-array', 'modal-item-save', 'legacy-alt', 'new-block-values', 'literal-fields', 'unique-ids', 'clean-nullable', 'blank-optional-round-trip', 'refused-blanks',

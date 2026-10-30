@@ -834,7 +834,7 @@ router.get('/entry-file', async (req, res) => {
  * `astro build` resolves, plus a URL the editor can preview it at. Nothing in
  * the response names a server path.
  */
-router.post('/:filename/entry-value', express.json(), async (req, res) => {
+router.post('/:filename/entry-value', async (req, res) => {
   try {
     const filename = imageFilenameFromParam(req.params.filename);
     if (!filename) return invalidFilename(res);
@@ -906,7 +906,7 @@ router.get('/:filename/metadata', async (req, res) => {
  * file); a legacy bare-filename entry is moved in. Responds with the entry
  * as written.
  */
-router.put('/:filename/metadata', express.json(), async (req, res) => {
+router.put('/:filename/metadata', async (req, res) => {
   try {
     const sanitizedFilename = imageFilenameFromParam(req.params.filename);
     if (!sanitizedFilename) return invalidFilename(res);

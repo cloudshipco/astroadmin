@@ -36,6 +36,7 @@ import {
   CONTENT_EXTENSIONS,
 } from './glob-files.js';
 import { withCheckoutWrite } from './checkout-lock.js';
+import { isSupersededSave, recordWrittenSave } from './save-order.js';
 
 async function getI18n() {
   // Must be the merged config — i18n is only enableable via astroadmin.config.js.
@@ -309,15 +310,18 @@ function newEntryExtension(effectiveType, allowedExtensions) {
  *   when the write runs is kept. It is read inside the file's write queue: read
  *   any earlier, a save queued ahead could replace the body in between and the
  *   old one would be written back.
+ *   `saveOrder`: the editor page's number for this save (save-order.js). A save
+ *   older than one that page already had written here is not written, and the
+ *   result says `superseded: true`.
  */
-export async function writeContent(collection, slug, { data, body, type, keepStoredBody = false }, locale = null) {
+export async function writeContent(collection, slug, { data, body, type, keepStoredBody = false, saveOrder = null }, locale = null) {
   sanitizePath(collection);
   sanitizePath(slug);
 
   const info = await getCollectionLoaderInfo(collection);
 
   if (info.isFile) {
-    return writeFileCollectionEntry(info.filePath, slug, data);
+    return writeFileCollectionEntry(info.filePath, slug, data, saveOrder);
   }
 
   const allowedExtensions = allowedContentExtensions(info.patterns);
@@ -354,7 +358,8 @@ export async function writeContent(collection, slug, { data, body, type, keepSto
   // Serialised against the file it replaces, inside the queue so the original
   // is the latest write: existing keys keep their place, unchanged values their
   // text, and dates their type (content-format.js).
-  await withFileWriteQueue(filePath, async () => {
+  const superseded = await withFileWriteQueue(filePath, async () => {
+    if (isSupersededSave(filePath, saveOrder)) return true;
     const originalText = await readExistingText(filePath);
     let content;
     if (isJson) {
@@ -370,8 +375,10 @@ export async function writeContent(collection, slug, { data, body, type, keepSto
       content = serializeMarkdown(bodyText, data, originalText, { dateFields: dateFieldsFromSchema(info.jsonSchema) });
     }
     await atomicWriteFile(filePath, content);
+    recordWrittenSave(filePath, saveOrder);
+    return false;
   });
-  return { filePath, locale };
+  return { filePath, locale, superseded };
 }
 
 /**
@@ -384,8 +391,10 @@ export async function writeFileCollectionArray(filePath, array) {
   return { filePath };
 }
 
-async function writeFileCollectionEntry(filePath, entryId, entryData) {
-  await withFileWriteQueue(filePath, async () => {
+async function writeFileCollectionEntry(filePath, entryId, entryData, saveOrder = null) {
+  const orderKey = `${filePath}\0${entryId}`;
+  const superseded = await withFileWriteQueue(filePath, async () => {
+    if (isSupersededSave(orderKey, saveOrder)) return true;
     const { array: arr, raw } = await readFileCollection(filePath, { missingOk: true });
     const index = findEntryIndex(arr, entryId);
     const next = withEntryIdentity(index >= 0 ? arr[index] : null, arr, entryId, entryData);
@@ -397,8 +406,10 @@ async function writeFileCollectionEntry(filePath, entryId, entryData) {
       arr.push(next);
     }
     await atomicWriteFile(filePath, serializeFileCollection(arr, raw));
+    recordWrittenSave(orderKey, saveOrder);
+    return false;
   });
-  return { filePath, locale: null };
+  return { filePath, locale: null, superseded };
 }
 
 export async function deleteContent(collection, slug, locale = null) {

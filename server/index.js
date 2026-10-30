@@ -350,6 +350,19 @@ export async function createServer() {
     res.sendFile(path.join(__dirname, '../ui/index.html'));
   });
 
+  // A refused body comes before the session, auth and the rate limit, so
+  // anyone can send them: one warning a minute at most, naming how many more.
+  let lastBodyRefusalWarning = 0;
+  let bodyRefusalsSinceWarning = 0;
+  const warnBodyRefusal = (type, req) => {
+    const now = Date.now();
+    if (now - lastBodyRefusalWarning < 60_000) { bodyRefusalsSinceWarning++; return; }
+    const more = bodyRefusalsSinceWarning ? `; ${bodyRefusalsSinceWarning} more since the last warning` : '';
+    lastBodyRefusalWarning = now;
+    bodyRefusalsSinceWarning = 0;
+    console.warn(`Refused a request body (${type}) on ${req.method} ${req.path}${more}`);
+  };
+
   // Error handling middleware
   app.use((err, req, res, next) => {
     // A body express.json() refused (a JSON primitive in strict mode,
@@ -357,7 +370,7 @@ export async function createServer() {
     // fault (#104): its own 4xx with fixed text, and only a warning here. The
     // parser's message quotes the body, so it goes nowhere.
     if (BODY_REFUSALS.has(err.type) && err.status >= 400 && err.status < 500) {
-      console.warn(`Refused a request body (${err.type}) on ${req.method} ${req.path}`);
+      warnBodyRefusal(err.type, req);
       return res.status(err.status).json({ error: BODY_REFUSALS.get(err.type) });
     }
     console.error('Server error:', err);

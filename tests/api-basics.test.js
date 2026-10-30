@@ -192,7 +192,9 @@ try {
       console.warn = originalWarn;
     }
     assert.deepEqual(errors, [], 'a refused body is not a server error');
-    assert.equal(warnings.length, routes.length * refusals.length, warnings.join('\n'));
+    // One warning a minute at most: these come before auth and the rate limit.
+    assert.equal(warnings.length, 1, warnings.join('\n'));
+    assert.match(warnings[0], /^Refused a request body \(entity\.parse\.failed\) on PUT \/api\/images\/photo\.png\/metadata$/);
     assert.ok(warnings.every((line) => !line.includes('oops') && !line.includes('xxxx')), 'the warning quotes the body');
     assert.equal(fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf8'), homeBefore);
     // Positive control: a JSON object still reaches the route.

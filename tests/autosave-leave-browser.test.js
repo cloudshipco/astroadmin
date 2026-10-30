@@ -4,25 +4,28 @@
  *
  * The dashboard autosaves 1 s after the last input. Leaving the page inside
  * that second used to drop the edit: nothing flushed the debounce on unload.
- * Now beforeunload, pagehide and a hidden tab send the form as it is with a
- * keepalive request. Checked: a reload, a close and a navigation inside the
- * debounce each save the edit; a body over the keepalive cap is POSTed
- * before the browser asks to confirm leaving, and staying saves it; a
- * save still waiting on its preview fetch when a hidden tab sends a newer
- * snapshot never POSTs its older one afterwards (a page restored from the
- * back/forward cache would), and later leave events send nothing more; the
- * next save after returning to the tab waits for the leave save, so it lands
- * last; a leave save that fails is saved again the ordinary way; a leave save
- * reports validation ("Saved, needs fixing") and turns a new entry into an
- * ordinary one (title, picker, Delete), as an autosave does; and an untouched
- * entry is not rewritten.
+ * Now beforeunload, pagehide, a hidden tab and a navigation flush send the
+ * form at once; every save is keepalive while the page's keepalive quota has
+ * room, and numbered, so the server writes a page's saves in its order
+ * (save-order.test.js covers the server half).
+ *
+ * Checked: a reload, a close and a navigation inside the debounce each save
+ * the edit; a body over the keepalive cap, and two saves that pass the quota
+ * together, are POSTed before the browser asks to confirm leaving, and staying
+ * saves them; an older snapshot POSTed after a newer one, and a leave save
+ * arriving after the next save, are not written over it, and later leave
+ * events send nothing more; picking another entry and closing at once keeps
+ * the edit; an ordinary autosave goes with keepalive and savePayload's keys
+ * plus `saveOrder`; a failed leave save is saved again; a leave save reports
+ * validation ("Saved, needs fixing") and turns a new entry into an ordinary
+ * one (title, picker, Delete); an untouched entry is not rewritten.
  *
  * Runs createServer() in this process against a throwaway site (no git, no
  * Astro preview; the preview URL points at a port nothing serves, and the
  * stale-snapshot check holds its fetch with page.route). CHROMIUM_PATH picks
  * the browser, else a downloaded Playwright headless shell.
  *
- *   bun tests/autosave-leave-browser.test.js     (~20 s)
+ *   bun tests/autosave-leave-browser.test.js     (~25 s)
  */
 
 import assert from 'assert';
@@ -60,7 +63,7 @@ export const collections = {
   }),
 };
 `);
-const ENTRY_FILES = ['reload', 'close', 'navigate', 'large', 'stale', 'retry', 'invalid', 'order', 'untouched'];
+const ENTRY_FILES = ['reload', 'close', 'navigate', 'large', 'stale', 'retry', 'invalid', 'order', 'quota', 'navflush', 'navflush-b', 'keepalive', 'untouched'];
 for (const slug of ENTRY_FILES) writeProjectFile(`src/content/pages/${slug}.md`, `---\ntitle: Start\n---\nBody.\n`);
 
 let passed = 0;
@@ -97,9 +100,10 @@ const browser = await launchChromium(chromium);
 const context = await browser.newContext();
 const pageErrors = [];
 
-async function openEntry(slug) {
+async function openEntry(slug, { beforeLoad } = {}) {
   const page = await context.newPage();
   page.on('pageerror', (error) => pageErrors.push(error.message));
+  if (beforeLoad) await beforeLoad(page);
   await page.goto(`${base}/dashboard/pages/${slug}`);
   await page.locator('[name="title"]').waitFor();
   return page;
@@ -178,7 +182,7 @@ try {
     await page.close();
   });
 
-  await check('a save waiting on its preview fetch does not POST its older snapshot after a newer one was sent', async () => {
+  await check('a save waiting on its preview fetch, POSTed after a newer snapshot was sent, is not written over it', async () => {
     const page = await openEntry('stale');
     let releasePreview;
     const previewHeld = new Promise((resolve) => { releasePreview = resolve; });
@@ -202,9 +206,12 @@ try {
     });
     await waitForEntry('stale', (text) => text.includes('title: Newer'), 'the hidden tab did not send the edit');
     releasePreview();
-    await page.waitForTimeout(1500);
-    assert.deepEqual(posts, ['Newer'], 'the older snapshot was POSTed after the newer one');
-    assert.ok(entryText('stale').includes('title: Newer'), entryText('stale'));
+    // The older save still POSTs (the server's save order drops it).
+    const deadline = Date.now() + 5000;
+    while (posts.length < 2 && Date.now() < deadline) await page.waitForTimeout(100);
+    assert.deepEqual(posts, ['Newer', 'Older'], 'one POST each: later leave events send nothing more');
+    await page.waitForTimeout(500);
+    assert.ok(entryText('stale').includes('title: Newer'), `the older snapshot was written:\n${entryText('stale')}`);
     await page.close();
   });
 
@@ -227,7 +234,7 @@ try {
     await page.close();
   });
 
-  await check('the next save after returning to the tab waits for the one sent on leaving, so it lands last', async () => {
+  await check('a save sent on leaving that arrives after the next one is not written over it', async () => {
     const page = await openEntry('order');
     let held = 0;
     await page.route('**/api/content/pages/order', async (route) => {
@@ -249,6 +256,80 @@ try {
     await page.waitForTimeout(3000); // past the held save's release
     assert.ok(entryText('order').includes('title: Back'), `the leave save landed last:\n${entryText('order')}`);
     assert.deepEqual(posts, ['Hidden', 'Back']);
+    await page.close();
+  });
+
+  await check('two saves that together pass the keepalive quota: the second asks to confirm leaving', async () => {
+    const page = await openEntry('quota');
+    const halfQuota = 'Quota body line.\n'.repeat(2400); // ~40 KB: one fits, two do not
+    await page.locator('#markdown-body').evaluate((textarea, value) => { textarea.value = value; }, halfQuota);
+    let held = 0;
+    await page.route('**/api/content/pages/quota', async (route) => {
+      if (route.request().method() === 'POST' && held === 0) {
+        held++;
+        await new Promise((resolve) => setTimeout(resolve, 3000)); // the first stays in flight
+      }
+      return route.continue();
+    });
+    const posts = recordPosts(page);
+    await typeTitle(page, 'Quota one');
+    await hideTab(page);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    });
+    await typeTitle(page, 'Quota two');
+    const dialogs = [];
+    page.on('dialog', (dialog) => { dialogs.push([dialog.type(), posts.length]); dialog.dismiss(); });
+    await page.reload({ timeout: 2000 }).catch(() => { /* dismissed: no navigation */ });
+    assert.deepEqual(dialogs, [['beforeunload', 2]]);
+    await waitForEntry('quota', (text) => text.includes('title: Quota two'), 'the second save was not written');
+    await page.waitForTimeout(3000); // past the held first save
+    assert.ok(entryText('quota').includes('title: Quota two'), entryText('quota'));
+    await page.close();
+  });
+
+  await check('an edit flushed by picking another entry is sent at once, so closing straight after keeps it', async () => {
+    const page = await openEntry('navflush', {
+      beforeLoad: (newPage) => newPage.route(`${PREVIEW_ORIGIN}/**`, async (route) => {
+        if (route.request().resourceType() !== 'fetch') return route.abort();
+        await new Promise(() => {}); // the preview never answers
+      }),
+    });
+    await typeTitle(page, 'Flushed');
+    await page.evaluate(() => {
+      const select = document.getElementById('pageSelector');
+      select.value = 'pages/navflush-b';
+      select.dispatchEvent(new Event('change'));
+    });
+    await page.close({ runBeforeUnload: true });
+    await waitForEntry('navflush', (text) => text.includes('title: Flushed'), 'the flushed edit was lost');
+  });
+
+  await check('an ordinary autosave is sent with keepalive, so a POST in flight outlives the page', async () => {
+    const page = await openEntry('keepalive', {
+      beforeLoad: (newPage) => newPage.addInitScript(() => {
+        const originalFetch = window.fetch;
+        window.__savePosts = [];
+        window.fetch = (url, init) => {
+          if (init?.method === 'POST' && String(url).includes('/api/content/')) {
+            window.__savePosts.push({ keepalive: init.keepalive === true, payload: JSON.parse(init.body) });
+          }
+          return originalFetch(url, init);
+        };
+      }),
+    });
+    await typeTitle(page, 'Kept alive');
+    await waitForEntry('keepalive', (text) => text.includes('title: Kept alive'), 'the autosave did not land');
+    const savePosts = await page.evaluate(() => window.__savePosts);
+    assert.equal(savePosts.length, 1);
+    assert.equal(savePosts[0].keepalive, true);
+    // The wire shape: savePayload's data, body and type, plus the save order.
+    const { payload } = savePosts[0];
+    assert.deepEqual(Object.keys(payload).sort(), ['body', 'data', 'saveOrder', 'type']);
+    assert.equal(payload.data.title, 'Kept alive');
+    assert.equal(payload.body, 'Body.\n');
+    assert.match(payload.saveOrder.client, /^[0-9a-f]{32}$/);
+    assert.ok(Number.isSafeInteger(payload.saveOrder.number) && payload.saveOrder.number >= 1);
     await page.close();
   });
 

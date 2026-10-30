@@ -260,11 +260,9 @@ await check('save payload: no body key when the editor showed no body', () => {
 await check('dashboard: the saver builds its request with savePayload', () => {
   const saverSrc = dashboardSrc.match(/function makeSaver\(target\) \{[\s\S]*?\n\}/)?.[0];
   assert.ok(saverSrc, 'makeSaver not found');
-  // Every snapshot (an autosave's and one sent on leaving, takeSnapshot) is
-  // this payload, and the POST sends that snapshot's body.
-  assert.ok(/const body = JSON\.stringify\(savePayload\(target\.form, formData, target\.type\)\)/.test(saverSrc)
-    && /method: 'POST',\s*headers: \{ 'Content-Type': 'application\/json' \},\s*body,/.test(saverSrc)
-    && (saverSrc.match(/savePayload\(/g) || []).length === 1, 'makeSaver does not send savePayload(...)');
+  // What reaches the wire is checked from a real POST in
+  // autosave-leave-browser ('an ordinary autosave is sent with keepalive').
+  assert.ok(/savePayload\(target\.form, formData, target\.type\)/.test(saverSrc), 'makeSaver does not build its payload with savePayload(...)');
   assert.ok(!/#markdown-body'\)\?\.value \|\| ''/.test(saverSrc), "makeSaver still defaults a missing body to ''");
 });
 

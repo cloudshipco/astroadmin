@@ -1363,29 +1363,73 @@ function debounce(func, wait) {
   return debounced;
 }
 
-// Browsers refuse a keepalive request once the bodies of those in flight pass
-// 64 KiB; leave room for anything else in flight.
-const KEEPALIVE_BODY_LIMIT = 60 * 1024;
+// Every save this page sends is numbered (`saveOrder`), and the server writes a
+// save only if this page has not already had a newer one written to the same
+// file (server/utils/save-order.js). Saves that cannot wait for each other (one
+// sent as the page goes away, one already in flight) so land in the order they
+// were taken, whichever arrives first. getRandomValues, not randomUUID: it
+// works on a plain-HTTP origin too.
+const SAVE_CLIENT = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+let saveCount = 0;
 
-// The page is going away (#103): send the on-screen form's unsaved edit now,
-// with a keepalive request, which outlives the page. A debounced autosave would
-// be dropped, as would a save queued or waiting behind the one in flight.
-// Returns false when the edit went out in a request a closing page may cancel.
-function sendUnsavedEditOnLeave() {
-  const saver = activeSaver;
-  const deb = activeDebouncedSave;
-  if (!saver) return true;
-  if (!(deb && deb.pending()) && !saver.hasUnsentEdits()) return true;
-  if (deb) deb.cancel();
-  return saver.sendOnLeave();
+// Browsers refuse a keepalive request once the bodies of the page's keepalive
+// requests in flight, counted together, would pass 64 KiB.
+const KEEPALIVE_QUOTA = 64 * 1024;
+let keepaliveBytesInFlight = 0;
+// Saves in flight in an ordinary request, which a closing page may cancel.
+let cancellableSavesInFlight = 0;
+
+/**
+ * POST a save. With keepalive while the page's keepalive quota has room for it,
+ * so the request outlives the page (#103); else an ordinary request, counted
+ * in `cancellableSavesInFlight` until it is answered. A keepalive request the
+ * browser refuses anyway is sent again the ordinary way: the save order makes
+ * a repeat harmless.
+ * @returns {Promise<Response>}
+ */
+function postSave(url, body) {
+  const bytes = new Blob([body]).size;
+  const send = (keepalive) => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    keepalive,
+  });
+  const sendOrdinary = () => {
+    cancellableSavesInFlight++;
+    return send(false).finally(() => { cancellableSavesInFlight--; });
+  };
+  if (keepaliveBytesInFlight + bytes > KEEPALIVE_QUOTA) return sendOrdinary();
+  keepaliveBytesInFlight += bytes;
+  const attempt = send(true);
+  const release = () => { keepaliveBytesInFlight -= bytes; };
+  attempt.then(release, release);
+  return attempt.catch(sendOrdinary);
 }
 
-// beforeunload comes first on a reload or close: an edit too big for keepalive
-// is sent the ordinary way and the browser asked to confirm leaving, which
-// gives the request time. pagehide covers navigations that skip beforeunload,
-// and a hidden tab (often the last event a phone delivers before discarding a
-// page) sends the edit too. A save already POSTed is not waited for, so on a
-// real unload it can overlap the one sent here.
+// Send a saver's unsent edit now (a debounced autosave, a save queued behind
+// the one in flight, or one still waiting on its preview fetch), in place of
+// waiting for it.
+function sendUnsentEdit(saver, debouncedSave) {
+  if (!saver) return;
+  if (!(debouncedSave && debouncedSave.pending()) && !saver.hasUnsentEdits()) return;
+  if (debouncedSave) debouncedSave.cancel();
+  saver.sendNow();
+}
+
+// The page is going away (#103): send the on-screen form's unsent edit, which
+// postSave sends with keepalive when it fits. Returns false while a save is in
+// flight in a request a closing page may cancel.
+function sendUnsavedEditOnLeave() {
+  sendUnsentEdit(activeSaver, activeDebouncedSave);
+  return cancellableSavesInFlight === 0;
+}
+
+// beforeunload comes first on a reload or close: while a save is in a request
+// a closing page may cancel (too big for keepalive), the browser is asked to
+// confirm leaving, which gives it time. pagehide covers navigations that skip
+// beforeunload, and a hidden tab (often the last event a phone delivers before
+// discarding a page) sends the edit too; neither can ask.
 function installLeaveHandlers() {
   window.addEventListener('beforeunload', (event) => {
     if (sendUnsavedEditOnLeave()) return;
@@ -1398,7 +1442,7 @@ function installLeaveHandlers() {
   });
 }
 
-// Flush the on-screen form's pending autosave before its form is replaced, then
+// Send the on-screen form's unsent edit before its form is replaced, then
 // abandon that saver so nothing (reorder, Cmd+S) can fire it against the new
 // form. An already-in-flight save keeps running against its own bound target.
 function flushPendingSave() {
@@ -1406,9 +1450,10 @@ function flushPendingSave() {
   const deb = activeDebouncedSave;
   activeSaver = null;
   activeDebouncedSave = null;
-  // Flush the final save while the saver is still enabled, THEN disable it so
-  // the old form's listeners can't queue another save against the new entry.
-  if (deb && deb.pending()) deb.flush();
+  // Send while the saver is still enabled, THEN disable it so the old form's
+  // listeners can't queue another save against the new entry. Sent at once
+  // (no preview fetch first): the page may be closed straight after.
+  sendUnsentEdit(saver, deb);
   if (saver) saver.disable();
 }
 
@@ -1454,11 +1499,9 @@ function updateSaveStatus(message) {
  * `{form, collection, slug, locale, type, isNew}`. It always reads from its own
  * form and POSTs to its own entry — never the globals — so a flush during
  * navigation saves the entry being left, not the one arrived at. Saves are
- * serialized per target and coalesced (one trailing save), so two POSTs for the
- * same entry never overlap and an older snapshot can't overwrite a newer one.
- * The one exception is a save sent as the page goes away (`sendOnLeave`),
- * which cannot wait: it may overlap a POST already sent, and every later save
- * waits for its answer.
+ * serialized per target and coalesced (one trailing save). A save sent at once
+ * (`sendNow`: the page or the form is being left) does not wait for the one in
+ * flight; the server's save order (`saveOrder`) keeps the newer snapshot.
  * UI side effects tied to the on-screen entry are gated on `isTargetCurrent()`.
  */
 function makeSaver(target) {
@@ -1469,66 +1512,47 @@ function makeSaver(target) {
 
   const entryApiUrl = () => entryApiPath(target.collection, target.slug, i18nConfig.enabled ? target.locale : null);
 
-  // One save is one numbered snapshot of the form. A save sent when the page is
-  // left (sendOnLeave, #103) goes out at once, outside the queue, so a queued
-  // save that took an older snapshot and has not POSTed yet skips its POST: a
-  // page frozen in the back/forward cache and restored would otherwise send it
-  // over the newer one.
-  let snapshotCount = 0;
-  let newestPosted = 0;
+  // A save has its snapshot and has not POSTed yet (it waits on the preview).
   let awaitingPost = false;
-  // The POSTs of saves sent on leaving, until each is answered.
-  const leavePosts = new Set();
+  // Every POST of this saver until it is answered, for whenIdle.
+  const postsInFlight = new Set();
 
+  // One save is one numbered snapshot of the form. The body is read with the
+  // fields; no body editor on the form means no `body` key, and the API then
+  // keeps the stored body.
   const takeSnapshot = () => {
     const formData = extractFormData(target.form, target.schema);
-    // The body is read with the fields, so one save is one snapshot. No body
-    // editor on the form means no `body` key, and the API then keeps the
-    // stored body.
-    const body = JSON.stringify(savePayload(target.form, formData, target.type));
-    return { formData, body, number: ++snapshotCount };
+    const payload = savePayload(target.form, formData, target.type);
+    payload.saveOrder = { client: SAVE_CLIENT, number: ++saveCount };
+    return { formData, body: JSON.stringify(payload) };
   };
 
-  // `leaving`: POST before any await (so the request starts inside the page's
-  // leave event), with no preview fetch first, and with keepalive when asked.
-  const runOnce = async (silent, snapshot = takeSnapshot(), { leaving = false, keepalive = false } = {}) => {
-    const { formData, body } = snapshot;
+  // `now`: POST before any await, so the request starts inside the page's
+  // leave event, with no preview fetch first.
+  const runOnce = async (silent, { now = false } = {}) => {
+    const { formData, body } = takeSnapshot();
     const current = isTargetCurrent();
 
     if (current) updateSaveStatus('Saving...');
 
     // Preview change-detection only matters if this entry is on screen.
     let originalHash = null;
-    if (!leaving) {
+    if (!now) {
       awaitingPost = true;
-      if (current) {
-        const previewPageUrl = getPreviewPageUrl();
-        if (previewPageUrl) {
-          try {
-            const res = await fetch(withCacheBuster(previewPageUrl), { cache: 'no-store' });
-            originalHash = quickHash(await res.text());
-          } catch { /* proceed without hash */ }
-        }
+      const previewPageUrl = current ? getPreviewPageUrl() : null;
+      if (previewPageUrl) {
+        try {
+          const res = await fetch(withCacheBuster(previewPageUrl), { cache: 'no-store' });
+          originalHash = quickHash(await res.text());
+        } catch { /* proceed without hash */ }
       }
-      // A save sent on leaving went out while this one waited: let it land
-      // first, so this POST does not overlap it.
-      if (leavePosts.size) await Promise.all(leavePosts);
     }
 
     try {
-      if (!leaving) awaitingPost = false;
-      if (snapshot.number < newestPosted) return;
-      newestPosted = snapshot.number;
-      const request = fetch(entryApiUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        keepalive,
-      });
-      if (leaving) {
-        const answered = request.then(() => {}, () => {}).finally(() => leavePosts.delete(answered));
-        leavePosts.add(answered);
-      }
+      if (!now) awaitingPost = false;
+      const request = postSave(entryApiUrl(), body);
+      const answered = request.then(() => {}, () => {}).finally(() => postsInFlight.delete(answered));
+      postsInFlight.add(answered);
       const response = await request;
       const result = await readJson(response);
 
@@ -1537,9 +1561,11 @@ function makeSaver(target) {
           updateSaveStatus('Error');
           if (!silent) showNotification('Failed to save: ' + result.error, 'error');
         }
-        if (leaving) retryAfterLeaving();
+        if (now) retryAfterSendNow();
         return;
       }
+      // A newer snapshot of this page was written first; that save does the rest.
+      if (result.superseded) return;
 
       if (isTargetCurrent()) {
         const needsFixing = result.validation?.status === 'invalid';
@@ -1599,12 +1625,12 @@ function makeSaver(target) {
         const rateLimited = error instanceof ApiResponseError && error.rateLimited;
         if (!silent || rateLimited) showNotification(failureText('Failed to save changes', error), 'error');
       }
-      if (leaving) retryAfterLeaving();
+      if (now) retryAfterSendNow();
     }
   };
-  // The page lived on (a hidden tab) and the save sent on leaving failed: the
-  // queued saves it replaced were skipped, so save the form the ordinary way.
-  const retryAfterLeaving = () => { if (!disabled) saver(true); };
+  // The page lived on (a hidden tab) and a save sent at once failed: it took
+  // the place of any queued save, so save the form again the ordinary way.
+  const retryAfterSendNow = () => { if (!disabled) saver(true); };
 
   // Serialize + coalesce: while a save runs, a further request sets `again` so
   // exactly one more save runs afterward with the latest form state. Once
@@ -1625,27 +1651,23 @@ function makeSaver(target) {
     })().finally(() => { inFlight = null; });
     return inFlight;
   };
-  // Resolves once no save is in flight, a save sent on leaving included — used
-  // before a destructive op (delete).
-  saver.whenIdle = () => Promise.all([inFlight, ...leavePosts]);
+  // Resolves once no save is in flight and every POST is answered (one sent at
+  // once included) — used before a destructive op (delete).
+  saver.whenIdle = () => Promise.all([inFlight, ...postsInFlight]);
   // Make the saver inert for good (future calls no-op; an in-flight save still
   // finishes its current run against its own bound target).
   saver.disable = () => { disabled = true; };
   // Has an edit not yet been POSTed? A trailing save queued behind the one in
   // flight, or a save still waiting (on the preview) to send its POST.
-  saver.hasUnsentEdits = () => !disabled && (again || awaitingPost);
-  // The page is going away (#103): POST the form as it is now, at once. Its
-  // snapshot replaces any queued save. Returns true when the request outlives
-  // the page (keepalive), false when the body is over the keepalive cap and
-  // went out in an ordinary request, which a closing page may cancel.
-  saver.sendOnLeave = () => {
-    if (disabled) return true;
-    const snapshot = takeSnapshot();
-    const keepalive = new Blob([snapshot.body]).size <= KEEPALIVE_BODY_LIMIT;
+  saver.hasUnsentEdits = () => again || awaitingPost;
+  // POST the form as it is now, at once (the page or the form is being left).
+  // It takes the place of any queued save; one still waiting on its preview
+  // still POSTs, and the server drops it as older.
+  saver.sendNow = () => {
+    if (disabled) return;
     again = false;
     awaitingPost = false;
-    runOnce(true, snapshot, { leaving: true, keepalive });
-    return keepalive;
+    runOnce(true, { now: true });
   };
   return saver;
 }

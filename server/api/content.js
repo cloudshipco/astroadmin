@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import { parseSaveOrder } from '../utils/save-order.js';
 import {
   readContent,
   writeContent,
@@ -189,6 +190,7 @@ router.post('/:collection/:slug', async (req, res) => {
       data: await dataToWrite(collection, data, req.body.blankOptionals),
       ...bodyToWrite(req.body),
       type: type || 'content',
+      saveOrder: parseSaveOrder(req.body.saveOrder),
     }, locale);
 
     res.json({
@@ -196,6 +198,8 @@ router.post('/:collection/:slug', async (req, res) => {
       collection,
       slug,
       locale: result.locale,
+      // This page had a newer save of the entry written already (save-order.js).
+      superseded: result.superseded === true,
       validation: await validateSavedEntry(collection, slug, locale),
       message: 'Content saved successfully',
     });
@@ -237,6 +241,7 @@ router.put('/:collection/:slug', async (req, res) => {
       data: await dataToWrite(collection, data, req.body.blankOptionals),
       ...bodyToWrite(req.body),
       type: type || 'content',
+      saveOrder: parseSaveOrder(req.body.saveOrder),
     }, locale);
 
     res.json({
@@ -244,6 +249,8 @@ router.put('/:collection/:slug', async (req, res) => {
       collection,
       slug,
       locale: result.locale,
+      // This page had a newer save of the entry written already (save-order.js).
+      superseded: result.superseded === true,
       validation: await validateSavedEntry(collection, slug, locale),
       message: 'Content updated successfully',
     });
