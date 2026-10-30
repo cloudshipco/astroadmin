@@ -13,14 +13,15 @@
  * - `publicFile(sitePath)`: the file a `/images/...` value names under
  *   public/ (a `?query` or `#fragment` is not part of the file), or
  *   undefined when it is not one (missing, a folder, outside public/,
- *   a symlink resolving outside public/, a malformed %-escape).
+ *   a file that is a symlink resolving outside public/ and its own folder,
+ *   a malformed %-escape). A symlinked folder is followed.
  *
  * In a build `siteRoot` is the directory the build ran in; nothing here is
  * meant to read files from a deployed server.
  */
 import { root } from 'astro:config/server';
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join, normalize, sep } from 'node:path';
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { dirname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const siteRoot = fileURLToPath(root);
@@ -37,10 +38,17 @@ export function publicFile(sitePath) {
   const file = normalize(join(publicDir, decoded));
   if (!file.startsWith(publicDir + sep)) return undefined;
   if (!existsSync(file) || !statSync(file).isFile()) return undefined;
-  // A symlink out of public/ is refused, as the admin's image picker refuses
-  // one: the build would copy whatever it points at into the site.
-  const realPublicDir = realpathSync(publicDir);
-  return realpathSync(file).startsWith(realPublicDir + sep) ? file : undefined;
+  // A FILE that is itself a symlink is refused when it points out of both
+  // public/ and the folder holding it, as the admin's image picker refuses
+  // one: the build would copy whatever it points at into the site. A linked
+  // FOLDER is the site owner's layout (releases/N/public/images ->
+  // /srv/shared/images) and is followed, as CmsImage's glob follows it.
+  if (lstatSync(file).isSymbolicLink()) {
+    const target = realpathSync(file);
+    const inside = [publicDir, dirname(file)].some((folder) => target.startsWith(realpathSync(folder) + sep));
+    if (!inside) return undefined;
+  }
+  return file;
 }
 
 /**

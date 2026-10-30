@@ -13,7 +13,12 @@
  * - the poster: a /images/ PNG becomes an optimised WebP under /_astro/, no
  *   wider than posterWidth; an external poster stays as it is;
  * - an empty src renders nothing; a /images/ video with no file fails the
- *   build naming the value, and so does a missing poster.
+ *   build naming the value, and so does a missing poster (also one with a
+ *   `?query` or `#fragment`, which is not part of the file but stays on the
+ *   URL, also after optimising);
+ * - symlinks: `public/images` itself a link to a shared folder outside the
+ *   site (releases/N/public/images -> /srv/shared/images) builds, while a
+ *   FILE that is a link out of public/ and its own folder still fails.
  *
  * The browser script must be a same-origin FILE: Astro inlines a small
  * component <script>, which a site's `script-src 'self'` blocks silently.
@@ -372,6 +377,8 @@ import CmsVideo from 'astroadmin/components/CmsVideo.astro';
     ['video with a fragment', '<CmsVideo src="/images/gone.mp4#t=5" />', '/images/gone.mp4#t=5'],
     ['video (a symlink out of the site)', '<CmsVideo src="/images/linked-out.mp4" />', '/images/linked-out.mp4'],
     ['poster', '<CmsVideo src="/images/hero.mp4" poster="/images/gone.png" />', '/images/gone.png'],
+    ['poster with a ?query', '<CmsVideo src="/images/hero.mp4" poster="/images/gone.png?v=2" />', '/images/gone.png?v=2'],
+    ['poster with a #fragment', '<CmsVideo src="/images/hero.mp4" poster="/images/gone.png#x" />', '/images/gone.png#x'],
     ['typed bare name', '<CmsVideo src="hero.mp4" />', 'hero.mp4'],
     ['YouTube page', '<CmsVideo src="https://www.youtube.com/watch?v=abc" />', 'https://www.youtube.com/watch?v=abc'],
   ]) {
@@ -391,6 +398,47 @@ import CmsVideo from 'astroadmin/components/CmsVideo.astro';
     const builtHtml = fs.readFileSync(path.join(siteDir, 'dist', 'index.html'), 'utf8');
     assert.match(builtHtml, /<source src="\/images\/hero\.mp4#t=5" type="video\/mp4"/);
     assert.match(builtHtml, /<source src="\/images\/loop\.webm\?v=2" type="video\/webm"/);
+  });
+  writeSiteFile('src/pages/index.astro', goodPage);
+
+  await check('a local poster with a ?query is found and optimised, and keeps the query', () => {
+    writeSiteFile('src/pages/index.astro', page('<CmsVideo src="/images/hero.mp4" poster="/images/still.png?v=2" id="a" />'));
+    const built = buildSite();
+    assert.strictEqual(built.status, 0, built.output);
+    const builtHtml = fs.readFileSync(path.join(siteDir, 'dist', 'index.html'), 'utf8');
+    assert.match(builtHtml, /poster="\/_astro\/[^"?]+\.webp\?v=2"/, builtHtml.match(/<video\b[^>]*>/)?.[0]);
+  });
+  writeSiteFile('src/pages/index.astro', goodPage);
+
+  // A common deploy layout keeps uploads outside each release:
+  // releases/N/public/images -> /srv/shared/images. A symlinked FOLDER is the
+  // site owner's layout and builds; a FILE that is itself a link out of the
+  // folder it sits in is still refused (the build would publish its target).
+  await check('a public/images that is a symlink to a shared folder outside the site builds; a file linking out still fails', () => {
+    const imagesDir = path.join(siteDir, 'public/images');
+    const sharedDir = path.join(workDir, 'shared-images');
+    fs.renameSync(imagesDir, sharedDir);
+    fs.symlinkSync(sharedDir, imagesDir);
+    try {
+      assert.ok(fs.lstatSync(imagesDir).isSymbolicLink(), 'positive control: public/images is a link');
+      writeSiteFile('src/pages/index.astro', page('<CmsVideo src="/images/hero.mp4" poster="/images/still.png" id="a" />\n<CmsVideo src="/images/unused/spare.webm" id="b" />'));
+      const built = buildSite();
+      assert.strictEqual(built.status, 0, built.output);
+      const builtHtml = fs.readFileSync(path.join(siteDir, 'dist', 'index.html'), 'utf8');
+      assert.match(builtHtml, /<source src="\/images\/hero\.mp4" type="video\/mp4"/);
+      assert.match(builtHtml, /<source src="\/images\/unused\/spare\.webm"/);
+      assert.match(builtHtml, /poster="\/_astro\/[^"]+\.webp"/, 'the poster is optimised through the link');
+      writeSiteFile('src/pages/index.astro', page('<CmsVideo src="/images/linked-out.mp4" />'));
+      const refused = buildSite();
+      assert.notStrictEqual(refused.status, 0, refused.output);
+      assert.ok(refused.output.includes('"/images/linked-out.mp4"'), refused.output);
+      writeSiteFile('src/pages/index.astro', page('<CmsVideo src="/images/Hero.mp4" />'));
+      const wrongCase = buildSite();
+      assert.notStrictEqual(wrongCase.status, 0, 'the exact-case check still applies through the link');
+    } finally {
+      fs.unlinkSync(imagesDir);
+      fs.renameSync(sharedDir, imagesDir);
+    }
   });
   writeSiteFile('src/pages/index.astro', goodPage);
 

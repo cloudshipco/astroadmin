@@ -22,7 +22,8 @@
  *   pipeline (one WebP at up to `posterWidth`), as CmsImage optimises its
  *   images; an external URL or SVG is used as is.
  * - A local `/images/` video or poster with no file under public/ fails the
- *   build with an error naming the content value (exact case). A video is
+ *   build with an error naming the content value (exact case; a `?query` or
+ *   `#fragment` is not part of the file, and stays on the URL). A video is
  *   found on disk in the site's public/ (site-files.js), in a build and in
  *   dev alike, so it is never bundled a second time (#90). In `astro dev`
  *   (MODE, as CmsImage) a poster uploaded after start is used as the
@@ -106,14 +107,18 @@ if (src.startsWith('/images/') && !existsInPublicExactCase(src)) {
   throw missing('video', src);
 }
 
+// A `?query` or `#fragment` is not part of the poster's file: the file is
+// looked up without it, and it is kept on the URL the page gets.
+const posterPath = poster.split(/[?#]/)[0];
+const posterSuffix = poster.slice(posterPath.length);
 let posterUrl = poster;
-if (poster.startsWith('/images/') && OPTIMISABLE.test(poster)) {
-  const load = PUBLIC_IMAGES[`/public${poster}`];
+if (posterPath.startsWith('/images/') && OPTIMISABLE.test(posterPath)) {
+  const load = PUBLIC_IMAGES[`/public${posterPath}`];
   if (load) {
     const image = (await load()).default;
     const still = await getImage({ src: image, width: Math.min(image.width, posterWidth), format: 'webp', quality: 80 });
-    posterUrl = still.src; // Astro's own URL, base included
-  } else if (!(IS_ASTRO_DEV && existsInPublic(poster))) {
+    posterUrl = still.src + posterSuffix; // Astro's own URL, base included
+  } else if (!(IS_ASTRO_DEV && existsInPublic(posterPath))) {
     throw missing('poster', poster);
   } else {
     posterUrl = withBase(poster);
