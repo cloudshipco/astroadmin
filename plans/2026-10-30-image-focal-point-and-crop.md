@@ -23,6 +23,20 @@ cannot render without its point, since the glob key is exact and the build
 fails on it. After the fixes: fast suite 92/92, cms-image-packed 52,
 cms-video-packed 26, check-linked-styles 6, video-picker-browser 11.
 
+Review round 2 (high, fefcc4e..70b6f12): eight findings, all fixed.
+2995425: the legacy bare-name entry belongs to `/images/<name>` only (editing
+the image() folder's same-named item no longer steals the upload's point);
+an unchanged PUT leaves the file byte-identical (in-place patch); DELETE
+removes the entry and unlinks in one `updateMetadata` step with the unlink
+after a successful write, so a failed write is a true 500; the doctor says
+"could not confirm" for a service named by another spelling and "fails" only
+with no service, and counts a stored crop only where `parseCrop` accepts it;
+the server's crop rule is `parseCrop`, `isPlainObject` is one helper.
+3929e61: a crop skipped in dev (no service) marks the `<img>`
+`data-cms-image="crop-skipped"` and warns; the service ignores a crop with
+`format: 'svg'`. After the fixes: fast suite 92/92, cms-image-packed 53,
+cms-video-packed 26, check-linked-styles 6, video-picker-browser 11.
+
 ## The request
 
 Sites show photos in cover-fitted slots (full-height heroes, fixed-ratio
