@@ -20,7 +20,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { chromium } from 'playwright-core';
-import { chromiumPath } from './chromium-path.js';
+import { launchChromium } from './chromium-path.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const fixtures = path.join(repoRoot, 'tests/fixtures/video');
@@ -84,7 +84,7 @@ const server = app.listen(0, '127.0.0.1');
 await new Promise((resolve) => server.once('listening', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-const browser = await chromium.launch({ executablePath: chromiumPath() });
+const browser = await launchChromium(chromium);
 const page = await browser.newPage();
 const uploads = [];
 page.on('request', (request) => {

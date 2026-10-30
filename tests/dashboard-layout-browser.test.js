@@ -31,7 +31,7 @@ import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { chromium } from 'playwright-core';
-import { chromiumPath } from './chromium-path.js';
+import { launchChromium } from './chromium-path.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-dashboard-layout-')));
@@ -136,7 +136,7 @@ const server = app.listen(0, '127.0.0.1');
 await new Promise((resolve) => server.once('listening', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-const browser = await chromium.launch({ executablePath: chromiumPath() });
+const browser = await launchChromium(chromium);
 const pageErrors = [];
 const screenshotDirectory = process.env.LAYOUT_SCREENSHOTS;
 
