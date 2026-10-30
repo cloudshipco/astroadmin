@@ -173,9 +173,9 @@ await check('validate: an ordinary remote destination is accepted (positive cont
 // so `$HOME`, backticks, `$(...)`, `;cmd` and globs were expanded there
 // (`w*` synced into the first match, with --delete). Only a plain spelling
 // is accepted, whatever the rsync version, and the override does not lift it.
-const REMOTE_PATH_REFUSAL = 'rsync.path for a remote host may hold only letters, digits and the characters . _ ~ / + @ , = - (the remote shell would expand anything else), and must not start with "-"';
+const REMOTE_PATH_REFUSAL = 'rsync.path for a remote host may hold only letters, digits and the characters . _ ~ / + @ , = - (the remote shell would expand anything else), and must not start with "-" or "="';
 const SHELL_EXPANDED_REMOTE = ['$HOME', '$HOME/www', '${HOME}/www', '`id`', '$(id)', 'www;touch /tmp/x', 'www && id',
-  'w*', 'ww?', 'w[w]w', '{www,other}', 'www dir', "it's", 'a|b', 'www\nother', 'www\\x', '!x', '-rf', '--delete'];
+  '=www', '=ls', 'w*', 'ww?', 'w[w]w', '{www,other}', 'www dir', "it's", 'a|b', 'www\nother', 'www\\x', '!x', '-rf', '--delete'];
 for (const destination of SHELL_EXPANDED_REMOTE) {
   await check(`validate: a remote destination the remote shell would expand is refused (${JSON.stringify(destination)})`, () => {
     for (const extra of [{}, { allowDestructivePath: true }]) {

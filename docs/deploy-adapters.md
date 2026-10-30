@@ -49,9 +49,10 @@ in their own fields, not in `path`: without `host`, a `path` such as
 refused.
 
 A remote `path` may hold only letters, digits and `. _ ~ / + @ , = -`, and
-must not start with `-`. rsync hands the path to the remote end through its
-login shell: rsync before 3.2.4 and the macOS `openrsync` send it unescaped,
-so `$HOME`, backticks, `$(...)`, `;` and spaces are the shell's, and even
+must not start with `-` or `=`. rsync hands the path to the remote end
+through its login shell: rsync before 3.2.4 and the macOS `openrsync` send
+it unescaped, so `$HOME`, backticks, `$(...)`, `;` and spaces are the
+shell's (and zsh turns a leading `=ls` into `/bin/ls`), and even
 rsync 3.4 leaves `*` unescaped (`w*` syncs into the first match, with
 `--delete`). Anything else is refused whatever the rsync version, and
 `allowDestructivePath` does not lift this.

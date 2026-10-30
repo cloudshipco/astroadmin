@@ -150,7 +150,8 @@ function isRemoteHost(host) {
 
 /**
  * A remote path as the remote shell cannot change it: letters, digits and
- * `. _ ~ / + @ , = -`, not starting with `-`. rsync sends the path to the
+ * `. _ ~ / + @ , = -`, not starting with `-` or `=` (a zsh login shell
+ * expands a leading `=word` to that command's path). rsync sends the path to the
  * remote end through its login shell; rsync before 3.2.4 and macOS's
  * openrsync send it unescaped (so `$HOME`, `${HOME}`, backticks, `$(...)`,
  * `;cmd` and spaces were the shell's), and even rsync 3.4.4 leaves `*`
@@ -158,8 +159,8 @@ function isRemoteHost(host) {
  * spelling, whatever the local rsync version. `~` stays: a leading `~` or
  * `~name` is a home directory, which remoteDestinationProblem judges.
  */
-const REMOTE_PATH = /^[A-Za-z0-9._~/+@,=][A-Za-z0-9._~/+@,=-]*$/;
-const REMOTE_PATH_REFUSAL = 'rsync.path for a remote host may hold only letters, digits and the characters . _ ~ / + @ , = - (the remote shell would expand anything else), and must not start with "-"';
+const REMOTE_PATH = /^[A-Za-z0-9._~/+@,][A-Za-z0-9._~/+@,=-]*$/;
+const REMOTE_PATH_REFUSAL = 'rsync.path for a remote host may hold only letters, digits and the characters . _ ~ / + @ , = - (the remote shell would expand anything else), and must not start with "-" or "="';
 
 /**
  * rsync's own rule: a destination with a `:` before its first `/` is remote
