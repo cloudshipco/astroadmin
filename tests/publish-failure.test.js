@@ -94,8 +94,12 @@ await check('the editor shows the server\'s message, not just the error label', 
   // body the publish route sends. A source check here passed with the toast
   // reduced to (result.error); this reads the notification it emits.
   const source = fs.readFileSync(path.join(repoRoot, 'ui/dashboard.js'), 'utf8');
-  const handler = source.match(/document\.getElementById\('publishBtn'\)\.addEventListener\('click', async \(\) => \{[\s\S]*?\n\}\);/)?.[0];
-  assert.ok(handler, 'the Publish click handler was not found in ui/dashboard.js');
+  const clickHandler = source.match(/document\.getElementById\('publishBtn'\)\.addEventListener\('click', async \(\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(clickHandler, 'the Publish click handler was not found in ui/dashboard.js');
+  // The handler hands the response to showPublishResult, which is run too.
+  const resultHandler = source.match(/\nfunction showPublishResult\([\s\S]*?\n\}\n/)?.[0];
+  assert.ok(resultHandler, 'showPublishResult was not found in ui/dashboard.js');
+  const handler = `${resultHandler}\n${clickHandler}`;
   const serverMessage = publishFailureMessage(identityError);
   const body = { success: false, error: 'Failed to publish', message: serverMessage };
   let click = null;

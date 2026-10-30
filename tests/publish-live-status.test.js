@@ -12,8 +12,19 @@
  * this entry): a push is sent but unverified, a warning, never "✅ Published!
  * ... in a minute or two" (showPublishOutcome / friendlyPublishMessage).
  * A deploy adapter's result is live only when it uploaded: a dry run is
- * "nothing was uploaded" (info), a deploy reporting failure is an error, and
- * a skipped deploy (no adapter) leaves the push to be judged on its own.
+ * "nothing was uploaded" (info), and a skipped deploy (no adapter) leaves the
+ * push to be judged on its own.
+ *
+ * A build or deploy that fails AFTER the git step is a response with
+ * `success: false` and the git step's `committed`/`pushed`. Those bodies are
+ * captured from the REAL server (createServer, git disabled, a shell build
+ * script, a real local rsync to a destination it cannot create) and run
+ * through the dashboard's real showPublishResult. They used to reach the
+ * generic "Failed to publish: Built, but deployment failed", even when the
+ * commit had reached the repository, and vanished after 3 s. The pushed
+ * variants are the same bodies with `committed`/`pushed` set as the git step
+ * sets them (the git step is not run here; publish-check and publish-sync
+ * cover it).
  *
  * The real functions are extracted from ui/dashboard.js (it boots on import)
  * and run in a happy-dom document with fetch stubbed and a fake clock.
@@ -211,14 +222,6 @@ await check('a dry-run deploy says nothing was uploaded, never live', async () =
   }
 });
 
-await check('a deploy that reports failure is an error, never live', async () => {
-  const result = await runOutcome({ success: true, committed: true, pushed: false, deploy: { success: false, adapter: 'rsync' } });
-  assert.doesNotMatch(result.text, /✅|now live/i, result.text);
-  assert.match(result.text, /deploy/i, result.text);
-  assert.match(result.text, /not live|did not|failed/i, result.text);
-  assert.equal(result.type, 'notification-error', result.type);
-});
-
 await check('a skipped deploy (no adapter) is not a deploy: a push is still unverified', async () => {
   const result = await runOutcome({ success: true, committed: true, pushed: true, deploy: { success: true, skipped: true } });
   assert.doesNotMatch(result.text, /✅|now live/i, result.text);
@@ -229,6 +232,167 @@ await check('a commit with nowhere to push is not shown as a success', async () 
   const result = await runOutcome({ success: true, committed: true, pushed: false, deploy: null });
   assert.match(result.text, /no remote/i, result.text);
   assert.notEqual(result.type, SUCCESS, result.type);
+});
+
+// --- Build and deploy failures after the git step: the server's real bodies ---
+
+/**
+ * POST /api/publish against the real app, once with a build that passes and
+ * an rsync deploy that fails, then with a build that fails the way Astro
+ * does. Returns both response bodies.
+ */
+async function capturePublishFailures() {
+  const os = await import('os');
+  const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-live-status-')));
+  const projectRoot = path.join(scratch, 'site');
+  fs.mkdirSync(projectRoot);
+  const failFlag = path.join(scratch, 'fail-the-build');
+  const buildScript = path.join(scratch, 'build.sh');
+  fs.writeFileSync(buildScript, `#!/bin/sh
+if [ -e '${failFlag}' ]; then
+  echo "[ImageNotFound] Could not find requested image." >&2
+  exit 1
+fi
+mkdir -p dist && echo '<h1>hi</h1>' > dist/index.html
+`);
+  fs.chmodSync(buildScript, 0o755);
+  // rsync cannot create a directory under a regular file.
+  fs.writeFileSync(path.join(scratch, 'blocker'), '');
+  fs.writeFileSync(path.join(projectRoot, 'astroadmin.config.js'), `export default ${JSON.stringify({
+    git: { enabled: false },
+    build: { production: `'${buildScript}'` },
+    deploy: { adapter: 'rsync', rsync: { path: `${path.join(scratch, 'blocker', 'www')}/` } },
+  })};\n`);
+  process.env.ASTROADMIN_PROJECT_ROOT = projectRoot;
+  process.env.GIT_ENABLED = 'false';
+  process.env.ADMIN_USERNAME = 'admin';
+  process.env.ADMIN_PASSWORD = 'admin';
+  delete process.env.NODE_ENV; // development: no session store under /data
+  delete process.env.ADMIN_PASSWORD_HASH;
+  delete process.env.ASTROADMIN_CONTENT_STORE;
+
+  const realConsole = {};
+  for (const level of ['log', 'warn', 'error']) { realConsole[level] = console[level]; console[level] = () => {}; }
+  // rsync's output is streamed to the server's own stdout and stderr.
+  const realStdoutWrite = process.stdout.write;
+  const realStderrWrite = process.stderr.write;
+  const swallow = (chunk, ...rest) => (typeof rest.at(-1) === 'function' ? (rest.at(-1)(), true) : true);
+  process.stdout.write = swallow;
+  process.stderr.write = swallow;
+  const { createServer } = await import('../server/index.js');
+  const { app } = await createServer();
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const login = await fetch(`${base}/api/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ username: 'admin', password: 'admin' }),
+    });
+    assert.equal(login.status, 200, 'login');
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const publish = async () => {
+      const response = await fetch(`${base}/api/publish`, {
+        method: 'POST', headers: { cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'x' }),
+      });
+      return response.json();
+    };
+    const deployFailure = await publish();
+    fs.writeFileSync(failFlag, '');
+    const buildFailure = await publish();
+    return { deployFailure, buildFailure };
+  } finally {
+    server.close();
+    Object.assign(console, realConsole);
+    process.stdout.write = realStdoutWrite;
+    process.stderr.write = realStderrWrite;
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** Run the dashboard's showPublishResult for a publish response body. */
+function runPublishResult(result) {
+  const window = new Window();
+  const document = window.document;
+  const timers = [];
+  const calls = { problems: 0, badge: 0 };
+  const stubs = {
+    document,
+    fetch: async () => { throw new Error('no request expected'); },
+    readJson,
+    setTimeout: (callback, ms) => { timers.push({ callback, ms }); return timers.length; },
+    Date,
+    updateChangesBadge: () => { calls.badge++; },
+    showPublishProblems: () => { calls.problems++; },
+  };
+  const resultSource = ['showNotification', 'showPublishStatus', 'fetchLiveHash', 'pollUntilLive',
+    'ranDeploy', 'friendlyPublishMessage', 'showPublishOutcome', 'showPublishResult'].map(extractFunction).join('\n\n');
+  const api = new Function(...Object.keys(stubs), `${resultSource}\nreturn { showPublishResult };`)(...Object.values(stubs));
+  api.showPublishResult(result, { pagePath: null, preHash: null, liveUrl: null });
+  const toasts = document.querySelectorAll('.notification');
+  assert.ok(toasts.length > 0, 'a toast is on the page');
+  const toast = toasts[toasts.length - 1];
+  return {
+    text: toast.textContent,
+    type: [...toast.classList].find((name) => name.startsWith('notification-')),
+    dismissAfterMs: timers.length ? Math.max(...timers.map((timer) => timer.ms)) : null,
+    calls,
+  };
+}
+
+const { deployFailure, buildFailure } = await capturePublishFailures();
+
+await check('positive control: the real server answered a failed deploy and a failed build as expected', () => {
+  assert.equal(deployFailure.success, false, JSON.stringify(deployFailure));
+  assert.equal(deployFailure.build?.success, true, JSON.stringify(deployFailure));
+  assert.equal(deployFailure.deploy?.success, false, JSON.stringify(deployFailure));
+  assert.equal(buildFailure.success, false, JSON.stringify(buildFailure));
+  assert.equal(buildFailure.build?.success, false, JSON.stringify(buildFailure));
+  assert.equal(buildFailure.deploy, null, JSON.stringify(buildFailure));
+});
+
+const pushedVariant = (body) => ({ ...body, committed: true, pushed: true });
+
+await check('a failed deploy (real body) says the deploy failed and nothing is live, as an error that stays up', () => {
+  const shown = runPublishResult(deployFailure);
+  assert.doesNotMatch(shown.text, /Failed to publish|✅|now live/i, shown.text);
+  assert.match(shown.text, /deploy/i, shown.text);
+  assert.match(shown.text, /not live/i, shown.text);
+  assert.equal(shown.type, 'notification-error', shown.type);
+  assert.ok(shown.dismissAfterMs >= 30000, `as long as a warning (${shown.dismissAfterMs} ms)`);
+  assert.equal(shown.calls.problems, 0, 'not the publish-check refusal panel');
+});
+
+await check('a failed deploy after a push says the changes reached the repository, not that publishing failed', () => {
+  const shown = runPublishResult(pushedVariant(deployFailure));
+  assert.doesNotMatch(shown.text, /Failed to publish|✅|now live/i, shown.text);
+  assert.match(shown.text, /sent to the repository/i, shown.text);
+  assert.match(shown.text, /deploy/i, shown.text);
+  assert.match(shown.text, /not live/i, shown.text);
+  assert.equal(shown.type, 'notification-error', shown.type);
+  assert.equal(shown.calls.badge, 1, 'the Changes badge is refreshed: the changes were committed');
+});
+
+await check('a failed build (real body) says the build failed, with the problem it names, and nothing is live', () => {
+  const shown = runPublishResult(buildFailure);
+  assert.doesNotMatch(shown.text, /Failed to publish|Published to git|✅/i, shown.text);
+  assert.match(shown.text, /build failed/i, shown.text);
+  assert.match(shown.text, /not live/i, shown.text);
+  assert.match(shown.text, /An image an entry uses was not found/, `the code's sentence: ${shown.text}`);
+  assert.equal(shown.type, 'notification-error', shown.type);
+  assert.ok(shown.dismissAfterMs >= 30000, `as long as a warning (${shown.dismissAfterMs} ms)`);
+});
+
+await check('a failed build after a push says the changes reached the repository', () => {
+  const shown = runPublishResult(pushedVariant(buildFailure));
+  assert.match(shown.text, /sent to the repository/i, shown.text);
+  assert.match(shown.text, /build failed/i, shown.text);
+  assert.equal(shown.type, 'notification-error', shown.type);
+});
+
+await check('any other failure is still "Failed to publish" with the server\'s message (control)', () => {
+  const shown = runPublishResult({ success: false, error: 'Invalid deploy configuration' });
+  assert.match(shown.text, /^Failed to publish: Invalid deploy configuration/, shown.text);
+  assert.equal(shown.type, 'notification-error', shown.type);
 });
 
 console.log('='.repeat(40));

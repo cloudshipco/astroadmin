@@ -1921,9 +1921,11 @@ function showNotification(message, type = 'info') {
 
   document.body.appendChild(notification);
 
+  // An error says what went wrong and often what to do: as long as a
+  // publish warning (showPublishOutcome), not the 3 s an "all saved" gets.
   setTimeout(() => {
     notification.remove();
-  }, 3000);
+  }, type === 'error' || type === 'warning' ? 30000 : 3000);
 }
 
 // Keyboard shortcut: Cmd/Ctrl + S to save
@@ -2059,9 +2061,26 @@ function ranDeploy(result) {
  * (Netlify, Cloudflare Pages, etc.) is only SENT: the host's build can fail,
  * and with no page to poll (no publicUrl, or no page for this entry) nothing
  * shows it went live, so it is a warning, like pollUntilLive giving up (#54).
- * @returns {{text: string, type: 'success'|'warning'|'info'}}
+ * A build or deploy that failed after the git step is an error that says how
+ * far the changes got: sent to the repository, committed, or neither.
+ * @returns {{text: string, type: 'success'|'warning'|'info'|'error'}}
  */
 function friendlyPublishMessage(result) {
+  const reached = result.pushed
+    ? 'Your changes were sent to the repository, but '
+    : result.committed ? 'Your changes are committed, but ' : '';
+  if (result.build && result.build.success === false) {
+    // The problems are sentences the server wrote from the build's error codes.
+    const problems = Array.isArray(result.build.problems)
+      ? result.build.problems.map((problem) => problem?.message).filter((message) => typeof message === 'string')
+      : [];
+    const failed = reached ? "the site's build failed" : "The site's build failed";
+    return {
+      text: `${reached}${failed}, so nothing was deployed and your changes are not live.`
+        + (problems.length ? ` ${problems.join(' ')}` : '') + ' See the server log.',
+      type: 'error',
+    };
+  }
   const deploy = ranDeploy(result);
   // A dry run (rsync's dryRun) only lists what it would upload.
   if (deploy?.dryRun) {
@@ -2074,7 +2093,9 @@ function friendlyPublishMessage(result) {
   }
   if (deploy && deploy.success !== true) {
     return {
-      text: 'Your site was built, but the deploy did not finish, so your changes are not live. See the server log.',
+      text: reached
+        ? `${reached}the deploy to your site failed, so they are not live. See the server log.`
+        : 'Your site was built, but the deploy failed, so your changes are not live. See the server log.',
       type: 'error',
     };
   }
@@ -2257,6 +2278,31 @@ function showPublishOutcome(result, { pagePath, preHash, liveUrl }) {
   }
 }
 
+/**
+ * Tell the editor what a publish response means.
+ * @param {object} result - the /api/publish response body
+ * @param {{pagePath: ?string, preHash: ?string, liveUrl: ?string}} context - see showPublishOutcome
+ */
+function showPublishResult(result, context) {
+  if (result.success) {
+    document.querySelector('.publish-problems-panel')?.remove();
+    updateChangesBadge();
+    showPublishOutcome(result, context);
+  } else if (result.check) {
+    showPublishProblems(result);
+  } else if (result.build) {
+    // The git step went through (committed, and pushed when there is a
+    // remote); the site's build or the deploy after it failed. Not "failed
+    // to publish": what reached the repository is said, and that nothing
+    // is live.
+    updateChangesBadge();
+    const { text, type } = friendlyPublishMessage(result);
+    showNotification(text, type);
+  } else {
+    showNotification('Failed to publish: ' + (result.message || result.error), 'error');
+  }
+}
+
 // Publish changes
 document.getElementById('publishBtn').addEventListener('click', async () => {
   const message = await showPublishDialog();
@@ -2285,15 +2331,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     // A passing publish check also refreshed the click-to-edit scan (ui/doctor-notice.js).
     window.dispatchEvent(new CustomEvent('astroadmin:published'));
 
-    if (result.success) {
-      document.querySelector('.publish-problems-panel')?.remove();
-      updateChangesBadge();
-      showPublishOutcome(result, { pagePath, preHash, liveUrl });
-    } else if (result.check) {
-      showPublishProblems(result);
-    } else {
-      showNotification('Failed to publish: ' + (result.message || result.error), 'error');
-    }
+    showPublishResult(result, { pagePath, preHash, liveUrl });
   } catch (error) {
     console.error('Publish failed:', error);
     showNotification(failureText('Failed to publish', error), 'error');
