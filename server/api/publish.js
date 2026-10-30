@@ -642,6 +642,11 @@ export function blockedBody(reason = null) {
   };
 }
 
+/** How a refusal starts: "committed" only when this request committed. */
+function savedSentence(committed) {
+  return committed ? 'Your changes are saved and committed' : 'Your changes are saved';
+}
+
 /** Response body for a commit whose rebase onto the upstream conflicted. */
 export function conflictBody({ committed = false, commitResult = null } = {}) {
   return {
@@ -650,7 +655,7 @@ export function conflictBody({ committed = false, commitResult = null } = {}) {
     pushed: false,
     commit: commitInfo(commitResult),
     error: 'Your changes clash with newer changes to the site',
-    message: 'Your changes are saved and committed, but someone else has since changed the same content, '
+    message: `${savedSentence(committed)}, but someone else has since changed the same content, `
       + 'so they were not published. Contact your site administrator to combine the two.',
   };
 }
@@ -667,7 +672,7 @@ export function localChangesBody({ committed = false, commitResult = null } = {}
     pushed: false,
     commit: commitInfo(commitResult),
     error: 'Changes made on the server are in the way',
-    message: `${committed ? 'Your changes are saved and committed' : 'Your changes are saved'}, but were not published: `
+    message: `${savedSentence(committed)}, but were not published: `
       + 'newer changes to the site touch files that were also changed directly on the server, outside the editor. '
       + 'Contact your site administrator to sort those files out, then publish again.',
   };
@@ -681,7 +686,7 @@ export function pushFailureBody({ committed = false, commitResult = null } = {})
     pushed: false,
     commit: commitInfo(commitResult),
     error: 'Could not send your changes to the site',
-    message: 'Your changes are saved and committed, but could not be sent to the site, so they are not live yet. '
+    message: `${savedSentence(committed)}, but could not be sent to the site, so they are not live yet. `
       + 'Try publishing again in a moment; if it keeps happening, contact your site administrator.',
   };
 }
