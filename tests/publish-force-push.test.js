@@ -21,6 +21,7 @@
  */
 
 import assert from 'assert';
+import crypto from 'crypto';
 import { execFileSync, spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
@@ -69,6 +70,12 @@ async function publish(checkout, file) {
       return client.commit(file, [file]);
     },
   });
+}
+
+/** Publish with nothing new to commit. */
+async function publishNothingNew(checkout) {
+  const fullConfig = { paths: { projectRoot: checkout }, build: { check: 'true' }, doctor: { enabled: false }, git: { allowLocalRemote: true } };
+  return pushIfAstroAccepts(fullConfig, createGitClient(fullConfig), { commit: async () => null });
 }
 
 async function scenario(name, configure) {
@@ -165,8 +172,60 @@ async function refusedScenario(mode) {
   });
 }
 
+/**
+ * A known upstream value that reaches the editor's own commit must not be
+ * taken as the base: it would replay nothing, drop the commit and still
+ * report it pushed. Site code can write refs, so the admin's record (or the
+ * tracking ref) can be made a symbolic ref to the branch itself, which
+ * follows it to whatever the editor commits. `which` is 'record' or
+ * 'tracking'. With `committedEarlier`, the editor's commit was made before
+ * this publish (the commit route without autoPush, or a refused publish), so
+ * this publish commits nothing and the symbolic ref already reaches it.
+ */
+async function symrefScenario(which, { committedEarlier = false } = {}) {
+  const root = fs.mkdtempSync(path.join(tempRoot, 'symref-'));
+  const remote = path.join(root, 'remote.git');
+  const checkout = path.join(root, 'checkout');
+  const developer = path.join(root, 'developer');
+  git(root, 'init', '-q', '--bare', '-b', 'main', remote);
+  fs.mkdirSync(checkout);
+  git(checkout, 'init', '-q', '-b', 'main');
+  identity(checkout, 'Editor');
+  writeFile(checkout, 'a.md', 'a\n');
+  git(checkout, 'add', '-A');
+  git(checkout, 'commit', '-qm', 'initial');
+  git(checkout, 'remote', 'add', 'origin', remote);
+  git(checkout, 'push', '-q', '-u', 'origin', 'main');
+
+  await check(`the ${which} ref made a symbolic ref to the branch does not drop the editor's commit${committedEarlier ? ' (committed earlier)' : ''}`, async () => {
+    git(root, 'clone', '-q', remote, developer);
+    identity(developer, 'Developer');
+    writeFile(developer, 'developer.md', 'developer\n');
+    git(developer, 'add', '-A');
+    git(developer, 'commit', '-qm', 'developer');
+    git(developer, 'push', '-q', 'origin', 'main');
+
+    const recordName = `refs/astroadmin/upstream/${crypto.createHash('sha256').update('origin\0refs/heads/main').digest('hex').slice(0, 32)}`;
+    git(checkout, 'symbolic-ref', which === 'record' ? recordName : 'refs/remotes/origin/main', 'refs/heads/main');
+
+    if (committedEarlier) {
+      writeFile(checkout, 'edit.md', 'edit\n');
+      git(checkout, 'add', '--', 'edit.md');
+      git(checkout, 'commit', '-qm', 'edit');
+    }
+    const edit = committedEarlier ? await publishNothingNew(checkout) : await publish(checkout, 'edit.md');
+    assert.equal(edit.pushed, true, `the edit was published: ${JSON.stringify(edit)}`);
+    assert.ok(has(remote, 'main:developer.md'), "the developer's commit is on the remote");
+    assert.ok(has(remote, 'main:edit.md'), `the editor's commit was dropped: ${git(remote, 'log', '--format=%s', 'main')}`);
+    assert.ok(has(checkout, 'HEAD:edit.md'), "the editor's commit is still on the checkout's branch");
+  });
+}
+
 try {
   console.log('\n🧪 A force-pushed-away commit is not published again\n' + '='.repeat(40));
+  await symrefScenario('record');
+  await symrefScenario('tracking');
+  await symrefScenario('record', { committedEarlier: true });
   await refusedScenario('local-changes');
   await refusedScenario('conflict');
   await scenario('a named remote with the default refspec (control)', () => {});

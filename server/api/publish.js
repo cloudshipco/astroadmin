@@ -222,10 +222,13 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
       prepared.blockedReason = 'filter';
       return prepared;
     }
+    // The branch before the editor's commit: no known upstream value may
+    // reach past it (lastKnownBase).
+    const headBeforeCommit = await headCommit(git);
     if (commit) prepared.commitResult = await commit();
     if (!rebase(prepared.commitResult)) return prepared;
     prepared.upstream = await findUpstream(git);
-    const synced = prepared.upstream ? await rebaseOntoUpstream(git, prepared.upstream) : 'synced';
+    const synced = prepared.upstream ? await rebaseOntoUpstream(git, prepared.upstream, headBeforeCommit) : 'synced';
     if (synced === 'conflict') {
       prepared.conflict = true;
       return prepared;
@@ -318,10 +321,11 @@ async function gitPath(git, name) {
  * lands while the checkout moves.
  * @param {import('simple-git').SimpleGit} git
  * @param {{remote: string, ref: string}} upstream
+ * @param {string|null} headBeforeCommit HEAD before this publish's commit
  * @returns {Promise<'synced'|'conflict'|'local-changes'>}
  */
-async function rebaseOntoUpstream(git, upstream) {
-  const localHead = (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
+async function rebaseOntoUpstream(git, upstream, headBeforeCommit) {
+  const localHead = await headCommit(git);
   if (!localHead) return 'synced'; // an unborn branch has nothing to rebase
   // What the upstream was known to be BEFORE this fetch moves anything.
   const knownBefore = await knownUpstreamValues(git, upstream);
@@ -355,7 +359,7 @@ async function rebaseOntoUpstream(git, upstream) {
     return 'local-changes';
   }
 
-  const rebased = await rebaseInWorktree(git, localHead, upstreamHead, await lastKnownBase(git, localHead, knownBefore));
+  const rebased = await rebaseInWorktree(git, localHead, upstreamHead, await lastKnownBase(git, headBeforeCommit, knownBefore));
   if (rebased === null) return 'conflict';
 
   // The exclusive hold keeps the editor out; this keeps a person's commit
@@ -371,6 +375,11 @@ async function rebaseOntoUpstream(git, upstream) {
   await recordUpstream(git, upstream, upstreamHead);
   console.log('✅ Rebased onto the latest changes');
   return 'synced';
+}
+
+/** HEAD's commit, or '' on an unborn branch. */
+async function headCommit(git) {
+  return (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
 }
 
 /** Files whose staged version differs from both HEAD and the working tree. */
@@ -419,31 +428,55 @@ async function recordUpstream(git, upstream, commit) {
  */
 async function knownUpstreamValues(git, upstream) {
   const values = [];
-  const resolve = async (name) => (await git.raw(['rev-parse', '--verify', '--quiet', `${name}^{commit}`]).catch(() => '')).trim();
-  const recorded = await resolve(upstreamRecordRef(upstream));
+  const recorded = await plainRefCommit(git, upstreamRecordRef(upstream));
   if (recorded) values.push(recorded);
   const trackingRef = (await git.raw(['rev-parse', '--symbolic-full-name', '@{upstream}']).catch(() => '')).trim();
   if (trackingRef.startsWith('refs/')) {
-    const tracking = await resolve(trackingRef);
+    const tracking = await plainRefCommit(git, trackingRef);
     if (tracking) values.push(tracking);
   }
   return values;
 }
 
 /**
- * Of the known upstream values, the newest that `localHead` contains, or
- * null. The commits after it are the checkout's own; those before it were
- * the upstream's, so one the upstream has since dropped (a force-push) is
- * not replayed and pushed back. (A value `localHead` does not contain says
- * nothing about it and is skipped.) Null means nothing is known, and the
+ * The commit a ref names, or null when it does not exist, is not a commit,
+ * or is a SYMBOLIC ref: one pointing at the branch itself (site code can
+ * write refs) follows it to the editor's own commit, which as a base would
+ * drop that commit. Read with for-each-ref, whose pattern also matches refs
+ * below the name, so the exact name is picked out.
+ */
+async function plainRefCommit(git, refName) {
+  const listing = await git.raw(['for-each-ref', '--format=%(refname)%00%(symref)%00%(objecttype)%00%(objectname)', refName]).catch(() => '');
+  for (const line of listing.split('\n')) {
+    const [name, symref, type, objectName] = line.split('\0');
+    if (name !== refName) continue;
+    if (symref) {
+      console.error(`Ignoring ${refName}: it is a symbolic ref (to ${symref}), not a record of the upstream`);
+      return null;
+    }
+    return type === 'commit' ? objectName : null;
+  }
+  return null;
+}
+
+/**
+ * Of the known upstream values, the newest that the branch contained BEFORE
+ * this publish's commit (`baseLimit`), or null. The commits after it are the
+ * checkout's own; those before it were the upstream's, so one the upstream
+ * has since dropped (a force-push) is not replayed and pushed back. (A value
+ * `baseLimit` does not contain says nothing about it and is skipped; one
+ * that reaches the editor's new commit cannot be the upstream's, and taken
+ * as the base would drop that commit.) Null means nothing is known, and the
  * rebase falls back to the merge-base.
+ * @param {string|null} baseLimit the HEAD before the editor's commit
  * @param {string[]} candidates
  * @returns {Promise<string|null>}
  */
-async function lastKnownBase(git, localHead, candidates) {
+async function lastKnownBase(git, baseLimit, candidates) {
+  if (!baseLimit) return null;
   let newest = null;
   for (const candidate of candidates) {
-    if (!(await isAncestor(git, candidate, localHead))) continue;
+    if (!(await isAncestor(git, candidate, baseLimit))) continue;
     if (newest === null || await isAncestor(git, newest, candidate)) newest = candidate;
   }
   return newest;
