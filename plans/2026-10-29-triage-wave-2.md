@@ -176,3 +176,35 @@ credentials").
 Still before release: the real-browser save check (CLAUDE.md recipe) for the
 item-modal clear, the legacy alt and typed literals; a second review pass if
 wanted.
+
+## Review pass 2 (2026-10-30, overnight)
+
+Five agents on 5d2d43e..main, plus a real-browser save check on a throwaway
+site (all scenarios pass: item-modal clear, moved alt, typed literals, new
+block numbers, refit textareas, file() and top-level lists, no duplicate ids).
+Every round-1 fix was confirmed to hold, and reverting each turns its test red.
+
+New findings. Git (HIGH): `log.showSignature` + `gpg.program` runs on
+log/file-history/show; `core.alternateRefsCommand` runs on the publish fetch.
+Git (MEDIUM): `worktree add` checks out under the worktree's own gitdir, so
+`includeIf "gitdir:**/worktrees/**"` config escapes the overrides and the
+filter refusal; submodules (fetch recursion, status) and local-path remotes
+run their own commands; transitive pnpm `.astro` deps; fork-point fallbacks
+(URL remote, unmapped refspec, no reflog). Editor (MEDIUM): legacy alt in the
+item modal; new blocks/cards save `""` for a nullable number. Server (MEDIUM):
+behind a non-loopback TLS proxy the secure cookie is silently dropped (a side
+effect of the loopback default: keep the default, warn and document); the
+rsync remote guard judges spelling only (`$HOME`, backticks, `*` expand on old
+rsync/openrsync). Plus low items and doc corrections.
+
+DESIGN POINT for James: the git hardening is a deny-list of config keys, and
+each round found more (round 1: merge drivers, uploadpack, sshCommand,
+credential helpers; round 2: showSignature, alternateRefsCommand, includeIf in
+worktrees, submodules, local remotes). That is the "count not falling" signal.
+The structural fix is to stop site code writing the repository's `.git` at all
+(on the hosted box the preview runs as the same Unix user as the admin):
+a separate user for the preview, or a read-only `.git` for it. Then the
+overrides become defence in depth instead of the boundary.
+
+Round-2 fix lanes A (git), B (editor), C (server/docs), D (doctor/tests/CLAUDE.md)
+running.
