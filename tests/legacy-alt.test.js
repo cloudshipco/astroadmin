@@ -11,8 +11,14 @@
  *   - an edit of the declared alt control saves the edit;
  *   - a declared alt that has text of its own keeps it (the old key is not
  *     shown);
- *   - the same inside a block and in the item modal (which keeps the old
- *     key as well, being a property the schema does not render).
+ *   - the same inside a block and in the item modal. DELIBERATE (review
+ *     round 2): the item modal used to keep the old key as well, being a
+ *     property the schema does not render, so an untouched Done wrote both
+ *     keys, an edit left the stale old text beside it for good, and a
+ *     cleared alt came back from the old key on the next open. The modal
+ *     now drops the key a control was carried over from (its
+ *     data-original-path), as the main form, which reads only what it
+ *     renders, always did.
  *
  *   bun tests/legacy-alt.test.js
  */
@@ -129,6 +135,55 @@ await check('inside a list item edited in the item modal', async () => {
   const saved = fg.extractFormData(form, schema);
   assert.equal(saved.slides[0].bannerAlt, 'Typed earlier');
   assert.equal(saved.slides[0].heading, 'H2');
+  assert.equal('bannerImageAlt' in saved.slides[0], false, `the old key is moved, not copied: ${JSON.stringify(saved.slides[0])}`);
+});
+
+const cardSchema = toSchema(z.object({
+  title: z.string(),
+  cards: z.array(z.object({ label: z.string(), bannerImage: z.string().optional(), bannerAlt: z.string().optional() })),
+}));
+const storedCards = () => ({ title: 'T', cards: [{ label: 'L', bannerImage: '/i.jpg', bannerImageAlt: 'old' }] });
+
+async function openCard(form, index) {
+  const before = document.querySelectorAll('.array-item-edit-overlay').length;
+  form.querySelector(`.array-card-edit[data-edit-card="${index}"]`).click();
+  for (let i = 0; i < 100 && document.querySelectorAll('.array-item-edit-overlay').length === before; i++) await new Promise((r) => setTimeout(r, 5));
+  const overlays = document.querySelectorAll('.array-item-edit-overlay');
+  return overlays[overlays.length - 1];
+}
+
+await check('item modal: an untouched Done moves the old key to the declared alt', async () => {
+  const form = render(cardSchema, storedCards());
+  const overlay = await openCard(form, 0);
+  overlay.querySelector('[data-save]').click();
+  assert.deepEqual(fg.extractFormData(form, cardSchema).cards[0], { label: 'L', bannerImage: '/i.jpg', bannerAlt: 'old' });
+});
+
+await check('item modal: an edited alt replaces the old key', async () => {
+  const form = render(cardSchema, storedCards());
+  const overlay = await openCard(form, 0);
+  type(overlay, 'bannerAlt', 'new');
+  overlay.querySelector('[data-save]').click();
+  assert.deepEqual(fg.extractFormData(form, cardSchema).cards[0], { label: 'L', bannerImage: '/i.jpg', bannerAlt: 'new' });
+});
+
+await check('item modal: a cleared alt stays cleared, saved and reopened', async () => {
+  const form = render(cardSchema, storedCards());
+  let overlay = await openCard(form, 0);
+  type(overlay, 'bannerAlt', '');
+  overlay.querySelector('[data-save]').click();
+  assert.deepEqual(fg.extractFormData(form, cardSchema).cards[0], { label: 'L', bannerImage: '/i.jpg' });
+  overlay = await openCard(form, 0);
+  assert.equal(overlay.querySelector('[name="bannerAlt"]').value, '', 'the old text does not come back');
+});
+
+await check('item modal: an old key beside a declared alt with its own text is left alone (control)', async () => {
+  const stored = { title: 'T', cards: [{ label: 'L', bannerImage: '/i.jpg', bannerAlt: 'own', bannerImageAlt: 'old' }] };
+  const form = render(cardSchema, stored);
+  const overlay = await openCard(form, 0);
+  type(overlay, 'label', 'L2');
+  overlay.querySelector('[data-save]').click();
+  assert.deepEqual(fg.extractFormData(form, cardSchema).cards[0], { label: 'L2', bannerImage: '/i.jpg', bannerAlt: 'own', bannerImageAlt: 'old' });
 });
 
 await check('inside a block, with a sibling in the block edited', () => {

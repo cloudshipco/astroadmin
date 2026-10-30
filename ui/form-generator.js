@@ -1689,13 +1689,21 @@ export function extractItem(container, item, schema) {
   return result;
 }
 
-/** The top-level keys a container renders a control or container for. */
+/**
+ * The top-level keys a container renders a control or container for, and the
+ * keys a control was carried over FROM (data-original-path: an old built-in
+ * alt key shown in the declared alt's box, see carriedOverAlts). Such a key's
+ * text now lives in the control, so the item keeps it only where the control
+ * puts it: left as an unrendered property, it was saved beside the declared
+ * key, outlived every edit, and came back after the alt was cleared.
+ */
 function renderedKeys(container) {
   const keys = new Set();
   const add = (path) => {
     const key = path?.split(/[.[]/)[0];
     if (key) keys.add(key);
   };
+  container.querySelectorAll('[data-original-path]').forEach((element) => add(element.getAttribute('data-original-path')));
   container.querySelectorAll('[name]').forEach((element) => add(element.getAttribute('name')));
   container.querySelectorAll('[data-field]').forEach((element) => add(element.dataset.field));
   container.querySelectorAll('[data-object-field]').forEach((element) => add(element.dataset.objectField));
