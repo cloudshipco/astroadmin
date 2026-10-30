@@ -1,6 +1,6 @@
 # Backlog triage 2 and the second fix wave
 
-Status: MERGED ON MAIN, NOT PUSHED OR RELEASED (2026-10-29). All six lanes
+Status: RELEASED as 1.11.0 (2026-10-30, tag v1.11.0 at 58ac79b; npm shasum dfdbc0d, the tarball packed from that commit). The structural git fix is #93; open from this wave: #91, #92.
 plus #89 are on main, and the gate passed on the combined tree: `npm test`
 76/76, and every slow test by name. Decisions: #83 rebases in a throwaway
 worktree inside the exclusive hold (not the check's worktree, which would mean
