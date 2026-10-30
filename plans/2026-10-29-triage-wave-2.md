@@ -231,8 +231,19 @@ symlinks out of public/; publicDir wording; every browser test via
 
 Release-note items: a site whose remote is a local path needs
 `git.allowLocalRemote: true`; a repo with a submodule or a git filter is
-refused; HTTPS pushes need `GIT_ASKPASS`; behind a non-loopback proxy set
-`TRUST_PROXY`.
+refused; HTTPS pushes take credentials only from `GIT_ASKPASS` or the
+remote URL, and credential helpers (osxkeychain, gh) are no longer used;
+behind a non-loopback proxy set `TRUST_PROXY`; a remote `rsync.path` with a
+space, `:`, `%` or non-ASCII character is refused even with
+`allowDestructivePath` (and one starting with `=`); `trustProxy` in
+astroadmin.config.js is normalised like `TRUST_PROXY` (`'1'` is a hop
+count); a correct login through an untrusted TLS proxy is a 500 naming
+`TRUST_PROXY`, and a correct login over plain HTTP to a production server
+is refused with a message saying sign-in needs HTTPS (it used to succeed
+without a cookie and loop); the doctor's fallback build folder is kept in
+the site root (it ignores itself); CmsVideo refuses a video file that is a
+symlink pointing outside the site's public folder (a symlinked folder is
+fine).
 
 Flake seen once by two lanes under load: video-upload exits 1 after all its
 checks pass (~1 in 16); an EFAULT on an upload temp dir. Not yet investigated.

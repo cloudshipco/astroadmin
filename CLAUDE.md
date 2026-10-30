@@ -154,7 +154,7 @@ over-redaction in every version of "show the output with server paths removed or
 
 Tests are standalone scripts under `tests/`, each run as its own process.
 `npm run test:unit` (`bun tests/run-unit.js [word...]`) runs the fast server-less
-ones in turn and prints a summary (about 81 files, ~200 s on a loaded machine, measured
+ones in turn and prints a summary (87 files in FAST_TESTS, ~200 s on a loaded machine, measured
 2026-10-30; review lanes may add more); a new fast test
 goes in its list, and its header names every file it leaves out. The
 slow ones (full Astro builds, a browser) are run by name before a release, and the
@@ -907,9 +907,9 @@ it reads); every status passes `--ignore-submodules=all` (a repo's
 rebase's) are added `--no-checkout` and checked out by `reset --hard` run IN the worktree,
 since an `includeIf` on the git directory can configure a linked worktree differently.
 Commit and publish refuse, before any other git work, an index holding a gitlink (409). `GIT_PROXY_COMMAND` is empty by
-default and `GIT_TERMINAL_PROMPT=0`. The operator's `GIT_SSH_COMMAND` and `GIT_ASKPASS` are
-the only ways to supply ssh and HTTPS credentials (no credential helper, osxkeychain
-included). A site whose files go through a filter (LFS or any clean/smudge driver an
+default and `GIT_TERMINAL_PROMPT=0`. ssh credentials come from the admin user's own ssh
+(its `~/.ssh/config` and agent) or the operator's `GIT_SSH_COMMAND`; HTTPS credentials from
+`GIT_ASKPASS` or the remote URL (no credential helper, osxkeychain included). A site whose files go through a filter (LFS or any clean/smudge driver an
 attribute uses) is refused (409) rather than recommitted as raw bytes
 (`server/utils/filter-attributes.js`). Every diff and show adds `NO_DIFF_PROGRAMS`. Only
 `GIT_ENVIRONMENT`'s variables reach git (simple-git 4 drops the other `GIT_*` ones); a new

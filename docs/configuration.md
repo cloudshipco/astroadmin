@@ -198,13 +198,14 @@ Publish runs these steps, in order:
    touches a file that has uncommitted changes on the server, or an
    untracked file is in its way, nothing in the checkout moves and the
    publish is refused (409) with the commit kept local: someone with access
-   to the checkout sorts those files out, then publishes again. If the
+   to the checkout sorts those files out, then publishes again. When the
+   upstream has moved on, a file someone staged (`git add`) and then
+   changed again, wherever it is, refuses the publish like an uncommitted
+   change in the way (409, the commit kept local), since moving the
+   checkout would drop the staged version. If the
    checkout is already in the middle of a rebase or merge (someone left one
    unfinished on the server), publishing is refused before anything is
-   committed, and the editor's saves stay as they are. A file someone
-   staged (`git add`) and then changed again is refused the same way,
-   wherever it is, since moving the checkout would drop the staged
-   version. A commit someone
+   committed, and the editor's saves stay as they are. A commit someone
    force-pushed away upstream is not brought back. A repository where any
    file, anywhere, goes through a git filter (Git LFS or another) is
    refused, even outside the site's folder (for example a Git LFS folder
