@@ -247,3 +247,33 @@ fine).
 
 Flake seen once by two lanes under load: video-upload exits 1 after all its
 checks pass (~1 in 16); an EFAULT on an upload temp dir. Not yet investigated.
+
+## Review pass 3 (2026-10-30, overnight)
+
+Three reviewers on 916a016..main. No high findings; the git reviewer judged
+the git layer "defence in depth with known residual gaps", with no new class
+of config that runs code. The editor found no data loss (untouched values
+byte-identical through the three new mechanisms). Medium: a refused publish
+advanced the upstream record, so the next publish brought back a
+force-pushed-away commit (a regression from round 2's own fix); CmsVideo
+refused a symlinked shared `public/images`; new blocks seeded literal
+unions; doc placement of the staged-then-changed refusal.
+
+Fixed (merged, gate passed: `npm test` 89/89 and all 20 slow tests by name):
+the record moves only when the branch is on the fetched upstream; a base must
+be contained by the HEAD from before this publish's commit, and symbolic refs
+are never followed; triangular remotes (pushurl, pushInsteadOf) are refused;
+a nested repo that `git add` would turn into a gitlink is refused; throwaway
+worktrees never `git worktree prune` (server/utils/throwaway-worktree.js) and
+the filter view fails closed after setup; refusal bodies say "committed" only
+when true; literal unions start on "Choose..." in new blocks and cards; publish
+messages after a push never say "not live"; CmsVideo follows a symlinked
+folder and checks suffixed posters; rsync refuses a leading `=`; a plain-HTTP
+production login says it needs HTTPS; doctor interrupt wording.
+
+Not fixed, filed: #92 (a `.astro` re-exported from a package's JS still hits
+#89; placing the check's worktree beside the checkout looks like the general
+fix). Follow-ups: most test files print only a pass count (the runner uses exit
+codes, so the gate is sound); video-upload flake under load; CmsImage's
+`?`/`#` suffix gap; `filterDriverInUse` swallowing config errors; the commit
+route with autoPush and nothing to commit now answers the 'remote' 409 first.

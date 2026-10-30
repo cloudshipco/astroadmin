@@ -345,7 +345,17 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   any other git work. ~10 s.
 - `bun tests/publish-force-push.test.js` — a commit force-pushed away upstream is not
   brought back by the next publish, in four layouts (named remote, URL remote, a fetch
-  refspec that does not map the branch, no reflog). ~5-15 s.
+  refspec that does not map the branch, no reflog), also when a publish in between was
+  refused (local changes, conflict); a symbolic ref planted at the record or the tracking
+  ref never drops the editor's commit; a triangular remote (`pushurl`, `pushInsteadOf`) is
+  refused. ~15 s.
+- `bun tests/publish-worktrees.test.js` — the admin's throwaway worktrees
+  (`server/utils/throwaway-worktree.js`): a person's stale worktree record survives a
+  publish, our own leftover record is removed, an in-use one is kept, nothing the publish
+  added stays registered, and broken config that only linked worktrees see refuses the
+  publish with nothing committed. ~3 s.
+- `bun tests/publish-bodies.test.js` — the refusal bodies say "committed" only when this
+  request committed. <1 s.
 - `bun tests/git-environment.test.js` — git's environment (#64), through a real publish:
   `GIT_AUTHOR_*`/`GIT_COMMITTER_*` set the commit identity over the repo's user.name,
   `GIT_SSH_COMMAND` carries the push (an ssh:// remote whose "ssh" is a script), and an
@@ -949,7 +959,16 @@ Two layers, deliberately unequal:
    newest upstream value the local branch contains among the remote-tracking ref and our
    own record `refs/astroadmin/upstream/<hash>`, updated after each fetch and push; the
    merge-base only when nothing is known. So a commit force-pushed away upstream is not
-   replayed, whatever the remote layout or reflog) and the live checkout is moved to its result with
+   replayed, whatever the remote layout or reflog. The record moves only when the branch is
+   on what was fetched (it already contains it, after `reset --keep`, or after a push),
+   never straight after the fetch, or a publish refused between fetch and reset would leave
+   the next with no known base; a known value is a base only if the HEAD from before this
+   publish's commit contains it, and a symbolic ref is never followed. The admin's
+   throwaway worktrees (filter view, rebase, check) are made and removed through
+   `server/utils/throwaway-worktree.js`, each removing only its own worktree and record,
+   never `git worktree prune` (it drops every stale record, a person's on an unmounted
+   disk included); the filter view fails open only when its worktree cannot be added, and
+   any later error fails the publish closed (500)) and the live checkout is moved to its result with
    `git reset --keep`, so uncommitted changes elsewhere in the repository do not block it
    (#83); `--keep` refuses, changing nothing, when an incoming change touches a locally
    modified file or an untracked file is in the way (409, `localChangesBody`); a file
@@ -978,7 +997,13 @@ Two layers, deliberately unequal:
    thing runs under `withGitLock` (which the commit route also takes) so
    the commit checked is the commit pushed. The push names that SHA and the branch's
    upstream explicitly (`pushCheckedCommit`), so a configured push refspec or
-   `push.default=matching` cannot send unchecked refs. A failure keeps the commit local
+   `push.default=matching` cannot send unchecked refs. Publish refuses (409, `blockedReason:
+   'remote'`) a branch whose remote pushes somewhere other than it fetches from
+   (`remote.<name>.pushurl`, or a `url.<base>.pushInsteadOf` matching its URL): the pushed
+   commit would never appear where the next publish fetches, and that publish's rebase
+   would drop it from the branch. An untracked repository inside the git paths, which
+   `git add -A` turns into a gitlink, is unstaged and refused as a submodule (409) before
+   anything is committed. A failure keeps the commit local
    and returns 422 built from structured parts (the error codes as our sentences, the
    refused entries, our validation of each at the checked commit: `build-failure.js`), with
    Astro's output in the server log only. A push
