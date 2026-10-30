@@ -205,7 +205,11 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
       prepared.blocked = true;
       return prepared;
     }
-    if (await filterDriverInUse(git)) {
+    // The checkout's view of the config, and a linked worktree's (an
+    // includeIf on the git directory can configure a filter, or the
+    // attributes using one, for worktrees only, and the rebase and the
+    // check run in worktrees).
+    if (await filterDriverInUse(git) || await inLinkedWorktreeView(git, filterDriverInUse)) {
       // Logged with the driver's name; the editor gets a fixed sentence.
       prepared.blocked = true;
       prepared.blockedReason = 'filter';
@@ -226,6 +230,33 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
     prepared.ready = true;
     return prepared;
   });
+}
+
+/**
+ * Run `task` with a client in a throwaway linked worktree of HEAD whose
+ * index holds HEAD's tree but whose working tree is empty: nothing is
+ * checked out, so no filter runs, yet git reads config (and attributes,
+ * from the index) as a linked worktree does. Null for an unborn branch.
+ * @template T
+ * @param {import('simple-git').SimpleGit} git
+ * @param {(client: import('simple-git').SimpleGit) => Promise<T>} task
+ * @returns {Promise<T|null>}
+ */
+async function inLinkedWorktreeView(git, task) {
+  const head = (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
+  if (!head) return null;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-view-'));
+  const worktreeDir = path.join(tempDir, 'worktree');
+  try {
+    await git.raw(['worktree', 'add', '--quiet', '--no-checkout', '--detach', worktreeDir, head]);
+    const worktreeGit = gitClientAt(worktreeDir);
+    await worktreeGit.raw(['read-tree', head]);
+    return await task(worktreeGit);
+  } finally {
+    await git.raw(['worktree', 'remove', '--force', worktreeDir]).catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    await git.raw(['worktree', 'prune']).catch(() => {});
+  }
 }
 
 /** The paths of the gitlinks (submodules) in the checkout's index. */
@@ -370,12 +401,17 @@ async function forkPointRef(git, upstreamHead) {
  * worktree has nothing to stash, and update-refs would move the live
  * checkout's branch (it points at `localHead`) without its files.
  */
-async function rebaseInWorktree(git, localHead, upstreamHead, trackingRef = null) {
+export async function rebaseInWorktree(git, localHead, upstreamHead, trackingRef = null) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-rebase-'));
   const worktreeDir = path.join(tempDir, 'worktree');
   try {
-    await git.raw(['worktree', 'add', '--quiet', '--detach', worktreeDir, localHead]);
+    // Checked out by a client rooted in the worktree, never by `worktree
+    // add` itself: its overrides are read as the worktree sees the config
+    // (an includeIf on the git directory can name a filter for linked
+    // worktrees only, which overrides read in the checkout never saw).
+    await git.raw(['worktree', 'add', '--quiet', '--no-checkout', '--detach', worktreeDir, localHead]);
     const worktreeGit = gitClientAt(worktreeDir);
+    await worktreeGit.raw(['reset', '--quiet', '--hard', localHead]);
     try {
       const onto = trackingRef ? ['--fork-point', trackingRef] : [upstreamHead];
       await worktreeGit.raw(['rebase', '--quiet', '--no-autostash', '--no-update-refs', ...onto]);

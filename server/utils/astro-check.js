@@ -484,7 +484,12 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-check-'));
     const worktreeDir = path.join(tempDir, 'worktree');
-    await git(projectRoot, ['worktree', 'add', '--detach', worktreeDir, commit]);
+    // Checked out by git run IN the worktree, whose overrides are read as a
+    // linked worktree sees the config (an includeIf on the git directory can
+    // name a filter for worktrees only); `worktree add` would check out with
+    // the checkout's overrides.
+    await git(projectRoot, ['worktree', 'add', '--no-checkout', '--detach', worktreeDir, commit]);
+    await git(worktreeDir, ['reset', '--quiet', '--hard', commit]);
 
     // A worktree does not populate submodules (gitlinks, mode 160000), so
     // content kept in one would silently be checked as empty. Refuse instead.

@@ -21,7 +21,7 @@
  */
 
 import assert from 'assert';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -170,6 +170,59 @@ try {
     assert.match(git(remoteDir, 'show', 'main:src/content/pages/home.md'), /Home \(control\)/);
     assert.deepEqual(fired(), []);
   });
+
+  // A filter configured only as linked worktrees see the config: an
+  // includeIf on the git directory, which for the check's and the rebase's
+  // worktrees is .git/worktrees/<name>. Overrides computed in the checkout
+  // never saw it, so its smudge ran when `worktree add` checked out.
+  const worktreeConfig = path.join(tempRoot, 'worktree-only.config');
+  const worktreeAttributes = path.join(tempRoot, 'worktree-only.attributes');
+  writeFile(tempRoot, 'worktree-only.attributes', '*.md filter=wtonly\n');
+  const includeKey = 'includeIf.gitdir:**/worktrees/**.path';
+  const useWorktreeOnlyFilter = ({ attributesFile = false } = {}) => {
+    writeFile(tempRoot, 'worktree-only.config', `[filter "wtonly"]\n\tsmudge = ${driver('wtonly')}\n\tclean = ${driver('wtonly')}\n`
+      + (attributesFile ? `[core]\n\tattributesFile = ${worktreeAttributes}\n` : ''));
+    git(projectRoot, 'config', includeKey, worktreeConfig);
+  };
+  const dropWorktreeOnlyFilter = () => {
+    git(projectRoot, 'config', '--unset', includeKey);
+    setInfoAttributes('');
+    fs.rmSync(path.join(markers, 'wtonly'), { force: true });
+  };
+  await check('control: plain git worktree add runs a filter only linked worktrees see', async () => {
+    useWorktreeOnlyFilter();
+    setInfoAttributes('*.md filter=wtonly\n');
+    assert.equal(spawnSync('/usr/bin/git', ['config', 'filter.wtonly.smudge'], { cwd: projectRoot, encoding: 'utf-8' }).stdout, '',
+      'precondition: the checkout itself does not see the filter (is the temp directory under a "worktrees" folder?)');
+    const controlWorktree = path.join(tempRoot, 'control-worktree');
+    git(projectRoot, 'worktree', 'add', '-q', '--detach', controlWorktree, 'HEAD');
+    git(projectRoot, 'worktree', 'remove', '--force', controlWorktree);
+    assert.deepEqual(fired(), ['wtonly']);
+    fs.rmSync(path.join(markers, 'wtonly'));
+  });
+  // The filter used by the checkout's own attributes.
+  await assertRefused('a filter only linked worktrees see');
+  // The filter AND the attributes using it seen only by linked worktrees.
+  setInfoAttributes('');
+  useWorktreeOnlyFilter({ attributesFile: true });
+  await assertRefused('a filter and its attributes only linked worktrees see');
+
+  // The two worktrees the admin checks out never run it, whatever the
+  // refusal decides: the publish check's, and the rebase's.
+  await check("the publish check's worktree runs no filter only linked worktrees see", async () => {
+    const { checkHeadWithAstro } = await import('../server/utils/astro-check.js');
+    const result = await checkHeadWithAstro({ paths: { projectRoot }, build: { check: 'test -f src/content/pages/home.md' }, doctor: { enabled: false } });
+    assert.equal(result.success, true, JSON.stringify(result.problems));
+    assert.deepEqual(fired(), [], `a filter ran: ${fired().join(', ')}`);
+  });
+  await check("the rebase's worktree runs no filter only linked worktrees see", async () => {
+    const { createGitClient, rebaseInWorktree } = await import('../server/api/publish.js');
+    const client = createGitClient({ paths: { projectRoot }, git: {} });
+    const rebased = await rebaseInWorktree(client, localHead(), git(projectRoot, 'rev-parse', 'HEAD~1'));
+    assert.equal(rebased, localHead(), 'positive control: the rebase ran (nothing to replay)');
+    assert.deepEqual(fired(), [], `a filter ran: ${fired().join(', ')}`);
+  });
+  dropWorktreeOnlyFilter();
 
   // A clean/smudge filter on the site's own content.
   setInfoAttributes('*.md filter=custom\n');
