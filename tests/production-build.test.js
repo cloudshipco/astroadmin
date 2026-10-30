@@ -15,7 +15,9 @@
  *   the output pipe held a finished build open until the time limit), and a
  *   descendant that left the group is waited for two seconds at most;
  * - with output past the 10 MB cap keeping its start AND its end, where a
- *   build prints its error.
+ *   build prints its error;
+ * - with UTF-8 decoded across chunks (a character split between two writes
+ *   came out as two U+FFFD), and the cap never cutting a character in half.
  *
  * Real /bin/sh build scripts through runProductionBuildIn.
  *
@@ -27,6 +29,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { runProductionBuildIn } from '../server/utils/build.js';
+import { cappedOutput } from '../server/utils/astro-check.js';
 
 const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-production-build-')));
 const site = path.join(scratch, 'site');
@@ -188,6 +191,37 @@ await check('a build whose output passes the cap keeps its start and its end', a
   assert.match(result.output, /THE-ERROR-AT-THE-END\n?$/, 'the end');
   assert.match(result.output, /characters of output left out/, 'says what was left out');
   assert.ok(result.output.length <= 10 * 1024 * 1024 + 200, `${result.output.length} characters`);
+});
+
+await check('a character split between two writes is decoded whole', async () => {
+  // printf with octal escapes: /bin/sh's printf may not know \x.
+  const command = buildCommand('split-utf8', "printf '\\342\\202'; sleep 0.2; printf '\\254 euro\\n'; printf '\\342\\202' >&2; sleep 0.2; printf '\\254 stderr\\n' >&2");
+  const result = await runProductionBuildIn({ build: { production: command } }, site);
+  assert.equal(result.success, true, result.output);
+  assert.ok(result.output.includes('\u20ac euro'), JSON.stringify(result.output));
+  assert.ok(result.output.includes('\u20ac stderr'), JSON.stringify(result.output));
+  assert.ok(!result.output.includes('\ufffd'), JSON.stringify(result.output));
+});
+
+await check('the output cap never splits a surrogate pair', () => {
+  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  for (const prefix of ['', 'a']) {
+    for (const suffix of ['', 'b']) {
+      for (const maxLength of [10, 11, 12, 13]) {
+        const output = cappedOutput(maxLength);
+        output.add(prefix + '\u{1F600}'.repeat(5));
+        output.add('\u{1F600}'.repeat(20) + suffix);
+        const text = output.text();
+        assert.ok(!loneSurrogate.test(text), `${JSON.stringify({ prefix, suffix, maxLength })}: ${JSON.stringify(text)}`);
+        assert.match(text, /characters of output left out/, 'positive control: the cap applied');
+      }
+    }
+  }
+  // A head stopped short of a pair takes nothing that came after it.
+  const short = cappedOutput(10);
+  short.add('aaaa\u{1F600}');
+  short.add('b');
+  assert.equal(short.text(), 'aaaa\u{1F600}b');
 });
 
 await check('a successful and a failing build report as before', async () => {

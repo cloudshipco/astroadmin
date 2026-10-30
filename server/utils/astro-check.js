@@ -257,35 +257,49 @@ async function git(cwd, args) {
 // still hold them, and it is not waited for.
 const EXITED_PIPE_GRACE_MS = 2000;
 
+const isHighSurrogate = (text, index) => /[\uD800-\uDBFF]/.test(text.charAt(index));
+const isLowSurrogate = (text, index) => /[\uDC00-\uDFFF]/.test(text.charAt(index));
+
 /**
  * A command's output, capped at `maxLength` characters: the first half and
  * the last half are kept, with a line saying how much was left out between
  * them. The start says what ran; the end is where a build prints its error.
+ * A cut never falls inside a surrogate pair (a character outside the BMP,
+ * such as an emoji), so a kept part may be one character shorter.
+ * Exported for tests.
  * @param {number} maxLength
  */
-function cappedOutput(maxLength) {
+export function cappedOutput(maxLength) {
   const half = Math.floor(maxLength / 2);
   let head = '';
   let tail = '';
   let omitted = 0;
+  // Set once anything has gone to the tail, so the head never takes text
+  // that came after it (it may stop one short of `half`, for a pair).
+  let headDone = false;
   return {
     add(chunk) {
       let text = String(chunk);
-      if (head.length < half) {
-        const room = half - head.length;
+      if (!headDone) {
+        let room = half - head.length;
+        if (room < text.length && isHighSurrogate(text, room - 1)) room -= 1;
         head += text.slice(0, room);
         text = text.slice(room);
+        if (text !== '') headDone = true;
       }
       if (text === '') return;
       tail += text;
       // Trimmed in batches, so a long log is not copied on every chunk.
       if (tail.length > 2 * half) {
-        omitted += tail.length - half;
-        tail = tail.slice(-half);
+        let cut = tail.length - half;
+        if (isLowSurrogate(tail, cut)) cut += 1;
+        omitted += cut;
+        tail = tail.slice(cut);
       }
     },
     text() {
-      const extra = Math.max(0, tail.length - half);
+      let extra = Math.max(0, tail.length - half);
+      if (extra > 0 && isLowSurrogate(tail, extra)) extra += 1;
       const left = omitted + extra;
       const kept = extra > 0 ? tail.slice(extra) : tail;
       return left > 0 ? `${head}\n[... ${left} characters of output left out ...]\n${kept}` : head + kept;
@@ -333,6 +347,10 @@ export function runCommand(command, cwd, timeoutMs, env, onSpawn = null) {
       child.stdout.destroy();
       child.stderr.destroy();
     };
+    // Decoded per stream, so a character split between two writes (or two
+    // reads) arrives whole rather than as two U+FFFD.
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     child.stdout.on('data', output.add);
     child.stderr.on('data', output.add);
 
