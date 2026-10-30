@@ -658,8 +658,9 @@ function commitInfo(commitResult) {
 }
 
 /**
- * Run the git pre-step: stage configured paths and commit, then pull --rebase,
- * check the resulting HEAD with Astro and push (all in pushIfAstroAccepts). A
+ * Run the git pre-step: stage configured paths and commit, then rebase onto
+ * the upstream, check the resulting HEAD with Astro and push (all in
+ * pushIfAstroAccepts). A
  * missing remote doesn't fail the publish; the check is not best-effort.
  * @returns {ReturnType<typeof pushIfAstroAccepts>}
  */

@@ -374,7 +374,7 @@ try {
     writeFile(git(projectRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'info'), 'attributes', '*.md merge=planted\n');
   });
 
-  await step('publish (commit, pull --rebase onto a moved remote, check worktree, push)', async () => {
+  await step('publish (commit, rebase onto a moved remote, check worktree, push)', async () => {
     developerPushes('src/content/pages/about.md', page('About (developer)'));
     return request('POST', '/api/publish', { message: 'Content update' });
   }, ({ status, body }) => {

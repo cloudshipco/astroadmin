@@ -359,7 +359,7 @@ await check('the combined result of a rebase onto the remote is what gets checke
   const remoteBefore = remoteHead();
 
   // Here, a page without a summary is committed — valid against the OLD
-  // schema — and the tree is clean, so publish's pull --rebase succeeds.
+  // schema — and the tree is clean, so publish's rebase onto the remote succeeds.
   writeFile(projectRoot, 'src/content/pages/news.md', '---\ntitle: News\n---\n');
   git(projectRoot, 'add', 'src/content/pages/news.md');
   git(projectRoot, 'commit', '-qm', 'add news');
