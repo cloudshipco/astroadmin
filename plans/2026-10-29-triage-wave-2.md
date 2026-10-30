@@ -277,3 +277,29 @@ fix). Follow-ups: most test files print only a pass count (the runner uses exit
 codes, so the gate is sound); video-upload flake under load; CmsImage's
 `?`/`#` suffix gap; `filterDriverInUse` swallowing config errors; the commit
 route with autoPush and nothing to commit now answers the 'remote' 409 first.
+
+## Targeted check of the rebase base (2026-10-30)
+
+30 adversarial scenarios through the real publish path. One HIGH: an upstream
+REWOUND to an older commit with nothing new on top (the plain way to undo a
+bad publish) had the removed commit pushed back, because the "already up to
+date" shortcut ran before the known base was consulted. Fixed in 7a86ffd (the
+shortcut applies only while the known base is still upstream); four rewind
+scenarios red before, green after; `npm test` 89/89 and the slow publish
+tests pass. Remaining known limits (need ref tampering or a remote config
+change, documented here rather than fixed): the record is keyed by the remote
+name or URL string, so switching `branch.<b>.remote` from a name to the same
+remote's URL, or site code deleting `refs/astroadmin/upstream/*` with a URL
+remote, loses the base and falls back to the merge-base; a record or tracking
+ref deliberately pointed at a person's unpushed commit makes that commit look
+upstream.
+
+## Status for James (morning of 2026-10-30)
+
+main is 110 commits ahead of origin, nothing pushed, nothing published, no
+issues closed. Three review rounds plus a targeted check; the last round found
+no high issue and the targeted check's one HIGH is fixed. Before release:
+decide the git-hardening design point (round 2 above), decide #92, push, cut
+the release (minor: 1.11.0) with the release-note items above, then the ops
+session bumps the test editor and the client editor publishes its pending
+edits.
