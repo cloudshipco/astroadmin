@@ -935,6 +935,14 @@ queue, so the old body is never written back.
   fields ending in `video` are not video pickers, nor is anything but a string by name
   (a union holding an object crashed the entry; form-generator.test.js). A typed clear
   in a new entry saves null (untouched-structure). ~10 s.
+- `bun tests/autosave-leave-browser.test.js` — an edit made inside the 1 s autosave debounce
+  survives leaving the page (#103), in real Chromium: a reload, a close and a navigation each
+  save it, sent by `sendUnsavedEditOnLeave` (beforeunload, pagehide, a hidden tab) as a
+  keepalive POST of the form as it is; a body over the keepalive cap (64 KiB) asks the browser
+  to confirm leaving and, kept, saves the ordinary way; a save still waiting on its preview
+  fetch when a newer snapshot is sent never POSTs its older one (each snapshot is numbered,
+  for a page restored from the back/forward cache); an untouched entry is not rewritten.
+  Seen red at HEAD (5 of 7) and with the snapshot guard removed. ~9 s, not in test:unit.
 - `bun tests/dashboard-layout-browser.test.js` — the dashboard header and the markdown body
   toolbar in real Chromium at 360, 390, 768 (touch), 1024 and 1280 px, by measurement:
   no horizontal page scroll; every header control (picker, View live site, Publish,

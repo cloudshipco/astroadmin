@@ -1366,6 +1366,41 @@ function debounce(func, wait) {
   return debounced;
 }
 
+// Browsers refuse a keepalive request once the bodies of those in flight pass
+// 64 KiB; leave room for anything else in flight.
+const KEEPALIVE_BODY_LIMIT = 60 * 1024;
+
+// The page is going away (#103): send the on-screen form's unsaved edit with a
+// keepalive request, which outlives the page. A debounced autosave would be
+// dropped, as would a save queued or waiting behind the one in flight.
+// Returns false when an edit is unsent and could not be sent.
+function sendUnsavedEditOnLeave() {
+  const saver = activeSaver;
+  const deb = activeDebouncedSave;
+  if (!saver) return true;
+  if (!(deb && deb.pending()) && !saver.hasUnsentEdits()) return true;
+  if (!saver.sendOnLeave()) return false;
+  if (deb) deb.cancel();
+  return true;
+}
+
+// beforeunload comes first on a reload or close: an edit too big for keepalive
+// starts its ordinary save and asks the browser to confirm leaving. pagehide
+// covers navigations that skip beforeunload, and a hidden tab (often the last
+// event a phone delivers before discarding a page) sends it too.
+function installLeaveHandlers() {
+  window.addEventListener('beforeunload', (event) => {
+    if (sendUnsavedEditOnLeave()) return;
+    if (activeDebouncedSave) activeDebouncedSave.flush();
+    event.preventDefault();
+    event.returnValue = '';
+  });
+  window.addEventListener('pagehide', () => { sendUnsavedEditOnLeave(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') sendUnsavedEditOnLeave();
+  });
+}
+
 // Flush the on-screen form's pending autosave before its form is replaced, then
 // abandon that saver so nothing (reorder, Cmd+S) can fire it against the new
 // form. An already-in-flight save keeps running against its own bound target.
@@ -1432,12 +1467,28 @@ function makeSaver(target) {
     currentSlug === target.slug &&
     currentLocale === target.locale;
 
+  const entryApiUrl = () => {
+    let apiUrl = entryApiPath(target.collection, target.slug);
+    if (i18nConfig.enabled && target.locale) apiUrl += `?locale=${target.locale}`;
+    return apiUrl;
+  };
+
+  // Every snapshot is numbered. A snapshot sent on leaving the page
+  // (sendOnLeave) is newer than any save still waiting to POST, which then
+  // skips its POST: a page frozen in the back/forward cache and restored would
+  // otherwise send that older snapshot over the newer one.
+  let snapshotCount = 0;
+  let newestSent = 0;
+  let awaitingPost = false;
+
   const runOnce = async (silent) => {
     const formData = extractFormData(target.form, target.schema);
     // Read the body with the fields, before any await, so one save is one
     // snapshot. No body editor on the form means no `body` key, and the API
     // then keeps the stored body.
     const payload = savePayload(target.form, formData, target.type);
+    const snapshot = ++snapshotCount;
+    awaitingPost = true;
     const current = isTargetCurrent();
 
     if (current) updateSaveStatus('Saving...');
@@ -1455,10 +1506,9 @@ function makeSaver(target) {
     }
 
     try {
-      let apiUrl = entryApiPath(target.collection, target.slug);
-      if (i18nConfig.enabled && target.locale) apiUrl += `?locale=${target.locale}`;
-
-      const response = await fetch(apiUrl, {
+      awaitingPost = false;
+      if (snapshot < newestSent) return;
+      const response = await fetch(entryApiUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1556,6 +1606,38 @@ function makeSaver(target) {
   // Make the saver inert for good (future calls no-op; an in-flight save still
   // finishes its current run against its own bound target).
   saver.disable = () => { disabled = true; };
+  // Has an edit not yet been POSTed? A trailing save queued behind the one in
+  // flight, or a save still waiting (on the preview) to send its POST.
+  saver.hasUnsentEdits = () => !disabled && (again || awaitingPost);
+  // The page is going away (#103): POST the form as it is NOW, synchronously,
+  // with keepalive so the request outlives the page. Returns false when it
+  // cannot (the saver is disabled, or the body is over the keepalive cap).
+  saver.sendOnLeave = () => {
+    if (disabled) return false;
+    const formData = extractFormData(target.form, target.schema);
+    const body = JSON.stringify(savePayload(target.form, formData, target.type));
+    if (new Blob([body]).size > KEEPALIVE_BODY_LIMIT) return false;
+    newestSent = ++snapshotCount;
+    again = false;
+    fetch(entryApiUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+    }).then(readJson).then((result) => {
+      // Only seen when the page lived on (a hidden tab, a cancelled unload).
+      if (result.success) {
+        target.isNew = false;
+        updateEntryTitleCache(target.collection, target.slug, formData);
+        updateChangesBadge();
+      }
+      if (isTargetCurrent()) updateSaveStatus(result.success ? 'Saved' : 'Error');
+    }).catch((error) => {
+      console.error('Save failed:', error);
+      if (isTargetCurrent()) updateSaveStatus('Error');
+    });
+    return true;
+  };
   return saver;
 }
 
@@ -2456,6 +2538,7 @@ function trackTopbarBottom() {
 
 async function init() {
   trackTopbarBottom();
+  installLeaveHandlers();
   await checkAuth();
   await loadConfig();
   await loadPages();
