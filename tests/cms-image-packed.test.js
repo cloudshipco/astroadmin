@@ -31,7 +31,24 @@
  *   error, not a URIError;
  * - both dev checks hold with NODE_ENV=production too (DEV is then false),
  *   and when `astro dev --root site` runs from the directory above the site
- *   (public/ is the site's, not the working directory's).
+ *   (public/ is the site's, not the working directory's);
+ * - focal point and crop (#82), from public/images/.metadata.json: a stored
+ *   point is `object-position: 30% 20%` on the <img>, merged after the
+ *   site's style string (`width: 100%; object-position: ...`) or into its
+ *   style object (replacing the object's own objectPosition);
+ *   `focalPoint={false}` opts out; a plain <img> (SVG) reads a legacy
+ *   bare-filename entry; an out-of-range point and a non-object entry are
+ *   ignored; a stored crop without `astroadmin/image-service` fails the
+ *   build naming the image and the setting; with the service the <img> is
+ *   the crop's 600x400, the srcset widths follow it, the point is
+ *   translated into the crop frame, and each emitted AVIF, WebP and JPEG is
+ *   byte-identical to the site's sharp doing the service's own steps (rotate,
+ *   extract, lossless PNG, then Astro's resize and encode at q80); with no
+ *   metadata file the page is byte-identical to the build before the file
+ *   existed; in `astro dev` a point written after start is in the next
+ *   render and a later change in the one after, a crop rides the /_image URL
+ *   as `crop=` and (where Astro's dev endpoint serves at all, i.e. not under
+ *   NODE_ENV=production) the served fallback is the 600x400 crop.
  *
  * Needs the network the first time (the site's install), then bun's cache.
  *
@@ -378,6 +395,133 @@ try {
   });
   writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
 
+  // --- focal point and crop (#82) ------------------------------------------
+  // The admin writes public/images/.metadata.json, keyed by site path with
+  // legacy entries keyed by bare filename. CmsImage reads a focal point into
+  // object-position (merged after the site's own style) and a crop into the
+  // image service, which the site must enable.
+  const METADATA_FILE = 'public/images/.metadata.json';
+  const focalPage = page(
+    [
+      '<CmsImage src="/images/photo.png" alt="Photo" sizes="100vw" style="width: 100%" class="hero" data-aa-field="hero" />',
+      '<CmsImage src="/images/photo.png" alt="Opted out" sizes="100vw" focalPoint={false} />',
+      "<CmsImage src=\"/images/photo.png\" alt=\"Object\" sizes=\"100vw\" style={{ width: '100%', objectPosition: 'left top' }} />",
+      '<CmsImage src="/images/logo.svg" alt="Logo" sizes="40px" />',
+      '<CmsImage src="/images/gallery/Shot.JPG" alt="Shot" sizes="100vw" />',
+      '<CmsImage src="/images/flat.png" alt="Flat" sizes="100vw" />',
+    ].join('\n'),
+  );
+  writeSiteFile('src/pages/focal.astro', focalPage);
+  const CROP_SERVICE_CONFIG =
+    "import { defineConfig } from 'astro/config';\n" +
+    "export default defineConfig({ image: { service: { entrypoint: 'astroadmin/image-service' } } });\n";
+  const imgOf = (markup, alt) => {
+    const match = markup.match(new RegExp(`<img[^>]*alt="${alt}"[^>]*>`));
+    assert.ok(match, `an <img alt="${alt}"> in ${markup}`);
+    return match[0];
+  };
+  const styleOf = (img) => img.match(/ style="([^"]*)"/)?.[1];
+
+  fs.rmSync(path.join(siteDir, METADATA_FILE), { force: true });
+  const beforeMetadata = buildSite();
+  assert.strictEqual(beforeMetadata.status, 0, beforeMetadata.output);
+  const focalHtmlBefore = fs.readFileSync(path.join(siteDir, 'dist', 'focal', 'index.html'), 'utf8');
+  // Control: the only object-position is the one the "Object" slot passes itself.
+  assert.strictEqual((focalHtmlBefore.match(/object-position/g) || []).length, 1, focalHtmlBefore);
+  assert.strictEqual(styleOf(imgOf(focalHtmlBefore, 'Object')), 'width:100%;object-position:left top', imgOf(focalHtmlBefore, 'Object'));
+  assert.strictEqual(styleOf(imgOf(focalHtmlBefore, 'Photo')), 'width: 100%', imgOf(focalHtmlBefore, 'Photo'));
+
+  const focalMetadata = {
+    '/images/photo.png': { alt: 'A photo', focalPoint: { x: 30, y: 20 } },
+    'logo.svg': { focalPoint: { x: 70, y: 10 } }, // a legacy entry, by bare filename
+    '/images/gallery/Shot.JPG': { focalPoint: { x: 150, y: 20 } }, // out of range: ignored
+    '/images/flat.png': 'junk', // not an entry: ignored
+  };
+  writeSiteFile(METADATA_FILE, JSON.stringify(focalMetadata, null, 2));
+  const withPoints = buildSite();
+  assert.strictEqual(withPoints.status, 0, withPoints.output);
+  const focalHtml = fs.readFileSync(path.join(siteDir, 'dist', 'focal', 'index.html'), 'utf8');
+  check('a stored focal point is object-position on the <img>, merged after the site\'s style string', () => {
+    const img = imgOf(focalHtml, 'Photo');
+    assert.strictEqual(styleOf(img), 'width: 100%; object-position: 30% 20%', img);
+    assert.ok(img.includes('data-aa-field="hero"') && /class="[^"]*\bhero\b/.test(img), 'the other attributes stay');
+    assert.ok(!/crop=/.test(img) && !focalHtml.includes('[object Object]'), 'no crop attribute leaks');
+  });
+  check('a site style OBJECT gets object-position too, replacing its own', () => {
+    const img = imgOf(focalHtml, 'Object');
+    assert.strictEqual(styleOf(img), 'width:100%;object-position:30% 20%', img);
+  });
+  check('focalPoint={false} opts a slot out', () => {
+    assert.strictEqual(styleOf(imgOf(focalHtml, 'Opted out')), undefined, imgOf(focalHtml, 'Opted out'));
+  });
+  check('a plain <img> (SVG) with a legacy bare-filename entry gets the point too', () => {
+    const img = imgOf(focalHtml, 'Logo');
+    assert.strictEqual(styleOf(img), 'object-position: 70% 10%', img);
+    assert.ok(img.includes('src="/images/logo.svg"'), img);
+  });
+  check('an out-of-range point and a malformed entry are ignored', () => {
+    assert.strictEqual(styleOf(imgOf(focalHtml, 'Shot')), undefined, imgOf(focalHtml, 'Shot'));
+    assert.strictEqual(styleOf(imgOf(focalHtml, 'Flat')), undefined, imgOf(focalHtml, 'Flat'));
+  });
+
+  // A crop: 25%/12.5% in, half the width and height of the 1200x800 photo,
+  // so 600x400 at (300, 100); the point (60%, 20%) of the original is
+  // (70%, 15%) of the crop.
+  const crop = { x: 25, y: 12.5, width: 50, height: 50 };
+  const cropBox = { left: 300, top: 100, width: 600, height: 400 };
+  focalMetadata['/images/photo.png'] = { focalPoint: { x: 60, y: 20 }, crop };
+  writeSiteFile(METADATA_FILE, JSON.stringify(focalMetadata, null, 2));
+  check('a stored crop without the image service fails the build, naming the image and the setting', () => {
+    const result = buildSite();
+    assert.notStrictEqual(result.status, 0, 'the build should fail');
+    assert.ok(result.output.includes('/images/photo.png'), result.output);
+    assert.ok(result.output.includes('astroadmin/image-service'), result.output);
+  });
+
+  writeSiteFile('astro.config.mjs', CROP_SERVICE_CONFIG);
+  const cropped = buildSite();
+  assert.strictEqual(cropped.status, 0, cropped.output);
+  const cropHtml = fs.readFileSync(path.join(siteDir, 'dist', 'focal', 'index.html'), 'utf8');
+  const cropPicture = (cropHtml.match(/<picture>.*?<\/picture>/gs) || []).find((picture) => picture.includes('alt="Photo"'));
+  assert.ok(cropPicture, cropHtml);
+  check('with the service, the <img> size and the srcset widths follow the crop, and the point is translated into it', () => {
+    const img = imgOf(cropPicture, 'Photo');
+    assert.ok(img.includes('width="600"') && img.includes('height="400"'), img);
+    assert.strictEqual(styleOf(img), 'width: 100%; object-position: 70% 15%', img);
+    for (const type of ['avif', 'webp']) {
+      assert.deepStrictEqual(widthsOf(sourceSrcset(cropPicture, type)), [400, 600], type);
+    }
+    assert.ok(!/crop=/.test(img) && !cropHtml.includes('[object Object]'), 'no crop attribute leaks');
+    const optedOut = imgOf(cropHtml, 'Opted out');
+    assert.ok(optedOut.includes('width="600"') && styleOf(optedOut) === undefined, `cropped, no point: ${optedOut}`);
+  });
+  // The service's own two steps: rotate and extract, kept lossless, then
+  // Astro's resize and encode on that.
+  const croppedPng = await siteSharp(photoPng, { failOn: 'none' }).rotate().extract(cropBox).png({ compressionLevel: 0 }).toBuffer();
+  const cropQualities = [
+    await encodedAt(variantAt(cropPicture, 'avif', 400), croppedPng, { width: 400, height: 267 }, 'avif', [50, 80]),
+    await encodedAt(variantAt(cropPicture, 'webp', 400), croppedPng, { width: 400, height: 267 }, 'webp', [50, 80]),
+    await encodedAt(fallbackOf(cropPicture), croppedPng, { width: 600, height: 400 }, 'jpeg', [50, 80]),
+  ];
+  check('each emitted AVIF, WebP and JPEG is byte-identical to sharp rotate -> extract -> resize -> encode at q80', () => {
+    assert.deepStrictEqual(cropQualities, [80, 80, 80]);
+  });
+  const croppedFallbackSize = await siteSharp(fallbackOf(cropPicture)).metadata();
+  check('the cropped fallback is 600x400', () => {
+    assert.deepStrictEqual([croppedFallbackSize.width, croppedFallbackSize.height], [600, 400]);
+  });
+
+  fs.rmSync(path.join(siteDir, METADATA_FILE));
+  writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
+  const afterMetadata = buildSite();
+  assert.strictEqual(afterMetadata.status, 0, afterMetadata.output);
+  check('with no metadata file the page is byte-identical to the build before it existed (no empty style, no reordering)', () => {
+    const focalHtmlAfter = fs.readFileSync(path.join(siteDir, 'dist', 'focal', 'index.html'), 'utf8');
+    assert.strictEqual(focalHtmlAfter, focalHtmlBefore);
+    assert.strictEqual(styleOf(imgOf(focalHtmlAfter, 'Logo')), undefined);
+  });
+  fs.rmSync(path.join(siteDir, 'src/pages/focal.astro'));
+
   // --- astro dev ---------------------------------------------------------
   // A file added after the dev server starts is not in the glob yet: it
   // renders as the plain original. A malformed escape is "missing" (the
@@ -386,10 +530,14 @@ try {
   // dev-only behaviours must follow the command, i.e. MODE).
   // `server.hmr: false`, as a proxied hosted preview runs it: without it the
   // watcher can add the late upload to the glob before the request lands.
+  // The crop service is on here too: in dev a stored crop reaches the
+  // /_image endpoint as a `crop=` parameter.
   writeSiteFile(
     'astro.config.mjs',
-    "import { defineConfig } from 'astro/config';\nexport default defineConfig({ vite: { server: { hmr: false } } });\n",
+    "import { defineConfig } from 'astro/config';\n" +
+      "export default defineConfig({ vite: { server: { hmr: false } }, image: { service: { entrypoint: 'astroadmin/image-service' } } });\n",
   );
+  writeSiteFile('src/pages/focal.astro', focalPage);
   /**
    * `fromParent`: run `astro dev --root site` from the directory above the
    * site, as a site kept in a subfolder of its repo is. The dev-original
@@ -449,6 +597,41 @@ try {
         assert.ok(img[0].includes('data-cms-image="dev-original"'), img[0]);
         assert.ok(img[0].includes('data-aa-field="late"') && img[0].includes('late'), img[0]);
       });
+      // A focal point written to .metadata.json after the server started
+      // reaches the next render (the reader re-reads on a changed mtime or
+      // size); a crop reaches the /_image endpoint and is applied there.
+      fs.rmSync(path.join(siteDir, METADATA_FILE), { force: true });
+      const focalNone = await devPage('/focal');
+      assert.strictEqual(styleOf(imgOf(focalNone, 'Photo')), 'width: 100%', `control: no point stored: ${imgOf(focalNone, 'Photo')}`);
+      writeSiteFile(METADATA_FILE, JSON.stringify({ '/images/photo.png': { focalPoint: { x: 30, y: 20 } } }));
+      const focalFirst = await devPage('/focal');
+      writeSiteFile(METADATA_FILE, JSON.stringify({ '/images/photo.png': { focalPoint: { x: 55, y: 65.5 }, crop } }));
+      const focalSecond = await devPage('/focal');
+      check(`dev${envLabel}: a focal point written after start is in the next render, and a later change in the one after`, () => {
+        assert.strictEqual(styleOf(imgOf(focalFirst, 'Photo')), 'width: 100%; object-position: 30% 20%', imgOf(focalFirst, 'Photo'));
+        // (55, 65.5) of the original is (60, 106) of the crop: clamped to 100.
+        assert.strictEqual(styleOf(imgOf(focalSecond, 'Photo')), 'width: 100%; object-position: 60% 100%', imgOf(focalSecond, 'Photo'));
+      });
+      const devCroppedImg = imgOf(focalSecond, 'Photo');
+      const devCroppedSrc = devCroppedImg.match(/ src="([^"]+)"/)[1].replace(/&amp;/g, '&');
+      check(`dev${envLabel}: a stored crop sizes the <img> and rides the /_image URL as crop=`, () => {
+        assert.ok(devCroppedImg.includes('width="600"') && devCroppedImg.includes('height="400"'), devCroppedImg);
+        assert.ok(/[?&]crop=25(%2C|,)12\.5(%2C|,)50(%2C|,)50(&|$)/.test(devCroppedSrc), devCroppedSrc);
+      });
+      // Astro's own dev image endpoint (endpoint/dev.js) answers "Invalid
+      // endpoint" whenever import.meta.env.DEV is false, which `astro dev`
+      // under NODE_ENV=production is; the served bytes can only be checked
+      // where that endpoint serves at all.
+      if (envOverrides.NODE_ENV !== 'production') {
+        const devCroppedResponse = await fetch(`http://127.0.0.1:${port}${devCroppedSrc}`);
+        const devCroppedBytes = Buffer.from(await devCroppedResponse.arrayBuffer());
+        assert.strictEqual(devCroppedResponse.status, 200, `/_image answered ${devCroppedResponse.status}: ${devCroppedBytes.toString('utf8').slice(0, 300)}\n${devOutput.slice(-1500)}`);
+        const devCroppedSize = await siteSharp(devCroppedBytes).metadata();
+        check(`dev${envLabel}: the /_image endpoint serves the 600x400 crop`, () => {
+          assert.deepStrictEqual([devCroppedSize.width, devCroppedSize.height], [600, 400]);
+        });
+      }
+      fs.rmSync(path.join(siteDir, METADATA_FILE), { force: true });
       // A render error in dev answers 200 with only the overlay client; the
       // error itself is in the server log.
       await devPage('/malformed');

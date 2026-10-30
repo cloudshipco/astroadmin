@@ -9,7 +9,8 @@
     "./integration": "./integration/index.js",
     "./loader": "./loader/index.js",
     "./components/CmsImage.astro": "./components/CmsImage.astro",
-    "./components/CmsVideo.astro": "./components/CmsVideo.astro"
+    "./components/CmsVideo.astro": "./components/CmsVideo.astro",
+    "./image-service": "./components/image-service.js"
   },
   "bin": {
     "astroadmin": "bin/cli.js"
@@ -94,6 +95,7 @@
     "components/CmsVideo.astro",
     "components/cms-video-client.js",
     "components/site-files.js",
+    "components/image-service.js",
     "README.md",
     "LICENSE"
   ]
