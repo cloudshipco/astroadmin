@@ -25,6 +25,7 @@ import { requireSameOrigin } from './utils/same-origin.js';
 import { apiRateLimiters } from './utils/rate-limit.js';
 import { sessionFingerprint } from './utils/session-fingerprint.js';
 import { authFailedLine } from './utils/auth-log.js';
+import { isUntrustedProxyRequest, untrustedProxyWarning, UNTRUSTED_PROXY_LOGIN_ERROR } from './utils/untrusted-proxy.js';
 import { mediaKindOf } from '../ui/media-kinds.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,6 +44,12 @@ export async function createServer() {
   if (fullConfig.trustProxy !== false && fullConfig.trustProxy !== undefined) {
     app.set('trust proxy', fullConfig.trustProxy);
   }
+
+  // A TLS proxy we do not trust makes every request plain HTTP, so the
+  // HTTPS-only session cookie is never set: say so in the server log (at
+  // most hourly, before the same-origin check, whose 403 it can also cause).
+  const cookieSecure = fullConfig.auth.sessionCookie?.secure === true;
+  app.use(untrustedProxyWarning({ cookieSecure }));
 
   // Middleware. JSON only: nothing in the admin posts a urlencoded form (login
   // sends JSON), and multer parses /api/images uploads itself.
@@ -131,6 +138,13 @@ export async function createServer() {
     } catch (err) {
       console.error('[Login] Verification error:', err);
       return res.status(500).json({ success: false, error: 'Authentication error' });
+    }
+
+    if (ok && isUntrustedProxyRequest(req, cookieSecure)) {
+      // The session cookie would be dropped silently and the editor sent
+      // back here; tell them why instead (after the password check, so a
+      // wrong password still gets its 401 and auth.failed line).
+      return res.status(500).json({ success: false, error: UNTRUSTED_PROXY_LOGIN_ERROR });
     }
 
     if (ok) {

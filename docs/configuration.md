@@ -149,6 +149,12 @@ default trusts `loopback` only: a proxy on the same machine (nginx on
 editor's port directly is counted, and logged, by its own address. In
 development nothing is trusted.
 
+It also decides whether a request came over HTTPS (`X-Forwarded-Proto`):
+production session cookies are HTTPS-only, so behind a TLS proxy on another
+machine or container, sign-in fails until that proxy is listed in
+`TRUST_PROXY`. AstroAdmin then answers a correct password with a message
+saying so, and logs a warning naming `TRUST_PROXY` (at most once an hour).
+
 Set `TRUST_PROXY` (or `trustProxy` in `astroadmin.config.js`; the
 environment wins) when the proxy is elsewhere. It takes Express's
 [`trust proxy`](https://expressjs.com/en/guide/behind-proxies.html) forms:
@@ -156,7 +162,10 @@ a comma-separated list of addresses, CIDR ranges and the names `loopback`,
 `linklocal` and `uniquelocal` (`TRUST_PROXY=10.0.0.5` for a proxy on another
 machine); a number of hops (`1`), which believes whatever the nearest peer
 says and so suits only an app no client can reach except through that
-proxy; `true` (believe every peer, with the same caveat); or `false`.
+proxy; `true` (believe every peer and take the first address in the
+header, which the client wrote unless the proxy replaces the header rather
+than appending to it: safe only behind a proxy that overwrites
+`X-Forwarded-For`); or `false`.
 
 With a CDN such as Cloudflare in front of nginx, nginx's peer is the CDN's
 edge, so every visitor arrives from a handful of edge addresses and shares
