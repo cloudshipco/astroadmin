@@ -154,7 +154,7 @@ over-redaction in every version of "show the output with server paths removed or
 
 Tests are standalone scripts under `tests/`, each run as its own process.
 `npm run test:unit` (`bun tests/run-unit.js [word...]`) runs the fast server-less
-ones in turn and prints a summary (87 files in FAST_TESTS, ~200 s on a loaded machine, measured
+ones in turn and prints a summary (90 files in FAST_TESTS, ~200 s on a loaded machine, measured
 2026-10-30; review lanes may add more); a new fast test
 goes in its list, and its header names every file it leaves out. The
 slow ones (full Astro builds, a browser) are run by name before a release, and the
@@ -799,6 +799,57 @@ queue, so the old body is never written back.
   from the directory above the site (public/ comes from Astro's root through
   `astro:config/server` in `components/site-files.js`, never `process.cwd()`), and a
   malformed `%`-escape gives the strict error, not a URIError (~15 s).
+  Focal point and crop from `public/images/.metadata.json` (#82): a stored point is
+  `object-position: 30% 20%` on the `<img>`, merged after the site's style string or into
+  its style object (replacing its own `objectPosition`); `focalPoint={false}` opts out; a
+  plain `<img>` (SVG) reads a legacy bare-filename entry; an out-of-range point and a
+  non-object entry are ignored; a stored crop without the service fails the build naming
+  the image and `astroadmin/image-service`; with the service the `<img>` is the crop's
+  600x400, the srcset widths follow it, the point is translated into the crop frame and
+  each emitted AVIF/WebP/JPEG is byte-identical to the site's sharp doing the service's
+  own steps (rotate, extract, lossless PNG, then Astro's resize and encode at q80); with
+  no metadata file the page is byte-identical to the build before the file existed; in
+  `astro dev` a point written after start is in the next render, a crop rides the
+  `/_image` URL as `crop=`, and where Astro's dev endpoint serves (not under
+  `NODE_ENV=production`: `endpoint/dev.js` refuses when DEV is false) the served fallback
+  is the crop. Seen red on the old CmsImage and by one mutant per later check.
+- `bun tests/image-service.test.js` — `components/image-service.js` (`astroadmin/image-service`),
+  Astro's sharp service with a `crop` (#82), no site build: `getURL` appends
+  `crop=x,y,width,height` and `parseURL` reads it back as numbers (a malformed or
+  out-of-range value parses as none: the dev endpoint calls parseURL then transform with
+  no validateOptions between); `validateOptions` refuses a crop missing a side or with
+  `x+width > 100` naming `crop`, accepts a valid one and drops `null`; two transforms
+  differing only in crop hash differently through Astro's `hashTransform`;
+  `getHTMLAttributes` emits no `crop`; `cropPixels` rounds each percentage against the size
+  and never runs past the edge; `transform` on a generated 100x50 PNG returns the crop
+  region at its pixel size holding only its colour, resized when a smaller width is asked,
+  crops an EXIF orientation-6 JPEG against its ROTATED size (`sharp.metadata()` reports
+  the stored size), and without a crop returns the parent's bytes. <1 s.
+- `bun tests/image-metadata.test.js` — image details (#82) through the real routes: an entry
+  is keyed by the image's SITE PATH as the listing's `url` (`/images/<name>`,
+  `/assets/images/<name>`, first folder in `imageDirectories()` order), a read falls back
+  to the bare-filename key an older admin wrote and a PUT moves that entry's remaining
+  fields under the new key; the PUT body goes through `validateMetadataPatch` (only alt,
+  focalPoint, crop; `{x, y}` and `{x, y, width, height}` finite percentages inside the
+  image, or null to delete; a prototype key, an unknown key, `[]`, a wrong type or
+  `x: 150` is a 400 with fixed text naming the field, never the value, and writes
+  nothing); the response is the entry as written; DELETE removes both keys in the
+  unlink's own `updateMetadata` step, so a file back under the same name has no alt (seen
+  red with the removal mutated out); the listing dedupes by url (the image() folder's
+  same-named file is listed beside the src/assets one) and carries `crop`; `/api/config`
+  reports `imageCrop` from `images.crop`. ~1 s.
+- `bun tests/image-focal-browser.test.js` — the library's focal point and crop panel in
+  real Chromium (#82): selecting a public upload shows `[data-focal-panel]`, whose box is
+  the rendered image (src/assets and videos show none; the alt field stays); a click 30%
+  across and 20% down writes `focalPoint {30, 20}` to `public/images/.metadata.json` and
+  draws the marker there (`elementFromPoint`); reopening draws the stored point from the
+  listing; Reset writes null. With `/api/config` `imageCrop: true` (forced through
+  `page.route`; everything else is the real server) a drag from (10%,10%) to (60%,70%)
+  writes `crop {10, 10, 50, 60}`, draws the shaded rectangle, and Clear writes null; with
+  `imageCrop: false` the same drag writes nothing and sets no point while a click still
+  does, and a crop stored earlier is still drawn with Clear offered (the build applies it
+  whatever the setting). The control row is as tall as its buttons before they appear
+  (seen red: a button shown mid-drag moved the box under the pointer). ~3 s.
 
 - `bun tests/video-upload.test.js` — videos through the real upload route: MP4 and WebM
   (real ffmpeg fixtures in `tests/fixtures/video`, commands in the test header) install
@@ -892,7 +943,16 @@ originals in built HTML; CmsImage's prerequisites: the SITE's sharp, found by wa
 template literal and `new URL('./public', import.meta.url)`, bare or in `fileURLToPath`
 or `url.fileURLToPath` (url imported whole), are read, and a config the doctor cannot read
 at all says so rather than that publicDir is "not a value the doctor can read
-statically"). Run each with `bun tests/doctor-<name>.test.js`.
+statically"). `doctor-images` also covers `image-crop-service` (static, #82): `images.crop`
+in astroadmin.config.js without `image.service.entrypoint: 'astroadmin/image-service'` in
+the Astro config, the service without `images.crop`, and a crop stored in
+`public/images/.metadata.json` on a site without the service (listed by its site-path key,
+legacy bare names included; `crop: null` and focal-point-only entries never) each warn; a
+service the doctor cannot read statically warns to check by hand only when a crop is in
+play; both opt-ins pass and neither is a skip. The Astro config's `image.service.entrypoint`
+is an `imageService` fact of `readAstroConfigFacts`; `astroadmin.config.js` is loaded per
+site by `readAdminConfigFacts` (never `getConfig()`, bound to one process root); each
+branch seen red by disabling it. Run each with `bun tests/doctor-<name>.test.js`.
 
 **The doctor and the publish check use synchronous fs, never `fs/promises`.** Under Bun 1.3.4
 on macOS an `fs/promises` call made while child processes start and exit can lose its completion

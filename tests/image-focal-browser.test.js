@@ -12,13 +12,13 @@
  * `/api/config` reporting `imageCrop: true`, a drag from (10%,10%) to
  * (60%,70%) sends `crop {x:10, y:10, width:50, height:60}` and draws the
  * shaded rectangle; Clear sends `crop: null`. With `imageCrop: false` the same
- * drag sends nothing and sets no focal point, while a click still does.
+ * drag sends nothing and sets no focal point, while a click still does; a
+ * crop stored earlier is still drawn with Clear offered (the build applies
+ * it whatever the setting, so an editor must be able to see and clear it).
  *
  * `/api/config` is intercepted: `imageCrop` is forced per check (the UI reads
- * only the response), and when the REAL response has no `imageCrop` key (the
- * server side of #82 not yet in) the crop checks assert the PUT request body
- * only, and say so; with the key present they assert the metadata file as
- * written. Every other request reaches the real server.
+ * only the response). Every other request reaches the real server, and the
+ * crop checks assert the metadata file as written.
  *
  *   bun tests/image-focal-browser.test.js     (~3 s; FOCAL_SCREENSHOT=<file> saves the crop state)
  */
@@ -321,6 +321,37 @@ try {
     near(photoMetadata().focalPoint.x, 30, 0.5, 'focalPoint.x');
     assert.deepEqual(metadataPuts.slice(putsBefore).map((body) => Object.keys(body)), [['focalPoint']]);
     await marker.waitFor({ state: 'visible' });
+    await modal.locator('[data-cancel]').click();
+  });
+
+  await check('with imageCrop false, a crop stored earlier is still shown and can be cleared', async () => {
+    // A site owner turned images.crop off after an editor cropped: the crop
+    // is still applied by the build, so the editor must see it and clear it.
+    imageCropOverride = false;
+    const metadata = JSON.parse(fs.readFileSync(METADATA_FILE, 'utf8'));
+    metadata['/images/photo.png'] = { ...metadata['/images/photo.png'], crop: { x: 20, y: 10, width: 40, height: 50 } };
+    fs.writeFileSync(METADATA_FILE, JSON.stringify(metadata, null, 2));
+    await openLibrary('heroImage');
+    const rect = await selectUpload();
+    assert.equal(await panel.getAttribute('data-crop-enabled'), 'false');
+    await cropRect.waitFor({ state: 'visible' });
+    const drawn = await cropRect.boundingBox();
+    near(drawn.x, rect.x + rect.width * 0.2, 1.5, 'stored rect left');
+    near(drawn.width, rect.width * 0.4, 2, 'stored rect width');
+    const clearButton = modal.locator('[data-clear-crop]');
+    assert.equal(await clearButton.isVisible(), true, 'Clear crop is offered');
+    const putsBefore = metadataPuts.length;
+    await clearButton.click();
+    await waitUntil(() => metadataPuts.length > putsBefore, 'no PUT followed Clear crop');
+    assert.deepEqual(metadataPuts.slice(putsBefore), [{ crop: null }]);
+    await waitForMetadata((entry) => !entry?.crop, 'the crop was not cleared');
+    assert.equal(await cropRect.isVisible(), false);
+    // Still no drawing by drag with crops off.
+    const entryBefore = JSON.stringify(photoMetadata());
+    await dragCrop(rect);
+    await page.waitForTimeout(400);
+    assert.equal(await cropRect.isVisible(), false);
+    assert.equal(JSON.stringify(photoMetadata()), entryBefore, 'the file is unchanged by the drag');
     await modal.locator('[data-cancel]').click();
   });
 

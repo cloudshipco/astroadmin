@@ -462,7 +462,9 @@ function isCrop(crop) {
 
 /**
  * Show the panel for `image` (null, or an image it does not apply to, hides
- * it) with its stored point and, when crops are on, its stored crop.
+ * it) with its stored point and crop. A stored crop is drawn even when crops
+ * are off (the build still applies it), so an editor can see and clear it;
+ * only drawing a new one needs `images.crop`.
  */
 function renderFocalPanel(image) {
   const modal = document.getElementById('imageLibraryModal');
@@ -478,7 +480,7 @@ function renderFocalPanel(image) {
     ? 'Click to set the focal point; drag to crop'
     : 'Click to set the focal point';
   drawFocalPoint(panel, image.focalPoint);
-  drawCrop(panel, cropEnabled ? image.crop : null);
+  drawCrop(panel, image.crop);
 }
 
 /** Draw the marker ring at `point` (percentages), or none. */
@@ -542,7 +544,7 @@ function setupFocalPointer(box) {
   const selected = () => currentImages.find(img => img.url === selectedImageUrl);
   const restoreCrop = () => {
     const image = selected();
-    drawCrop(panel, cropEnabled && image ? image.crop : null);
+    drawCrop(panel, image ? image.crop : null);
   };
 
   // The browser's own image drag would cancel the pointer sequence
@@ -624,10 +626,10 @@ async function saveFocalPoint(point) {
   if (selectedImageUrl === image.url) renderFocalPanel(image);
 }
 
-/** Set (or with null, clear) the selected upload's crop and save it. */
+/** Set (or with null, clear) the selected upload's crop and save it. Clearing never needs crops on. */
 async function saveCrop(crop) {
   const image = currentImages.find(img => img.url === selectedImageUrl);
-  if (!hasFocalPanel(image) || !cropEnabled) return;
+  if (!hasFocalPanel(image) || (crop !== null && !cropEnabled)) return;
   const panel = document.getElementById('imageLibraryModal').querySelector('[data-focal-panel]');
   drawCrop(panel, crop);
   await saveImageMetadata(image, { crop }, 'crop');
