@@ -24,7 +24,14 @@
  * commit had reached the repository, and vanished after 3 s. The pushed
  * variants are the same bodies with `committed`/`pushed` set as the git step
  * sets them (the git step is not run here; publish-check and publish-sync
- * cover it).
+ * cover it). A pushed variant does not say "not live": the build or deploy
+ * that failed is this server's, and a build-on-push host may still publish.
+ *
+ * The git step's own refusals (409 blocked, conflict, local changes; 422;
+ * 502), built by the server's body functions: each that says `committed`
+ * refreshes the Changes badge, and a message with its own lead-in ("Nothing
+ * was published: ...") is shown as written, not as "Failed to publish:
+ * Nothing was published: ...".
  *
  * The real functions are extracted from ui/dashboard.js (it boots on import)
  * and run in a happy-dom document with fetch stubbed and a fake clock.
@@ -309,8 +316,17 @@ mkdir -p dist && echo '<h1>hi</h1>' > dist/index.html
   }
 }
 
-/** Run the dashboard's showPublishResult for a publish response body. */
+/** Run the dashboard's showPublishResult for a publish response body; the toast it shows. */
 function runPublishResult(result) {
+  return runPublishResultIn(result, { toast: true });
+}
+
+/** The same for a body answered with the problems panel (stubbed), not a toast. */
+function runPublishResultNoToast(result) {
+  return runPublishResultIn(result, { toast: false });
+}
+
+function runPublishResultIn(result, { toast: expectToast }) {
   const window = new Window();
   const document = window.document;
   const timers = [];
@@ -329,6 +345,10 @@ function runPublishResult(result) {
   const api = new Function(...Object.keys(stubs), `${resultSource}\nreturn { showPublishResult };`)(...Object.values(stubs));
   api.showPublishResult(result, { pagePath: null, preHash: null, liveUrl: null });
   const toasts = document.querySelectorAll('.notification');
+  if (!expectToast) {
+    assert.equal(toasts.length, 0, 'no toast beside the problems panel');
+    return { calls };
+  }
   assert.ok(toasts.length > 0, 'a toast is on the page');
   const toast = toasts[toasts.length - 1];
   return {
@@ -367,7 +387,10 @@ await check('a failed deploy after a push says the changes reached the repositor
   assert.doesNotMatch(shown.text, /Failed to publish|✅|now live/i, shown.text);
   assert.match(shown.text, /sent to the repository/i, shown.text);
   assert.match(shown.text, /deploy/i, shown.text);
-  assert.match(shown.text, /not live/i, shown.text);
+  // DELIBERATE (review round 3): once pushed, a build-on-push host may still
+  // publish the commit, so "not live" is not something we know.
+  assert.doesNotMatch(shown.text, /not live/i, shown.text);
+  assert.match(shown.text, /may still go live/i, shown.text);
   assert.equal(shown.type, 'notification-error', shown.type);
   assert.equal(shown.calls.badge, 1, 'the Changes badge is refreshed: the changes were committed');
 });
@@ -386,7 +409,57 @@ await check('a failed build after a push says the changes reached the repository
   const shown = runPublishResult(pushedVariant(buildFailure));
   assert.match(shown.text, /sent to the repository/i, shown.text);
   assert.match(shown.text, /build failed/i, shown.text);
+  // The commit was sent: the build that failed is this server's, and a host
+  // that builds on push may still publish it.
+  assert.doesNotMatch(shown.text, /not live/i, shown.text);
+  assert.match(shown.text, /may still go live/i, shown.text);
+  assert.match(shown.text, /An image an entry uses was not found/, `the code's sentence: ${shown.text}`);
   assert.equal(shown.type, 'notification-error', shown.type);
+  assert.equal(shown.calls.badge, 1, 'the Changes badge is refreshed: the changes were committed');
+});
+
+await check('a failed build or deploy that was only committed (no push) still says nothing is live', () => {
+  for (const body of [buildFailure, deployFailure]) {
+    const shown = runPublishResult({ ...body, committed: true, pushed: false });
+    assert.match(shown.text, /^Your changes are committed, but/, shown.text);
+    assert.match(shown.text, /not live/i, shown.text);
+    assert.doesNotMatch(shown.text, /may still/i, shown.text);
+  }
+});
+
+// The refusals the git step sends (409, 422, 502), built by the server's own
+// body functions, so a change of wording there is seen here.
+const { blockedBody, conflictBody, localChangesBody, pushFailureBody, checkRefusalBody, publishFailureMessage } = await import('../server/api/publish.js');
+const committedResult = { hash: 'abc1234def', message: 'Content update' };
+
+await check('a refusal after a commit refreshes the Changes badge (409 conflict and local changes, 422, 502)', async () => {
+  const refusal = await checkRefusalBody({ commit: 'abc1234', problems: [], entries: [] }, { committed: true, commitResult: committedResult });
+  for (const [name, body] of [
+    ['conflict', conflictBody({ committed: true, commitResult: committedResult })],
+    ['local changes', localChangesBody({ committed: true, commitResult: committedResult })],
+    ['422 refusal', refusal],
+    ['push failure', pushFailureBody({ committed: true, commitResult: committedResult })],
+  ]) {
+    assert.equal(body.committed, true, `${name}: positive control, the body says committed`);
+    const shown = name === '422 refusal' ? runPublishResultNoToast(body) : runPublishResult(body);
+    assert.equal(shown.calls.badge, 1, `${name}: the badge is refreshed`);
+  }
+  const shown = runPublishResult(localChangesBody({ committed: false }));
+  assert.equal(shown.calls.badge, 0, 'nothing committed: the badge is left alone (control)');
+  assert.equal(runPublishResultNoToast(refusal).calls.problems, 1, 'the 422 still opens the problems panel');
+});
+
+await check('a refusal whose message has its own lead-in is shown as the server wrote it, without "Failed to publish:"', () => {
+  for (const body of [
+    blockedBody(), blockedBody('submodules'), blockedBody('filter'),
+    conflictBody({ committed: true }), localChangesBody({ committed: true }), localChangesBody({ committed: false }),
+    pushFailureBody({ committed: true }),
+    { success: false, error: 'Failed to publish', message: publishFailureMessage(new Error('boom')) },
+  ]) {
+    const shown = runPublishResult(body);
+    assert.equal(shown.text, body.message, shown.text);
+    assert.equal(shown.type, 'notification-error', shown.type);
+  }
 });
 
 await check('any other failure is still "Failed to publish" with the server\'s message (control)', () => {

@@ -2062,10 +2062,14 @@ function ranDeploy(result) {
  * and with no page to poll (no publicUrl, or no page for this entry) nothing
  * shows it went live, so it is a warning, like pollUntilLive giving up (#54).
  * A build or deploy that failed after the git step is an error that says how
- * far the changes got: sent to the repository, committed, or neither.
+ * far the changes got: sent to the repository, committed, or neither. Once
+ * sent, it does not claim they are not live: the failure was this server's,
+ * and a host that builds on push may still publish the commit.
  * @returns {{text: string, type: 'success'|'warning'|'info'|'error'}}
  */
 function friendlyPublishMessage(result) {
+  const MAY_STILL_GO_LIVE = "If your site's host also builds it from the repository, they may still go live there: "
+    + 'check your site in a few minutes.';
   const reached = result.pushed
     ? 'Your changes were sent to the repository, but '
     : result.committed ? 'Your changes are committed, but ' : '';
@@ -2075,8 +2079,13 @@ function friendlyPublishMessage(result) {
       ? result.build.problems.map((problem) => problem?.message).filter((message) => typeof message === 'string')
       : [];
     const failed = reached ? "the site's build failed" : "The site's build failed";
+    // Once pushed, what failed is this server's build: a host that builds
+    // on push may still publish the commit, so "not live" is not known.
+    const outcome = result.pushed
+      ? ` here, so nothing was deployed from here. ${MAY_STILL_GO_LIVE}`
+      : ', so nothing was deployed and your changes are not live.';
     return {
-      text: `${reached}${failed}, so nothing was deployed and your changes are not live.`
+      text: `${reached}${failed}${outcome}`
         + (problems.length ? ` ${problems.join(' ')}` : '') + ' See the server log.',
       type: 'error',
     };
@@ -2092,12 +2101,10 @@ function friendlyPublishMessage(result) {
     };
   }
   if (deploy && deploy.success !== true) {
-    return {
-      text: reached
-        ? `${reached}the deploy to your site failed, so they are not live. See the server log.`
-        : 'Your site was built, but the deploy failed, so your changes are not live. See the server log.',
-      type: 'error',
-    };
+    let text = 'Your site was built, but the deploy failed, so your changes are not live. See the server log.';
+    if (result.pushed) text = `${reached}the deploy to your site failed. ${MAY_STILL_GO_LIVE} See the server log.`;
+    else if (reached) text = `${reached}the deploy to your site failed, so they are not live. See the server log.`;
+    return { text, type: 'error' };
   }
   // A deploy adapter uploads the built site directly, so it's live right away.
   if (deploy) {
@@ -2288,16 +2295,24 @@ function showPublishResult(result, context) {
     document.querySelector('.publish-problems-panel')?.remove();
     updateChangesBadge();
     showPublishOutcome(result, context);
-  } else if (result.check) {
+    return;
+  }
+  // A refusal after the commit (409 conflict or local changes, 422, 502, a
+  // failed build or deploy) leaves the saves committed: the Changes panel
+  // has fewer of them now.
+  if (result.committed === true) updateChangesBadge();
+  if (result.check) {
     showPublishProblems(result);
   } else if (result.build) {
     // The git step went through (committed, and pushed when there is a
     // remote); the site's build or the deploy after it failed. Not "failed
-    // to publish": what reached the repository is said, and that nothing
-    // is live.
-    updateChangesBadge();
+    // to publish": what reached the repository is said.
     const { text, type } = friendlyPublishMessage(result);
     showNotification(text, type);
+  } else if (/^(Nothing was published|Your changes|Publishing failed)\b/.test(result.message || '')) {
+    // The publish route's refusals say for themselves what happened; a
+    // "Failed to publish:" in front of them read twice.
+    showNotification(result.message, 'error');
   } else {
     showNotification('Failed to publish: ' + (result.message || result.error), 'error');
   }
