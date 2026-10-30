@@ -32,6 +32,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SCHEMA_RELOAD_FAILED = "The content config could not be loaded; see the server log.";
 
+// The largest entry save. Parsed only for a signed-in editor; every other
+// route keeps express.json()'s 100 KB.
+const CONTENT_BODY_LIMIT = '5mb';
+
+// The paths the content router is mounted at (Express matches mounts without
+// regard to case; a path this misses only gets the smaller limit).
+function isContentApiPath(requestPath) {
+  return requestPath === '/api/content' || requestPath.startsWith('/api/content/');
+}
+
 // body-parser's refusals of a request (its README's error types; we pass no
 // `verify`), each with our sentence. The parser's own message quotes the body.
 const BODY_REFUSALS = new Map([
@@ -64,7 +74,10 @@ export async function createServer() {
 
   // Middleware. JSON only: nothing in the admin posts a urlencoded form (login
   // sends JSON), and multer parses /api/images uploads itself.
-  app.use(express.json());
+  // /api/content parses its own body, after sign-in and with a larger limit
+  // (below): an entry is saved whole, and a long post passes 100 KB.
+  const parseJson = express.json();
+  app.use((req, res, next) => (isContentApiPath(req.path) ? next() : parseJson(req, res, next)));
 
   // CORS
   app.use(cors(fullConfig.cors));
@@ -258,7 +271,7 @@ export async function createServer() {
 
   // API routes
   app.use('/api/collections', requireAuth, collectionsRouter);
-  app.use('/api/content', requireAuth, contentRouter);
+  app.use('/api/content', requireAuth, express.json({ limit: CONTENT_BODY_LIMIT }), contentRouter);
   app.use('/api/publish', requireAuth, publishRouter);
   // Git endpoints are only mounted when git is enabled. Publishing does not
   // require git — use /api/publish (the git router's /publish is an alias).

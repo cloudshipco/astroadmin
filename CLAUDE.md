@@ -651,7 +651,9 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   `express.json()` refuses (a JSON primitive, malformed JSON, over the size limit) is its
   own 400/413/415 with a fixed sentence per refusal and at most one warning a minute (they
   come before auth and the rate limit), never a 500 or the parser's message, which quotes
-  the body (#104). <1 s.
+  the body (#104). An entry save (`/api/content`) is parsed only after sign-in, up to 5 MB
+  (`CONTENT_BODY_LIMIT`; a 6 MB one without a session is a 401, a 200 KB one saves); every
+  other route keeps express.json()'s 100 KB. <1 s.
 - `bun tests/login-browser.test.js` — the sign-in pages in real Chromium (#77). ~2-3 s. Browser
   tests take their Chromium from `tests/chromium-path.js` (CHROMIUM_PATH, else a headless
   shell in Playwright's cache on macOS or Linux: the revision playwright-core's

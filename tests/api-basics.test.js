@@ -158,7 +158,7 @@ try {
     const refusals = [
       ['"text"', 400, NOT_JSON], ['42', 400, NOT_JSON], ['null', 400, NOT_JSON], ['true', 400, NOT_JSON],
       ['{"title": oops', 400, NOT_JSON],
-      [JSON.stringify({ title: 'x'.repeat(200 * 1024) }), 413, 'The request body is too large.'],
+      ['TOO_LARGE', 413, 'The request body is too large.'],
       ['{"title": "oops"}', 415, 'The request body\'s character set is not supported.', 'application/json; charset=koi8-r'],
     ];
     const routes = [
@@ -175,7 +175,11 @@ try {
     console.warn = (...args) => warnings.push(args.join(' '));
     try {
       for (const [method, route, sessionCookie] of routes) {
-        for (const [body, expectedStatus, expectedError, contentType = 'application/json'] of refusals) {
+        for (const [refusedBody, expectedStatus, expectedError, contentType = 'application/json'] of refusals) {
+          // Over the route's limit: 100 KB, or for an entry save 5 MB.
+          const body = refusedBody === 'TOO_LARGE'
+            ? JSON.stringify({ title: 'x'.repeat(route.startsWith('/api/content/') ? 6 * 1024 * 1024 : 200 * 1024) })
+            : refusedBody;
           const headers = { 'Content-Type': contentType };
           if (sessionCookie) headers.cookie = sessionCookie;
           const response = await fetch(base + route, { method, headers, body });
@@ -197,6 +201,23 @@ try {
     assert.match(warnings[0], /^Refused a request body \(entity\.parse\.failed\) on PUT \/api\/images\/photo\.png\/metadata$/);
     assert.ok(warnings.every((line) => !line.includes('oops') && !line.includes('xxxx')), 'the warning quotes the body');
     assert.equal(fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf8'), homeBefore);
+    // An entry save is parsed only once signed in: a 6 MB one without a
+    // session is a 401, not a parse.
+    const anonymous = await fetch(`${base}/api/content/pages/home`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { title: 'x'.repeat(6 * 1024 * 1024) } }),
+    });
+    assert.equal(anonymous.status, 401);
+    // An entry over express.json()'s default 100 KB saves (up to 5 MB).
+    const longBody = 'A long post line.\n'.repeat(12000); // ~200 KB
+    const long = await fetch(`${base}/api/content/pages/home`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ data: { title: 'Long' }, body: longBody }),
+    });
+    assert.equal(long.status, 200, await long.text());
+    assert.ok(fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf8').includes(longBody.trim()));
     // Positive control: a JSON object still reaches the route.
     const control = await fetch(`${base}/api/content/pages/home`, {
       method: 'PUT',
