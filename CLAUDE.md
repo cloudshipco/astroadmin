@@ -154,7 +154,7 @@ over-redaction in every version of "show the output with server paths removed or
 
 Tests are standalone scripts under `tests/`, each run as its own process.
 `npm run test:unit` (`bun tests/run-unit.js [word...]`) runs the fast server-less
-ones in turn and prints a summary (90 files in FAST_TESTS, ~200 s on a loaded machine, measured
+ones in turn and prints a summary (93 files in FAST_TESTS, ~300 s on a loaded machine, measured
 2026-10-30; review lanes may add more); a new fast test
 goes in its list, and its header names every file it leaves out. The
 slow ones (full Astro builds, a browser) are run by name before a release, and the
