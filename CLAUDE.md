@@ -346,7 +346,9 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
 - `bun tests/publish-force-push.test.js` — a commit force-pushed away upstream is not
   brought back by the next publish, in four layouts (named remote, URL remote, a fetch
   refspec that does not map the branch, no reflog), also when a publish in between was
-  refused (local changes, conflict); a symbolic ref planted at the record or the tracking
+  refused (local changes, conflict), and when the upstream is simply REWOUND with nothing
+  new on top (the "up to date" shortcut applies only while the known base is still
+  upstream); a symbolic ref planted at the record or the tracking
   ref never drops the editor's commit; a triangular remote (`pushurl`, `pushInsteadOf`) is
   refused. ~15 s.
 - `bun tests/publish-worktrees.test.js` — the admin's throwaway worktrees

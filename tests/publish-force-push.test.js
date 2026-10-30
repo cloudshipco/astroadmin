@@ -116,6 +116,47 @@ async function scenario(name, configure) {
 }
 
 /**
+ * The upstream REWOUND to an older commit with nothing new on top (the plain
+ * way to undo a bad publish: `git push --force origin HEAD~1:main`). The
+ * branch then contains the fetched upstream, so the "already up to date"
+ * shortcut must not apply while the known base is no longer upstream: the
+ * removed commit stays away, with an edit and with nothing new to publish.
+ */
+async function rewindScenario(name, configure, { nothingNew = false } = {}) {
+  const root = fs.mkdtempSync(path.join(tempRoot, 'rewind-'));
+  const remote = path.join(root, 'remote.git');
+  const checkout = path.join(root, 'checkout');
+  const developer = path.join(root, 'developer');
+  git(root, 'init', '-q', '--bare', '-b', 'main', remote);
+  fs.mkdirSync(checkout);
+  git(checkout, 'init', '-q', '-b', 'main');
+  identity(checkout, 'Editor');
+  writeFile(checkout, 'a.md', 'a\n');
+  git(checkout, 'add', '-A');
+  git(checkout, 'commit', '-qm', 'initial');
+  git(checkout, 'remote', 'add', 'origin', remote);
+  git(checkout, 'push', '-q', '-u', 'origin', 'main');
+  await configure({ checkout, remote });
+
+  await check(`${name}: a published commit the upstream rewound away stays away${nothingNew ? ' (nothing new to publish)' : ''}`, async () => {
+    const mistake = await publish(checkout, 'mistake.md');
+    assert.equal(mistake.pushed, true, `the mistake was published: ${JSON.stringify(mistake)}`);
+
+    git(root, 'clone', '-q', remote, developer);
+    git(developer, 'push', '-q', '--force', 'origin', 'HEAD~1:main');
+    assert.equal(has(remote, 'main:mistake.md'), false, 'control: the rewind removed the mistake');
+
+    const next = nothingNew ? await publishNothingNew(checkout) : await publish(checkout, 'edit.md');
+    if (!nothingNew) {
+      assert.equal(next.pushed, true, `the edit was published: ${JSON.stringify(next)}`);
+      assert.ok(has(remote, 'main:edit.md'), "the editor's commit is on the remote");
+    }
+    assert.equal(has(remote, 'main:mistake.md'), false, `the rewound commit came back: ${git(remote, 'log', '--format=%s', 'main')}`);
+    assert.equal(fs.existsSync(path.join(checkout, 'mistake.md')), false, 'the checkout no longer has the rewound file');
+  });
+}
+
+/**
  * The same, with a publish in between that is REFUSED after its fetch
  * (`mode`): 'local-changes' (the developer's commit changes a file the
  * checkout has an uncommitted change in) or 'conflict' (the editor's commit
@@ -269,6 +310,11 @@ try {
   await symrefScenario('record', { committedEarlier: true });
   await refusedScenario('local-changes');
   await refusedScenario('conflict');
+  const urlRemote = ({ checkout, remote }) => git(checkout, 'config', 'branch.main.remote', remote);
+  await rewindScenario('a named remote', () => {});
+  await rewindScenario('a named remote', () => {}, { nothingNew: true });
+  await rewindScenario('branch.main.remote is a URL', urlRemote);
+  await rewindScenario('branch.main.remote is a URL', urlRemote, { nothingNew: true });
   await scenario('a named remote with the default refspec (control)', () => {});
   await scenario('branch.main.remote is a URL', ({ checkout, remote }) => {
     git(checkout, 'config', 'branch.main.remote', remote);

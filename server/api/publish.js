@@ -391,7 +391,13 @@ async function rebaseOntoUpstream(git, upstream, headBeforeCommit) {
   // would leave the next publish no known base, so it would fall back to the
   // merge-base and replay a commit the upstream had dropped. (The fetch moves
   // the tracking ref regardless; the record is the value that stays put.)
-  if (await isAncestor(git, upstreamHead, localHead)) {
+  // The branch containing the fetched upstream is not enough to be up to
+  // date: an upstream REWOUND to an older commit is contained too, and
+  // pushing the branch would put back what the rewind removed. So the
+  // shortcut applies only while the known base is still upstream.
+  const base = await lastKnownBase(git, headBeforeCommit, knownBefore);
+  const upstreamDropped = base !== null && !(await isAncestor(git, base, upstreamHead));
+  if (!upstreamDropped && await isAncestor(git, upstreamHead, localHead)) {
     await recordUpstream(git, upstream, upstreamHead);
     return 'synced';
   }
@@ -407,7 +413,7 @@ async function rebaseOntoUpstream(git, upstream, headBeforeCommit) {
     return 'local-changes';
   }
 
-  const rebased = await rebaseInWorktree(git, localHead, upstreamHead, await lastKnownBase(git, headBeforeCommit, knownBefore));
+  const rebased = await rebaseInWorktree(git, localHead, upstreamHead, base);
   if (rebased === null) return 'conflict';
 
   // The exclusive hold keeps the editor out; this keeps a person's commit
