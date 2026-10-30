@@ -97,6 +97,19 @@ const DROPPED = new Set(DROPPED_ENVIRONMENT);
  *   runs this to list the other object store's refs; `true` lists none (an
  *   empty value is run as a command and fails noisily).
  * - protocol.ext.allow=never: no `ext::` transport (a command) on fetch/push.
+ * - protocol.file.allow=never: no remote that is a local path or a file://
+ *   URL. Git runs such a repository's receive-pack or upload-pack on this
+ *   host with ITS config and hooks (the local transport clears the `-c`
+ *   overrides), so its pre-receive hook would run on Publish. A site whose
+ *   remote really is local opts in with `git.allowLocalRemote: true`
+ *   (hardenedConfig), accepting that the remote's own hooks run.
+ * - submodule.recurse=false, fetch.recurseSubmodules=false,
+ *   diff.ignoreSubmodules=all: git does not open a submodule's repository
+ *   (whose config and hooks are its own). Per command as well, since a
+ *   repository's submodule.<name>.ignore outranks diff.ignoreSubmodules:
+ *   FETCH_PROGRAMS, NO_DIFF_PROGRAMS and STATUS_OPTIONS; and commit and
+ *   publish refuse a checkout with a submodule outright (`git add` reads
+ *   a submodule's files through its own filters).
  * - core.sshCommand=ssh: plain ssh, not a command the repository names.
  *   GIT_SSH_COMMAND still outranks it. (An empty value is not "unset": git
  *   runs the empty command and the transport fails.)
@@ -124,13 +137,26 @@ export const HARDENING_CONFIG = Object.freeze([
   'gpg.ssh.program=false',
   'core.alternateRefsCommand=true',
   'protocol.ext.allow=never',
+  'protocol.file.allow=never',
+  'submodule.recurse=false',
+  'fetch.recurseSubmodules=false',
+  'diff.ignoreSubmodules=all',
   'core.sshCommand=ssh',
   'credential.helper=',
   'core.askPass=',
 ]);
 
-/** Options for every `git diff` / `git show`: no diff.external, no textconv. */
-export const NO_DIFF_PROGRAMS = Object.freeze(['--no-ext-diff', '--no-textconv']);
+/** The opt-in that lets a site push to and fetch from a local-path remote. */
+const LOCAL_REMOTE_CONFIG = Object.freeze(['protocol.file.allow=always']);
+
+/**
+ * Options for every `git diff` / `git show`: no diff.external, no textconv,
+ * and no look inside a submodule's working tree (which runs its filters).
+ */
+export const NO_DIFF_PROGRAMS = Object.freeze(['--no-ext-diff', '--no-textconv', '--ignore-submodules=all']);
+
+/** Options for every `git status`: no look inside a submodule. */
+export const STATUS_OPTIONS = Object.freeze(['--ignore-submodules=all']);
 
 /**
  * The simple-git 4 opt-ins that let HARDENING_CONFIG and the filter
@@ -192,9 +218,12 @@ const NAMED_COMMANDS = Object.freeze([
  * remote.<name>.uploadpack and receivepack name the program run (through a
  * shell, on this host for a local-path remote) and cannot be overridden with
  * `-c`, since git keeps the FIRST value it reads; a command-line option
- * outranks them.
+ * outranks them. A fetch also never recurses into submodules: "on demand"
+ * (git's default) fetches in a submodule repository still kept in
+ * .git/modules, with its remote's uploadpack, even after the gitlink is
+ * gone from the checkout.
  */
-export const FETCH_PROGRAMS = Object.freeze(['--upload-pack=git-upload-pack']);
+export const FETCH_PROGRAMS = Object.freeze(['--upload-pack=git-upload-pack', '--no-recurse-submodules']);
 export const PUSH_PROGRAMS = Object.freeze(['--receive-pack=git-receive-pack']);
 
 /**
@@ -230,9 +259,15 @@ export function namedCommandOverrides(cwd) {
   return [...overrides];
 }
 
-/** HARDENING_CONFIG plus the repository's named-command overrides, as `key=value`. */
-export function hardenedConfig(cwd) {
-  return [...HARDENING_CONFIG, ...namedCommandOverrides(cwd)];
+/**
+ * HARDENING_CONFIG plus the repository's named-command overrides, as
+ * `key=value`. `allowLocalRemote` (the site's `git.allowLocalRemote`) lets
+ * fetch and push use a local-path or file:// remote.
+ * @param {string} cwd
+ * @param {{allowLocalRemote?: boolean}} [options]
+ */
+export function hardenedConfig(cwd, { allowLocalRemote = false } = {}) {
+  return [...HARDENING_CONFIG, ...(allowLocalRemote ? LOCAL_REMOTE_CONFIG : []), ...namedCommandOverrides(cwd)];
 }
 
 function configArgs(entries) {

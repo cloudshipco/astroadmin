@@ -67,7 +67,7 @@ fs.symlinkSync(path.join(astroadminRoot, 'node_modules'), path.join(projectRoot,
 writeFile(projectRoot, '.gitignore', 'node_modules\n');
 writeFile(projectRoot, 'package.json', JSON.stringify({ type: 'module' }));
 writeFile(projectRoot, 'astroadmin.config.js',
-  "export default { git: { enabled: true, paths: ['src/content/'] }, build: { check: 'true' } };\n");
+  "export default { git: { enabled: true, paths: ['src/content/'], allowLocalRemote: true }, build: { check: 'true' } };\n");
 writeFile(projectRoot, 'src/content.config.ts', `import { defineCollection, z } from 'astro:content';
 import { glob } from 'astro/loaders';
 export const collections = {

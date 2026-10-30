@@ -71,7 +71,7 @@ writeFile(projectRoot, 'astro.config.mjs', 'export default {};\n');
 const barrierDir = path.join(tempRoot, 'barrier');
 const checkCommand = `sh '${path.join(barrierDir, 'check.sh')}'`;
 writeFile(projectRoot, 'astroadmin.config.js',
-  `export default { git: { enabled: true, paths: ['src/content/', 'public/images/'] }, build: { check: ${JSON.stringify(checkCommand)} } };\n`);
+  `export default { git: { enabled: true, paths: ['src/content/', 'public/images/'], allowLocalRemote: true }, build: { check: ${JSON.stringify(checkCommand)} } };\n`);
 writeFile(projectRoot, 'src/content.config.ts', `import { defineCollection, z } from 'astro:content';
 import { glob } from 'astro/loaders';
 export const collections = {

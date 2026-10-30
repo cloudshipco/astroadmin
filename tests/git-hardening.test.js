@@ -167,7 +167,7 @@ writeFile(projectRoot, '.gitattributes', '*.md diff=planted\n');
 writeFile(projectRoot, 'package.json', JSON.stringify({ type: 'module' }));
 writeFile(projectRoot, 'astro.config.mjs', 'export default {};\n');
 writeFile(projectRoot, 'astroadmin.config.js',
-  "export default { git: { enabled: true, paths: ['src/content/'] }, build: { check: 'true' } };\n");
+  "export default { git: { enabled: true, paths: ['src/content/'], allowLocalRemote: true }, build: { check: 'true' } };\n");
 writeFile(projectRoot, 'src/content.config.ts', `import { defineCollection, z } from 'astro:content';
 import { glob } from 'astro/loaders';
 export const collections = {

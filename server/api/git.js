@@ -22,7 +22,7 @@ import {
 } from './publish.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
 import { withCheckoutWrite } from '../utils/checkout-lock.js';
-import { NO_DIFF_PROGRAMS } from '../utils/git-exec.js';
+import { NO_DIFF_PROGRAMS, STATUS_OPTIONS } from '../utils/git-exec.js';
 
 const router = express.Router();
 
@@ -308,7 +308,7 @@ router.get('/status', async (req, res) => {
   try {
     const fullConfig = await getConfig();
     const git = createGitClient(fullConfig);
-    const status = await git.status();
+    const status = await git.status([...STATUS_OPTIONS]);
 
     // Translate repo-root-relative paths to projectRoot-relative and keep only
     // files within the configured git paths (what Publish actually stages).

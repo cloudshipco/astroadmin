@@ -46,7 +46,7 @@ const router = express.Router();
  * process.
  */
 export function createGitClient(fullConfig) {
-  return gitClientAt(fullConfig.paths.projectRoot);
+  return gitClientAt(fullConfig.paths.projectRoot, { allowLocalRemote: fullConfig.git?.allowLocalRemote === true });
 }
 
 /**
@@ -54,9 +54,9 @@ export function createGitClient(fullConfig) {
  * working tree of the repository (the rebase's throwaway worktree) gets its
  * own client: simple-git refuses `-C` without an unsafe opt-in.
  */
-function gitClientAt(dir) {
+function gitClientAt(dir, { allowLocalRemote = false } = {}) {
   return simpleGit(dir, {
-    config: hardenedConfig(dir),
+    config: hardenedConfig(dir, { allowLocalRemote }),
     unsafe: { ...SIMPLE_GIT_UNSAFE },
     allowEnvironment: [...GIT_PASSED_ENVIRONMENT],
   }).env(gitEnvironment());
@@ -65,7 +65,7 @@ function gitClientAt(dir) {
 async function getStagedFilesForPaths(git, gitPaths) {
   if (gitPaths.length === 0) return [];
 
-  const diffOutput = await git.diff(['--name-only', '--cached', '--', ...gitPaths]);
+  const diffOutput = await git.diff([...NO_DIFF_PROGRAMS, '--name-only', '--cached', '--', ...gitPaths]);
   return diffOutput.split(/\r?\n/).filter(Boolean);
 }
 
@@ -121,8 +121,9 @@ export function withGitLock(task) {
  *
  * Outcomes besides the check: `blocked` when the checkout already holds an
  * unfinished rebase or merge (nothing staged or committed; left as it was),
- * or, with `blockedReason: 'filter'`, when the repository's files go
- * through a git filter driver such as Git LFS (filter-attributes.js);
+ * or, with `blockedReason: 'submodules'`, when the checkout has a submodule,
+ * or `'filter'`, when the repository's files go through a git filter driver
+ * such as Git LFS (filter-attributes.js);
  * `conflict` when OUR rebase conflicted (it is aborted; the commit stays
  * local); `localChanges` when the incoming changes touch files with
  * uncommitted changes in the checkout (nothing moved; the commit stays
@@ -132,7 +133,7 @@ export function withGitLock(task) {
  * @param {object} fullConfig
  * @param {import('simple-git').SimpleGit} git
  * @param {{commit?: () => Promise<object|null>, onlyIfCommitted?: boolean}} [options]
- * @returns {Promise<{blocked: boolean, blockedReason: 'filter'|null, conflict: boolean, localChanges: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
+ * @returns {Promise<{blocked: boolean, blockedReason: 'submodules'|'filter'|null, conflict: boolean, localChanges: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
  */
 export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyIfCommitted = false } = {}) {
   const outcome = { blocked: false, blockedReason: null, conflict: false, localChanges: false, commitResult: null, pushed: false, pushError: null, check: null };
@@ -166,22 +167,36 @@ export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyI
     outcome.pushed = true;
   } catch (pushError) {
     console.error('Push failed:', pushError.message);
+    if (/transport 'file' not allowed/.test(pushError.message)) {
+      console.error('The remote is a local path or file:// URL, which the admin does not push to unless the site\'s config sets git.allowLocalRemote: true');
+    }
     outcome.pushError = pushError.message;
   }
   return outcome;
 }
 
 /**
- * In one exclusive checkout hold: refuse an unfinished git operation or a
- * repository whose files go through a git filter, commit
+ * In one exclusive checkout hold: refuse a checkout with a submodule, an
+ * unfinished git operation or a repository whose files go through a git
+ * filter, commit
  * (when `commit` is given) and, when `rebase(commitResult)` says so, rebase
  * onto the upstream. `ready` means go on to check and push. Also the commit
  * route's path when it does not push.
- * @returns {Promise<{blocked: boolean, blockedReason: 'filter'|null, conflict: boolean, localChanges: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
+ * @returns {Promise<{blocked: boolean, blockedReason: 'submodules'|'filter'|null, conflict: boolean, localChanges: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
  */
 export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
   return withCheckoutExclusive(async () => {
     const prepared = { blocked: false, blockedReason: null, conflict: false, localChanges: false, ready: false, commitResult: null, upstream: null };
+    // First, before any git command that could look inside one: a
+    // submodule is its own repository, with its own config and hooks, and
+    // `git add` runs its filters. (The publish check refuses gitlinks too.)
+    const submodules = await gitlinksInIndex(git);
+    if (submodules.length > 0) {
+      console.error(`Publish refused: the checkout has git submodules (${submodules.join(', ')})`);
+      prepared.blocked = true;
+      prepared.blockedReason = 'submodules';
+      return prepared;
+    }
     const unfinished = await unfinishedOperation(git);
     if (unfinished) {
       // Someone else's (an interrupted publish, or a person on the box): not
@@ -211,6 +226,12 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
     prepared.ready = true;
     return prepared;
   });
+}
+
+/** The paths of the gitlinks (submodules) in the checkout's index. */
+async function gitlinksInIndex(git) {
+  const entries = (await git.raw(['ls-files', '-z', '--stage'])).split('\0').filter(Boolean);
+  return entries.filter((entry) => entry.startsWith('160000 ')).map((entry) => entry.slice(entry.indexOf('\t') + 1));
 }
 
 /**
@@ -404,10 +425,22 @@ async function pushCheckedCommit(git, commit, upstream) {
 
 /**
  * Response body for a checkout left mid-rebase or mid-merge by someone else,
- * or (reason 'filter') a repository whose files go through a git filter.
- * @param {'filter'|null} [reason]
+ * a checkout with submodules (reason 'submodules'), or a repository whose
+ * files go through a git filter (reason 'filter').
+ * @param {'submodules'|'filter'|null} [reason]
  */
 export function blockedBody(reason = null) {
+  if (reason === 'submodules') {
+    return {
+      success: false,
+      committed: false,
+      pushed: false,
+      commit: null,
+      error: 'This site cannot be published from the editor',
+      message: 'Nothing was published: the site\'s repository uses git submodules, '
+        + 'which publishing from the editor does not support. Your changes are saved. Contact your site administrator.',
+    };
+  }
   if (reason === 'filter') {
     return {
       success: false,

@@ -105,7 +105,7 @@ fs.mkdirSync(projectRoot);
 fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(projectRoot, 'node_modules'), 'dir');
 writeFile(projectRoot, 'package.json', JSON.stringify({ type: 'module' }));
 writeFile(projectRoot, 'astro.config.mjs', 'export default {};\n');
-writeFile(projectRoot, 'astroadmin.config.js', "export default { git: { enabled: true, paths: ['src/content/'] } };\n");
+writeFile(projectRoot, 'astroadmin.config.js', "export default { git: { enabled: true, paths: ['src/content/'], allowLocalRemote: true } };\n");
 writeFile(projectRoot, '.gitignore', 'node_modules\n.astro\ndist\n');
 writeFile(projectRoot, 'src/content.config.ts', contentConfig(SCHEMA_WITHOUT_SUMMARY));
 writeFile(projectRoot, 'src/content/pages/home.md', '---\ntitle: Home\n---\n');
