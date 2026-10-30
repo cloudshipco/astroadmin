@@ -296,7 +296,10 @@ a stored crop on a site without the service); see
 
 In `astro dev`, a file uploaded after the server started renders as the
 plain original (see below) with its focal point only; the crop shows after
-a restart of the dev server, and in every build. The crop applies to the
+a restart of the dev server, and in every build. In `astro dev` on a site
+without the service, a stored crop is skipped rather than refused, so the
+preview still renders: the `<img>` carries `data-cms-image="crop-skipped"`
+and the dev server logs the same message the build would fail with. The crop applies to the
 same images the focal point does: `/images/` uploads rendered through
 `CmsImage`, not `image()` fields or `CmsVideo`.
 

@@ -275,4 +275,14 @@ await checkAsync('transform without a crop returns the parent\'s bytes', async (
   assert.ok(Buffer.from(ours.data).equals(Buffer.from(parent.data)), 'byte-identical to the parent');
 });
 
+await checkAsync('transform with format svg ignores the crop: the parent returns the SVG bytes as they are', async () => {
+  // The parent short-circuits an SVG (its bytes back, format 'svg'); a crop
+  // must not rasterise it first, or PNG bytes would be served as SVG.
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect width="100" height="50" fill="#f00"/></svg>');
+  const options = service.validateOptions({ src: '/logo.svg', width: 50, height: 25, format: 'svg', crop: { x: 0, y: 0, width: 50, height: 50 } }, config);
+  const ours = await service.transform(svg, { ...options }, config, logger);
+  assert.strictEqual(ours.format, 'svg');
+  assert.ok(Buffer.from(ours.data).equals(svg), 'the SVG bytes unchanged');
+});
+
 console.log(`\nimage-service: ${passed} passed`);

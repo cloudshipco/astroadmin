@@ -594,7 +594,19 @@ try {
    * lookup must then use the site's root, not the process's working
    * directory (it read `process.cwd()/public`, and reported the upload missing).
    */
-  async function devChecks(envLabel, envOverrides, lateName, { fromParent = false } = {}) {
+  /**
+   * `cropService: false`: a dev server on a site WITHOUT the crop service. A
+   * stored crop cannot apply there (a build would fail); dev renders the
+   * photo uncropped and must say so where the editor looks: the <img> is
+   * marked data-cms-image="crop-skipped" and the server log warns.
+   */
+  async function devChecks(envLabel, envOverrides, lateName, { fromParent = false, cropService = true } = {}) {
+    if (!cropService) {
+      writeSiteFile(
+        'astro.config.mjs',
+        "import { defineConfig } from 'astro/config';\nexport default defineConfig({ vite: { server: { hmr: false } } });\n",
+      );
+    }
     const port = await new Promise((resolve) => {
       const probe = net.createServer().listen(0, '127.0.0.1', () => {
         const { port: freePort } = probe.address();
@@ -630,6 +642,21 @@ try {
         throw new Error(`astro dev never answered on ${port}:\n${devOutput}`);
       };
       const devIndexHtml = await devPage('/'); // started, glob read
+      if (!cropService) {
+        writeSiteFile(METADATA_FILE, JSON.stringify({ '/images/photo.png': { focalPoint: { x: 30, y: 20 }, crop } }));
+        const skippedHtml = await devPage('/focal');
+        fs.rmSync(path.join(siteDir, METADATA_FILE), { force: true });
+        check(`dev${envLabel}: a stored crop the site cannot apply is skipped, marked crop-skipped and warned about`, () => {
+          const img = imgOf(skippedHtml, 'Photo');
+          assert.ok(img.includes('data-cms-image="crop-skipped"'), img);
+          assert.ok(!/[?&]crop=/.test(img), `no crop on the URL: ${img}`);
+          assert.ok(img.includes(`width="${Math.min(PHOTO_WIDTH, 1600)}"`), `the original's width, not the crop's: ${img}`);
+          // The point stays in the ORIGINAL's frame when the crop is skipped.
+          assert.strictEqual(styleOf(img), 'width: 100%; object-position: 30% 20%', img);
+          assert.ok(/CmsImage: "\/images\/photo\.png" has a crop stored/.test(devOutput), devOutput.slice(-2000));
+        });
+        return;
+      }
       check(`dev${envLabel}: pictures have WebP sources but no AVIF (AVIF encodes take ~20 s each in dev)`, () => {
         const devPhoto = (devIndexHtml.match(/<picture\b.*?<\/picture>/gs) || []).find((picture) => picture.includes('alt="Photo"'));
         assert.ok(devPhoto, `a Photo <picture> in dev: ${devIndexHtml.slice(0, 2000)}`);
@@ -702,6 +729,7 @@ try {
   await devChecks('', {}, 'late.png');
   await devChecks(' (NODE_ENV=production)', { NODE_ENV: 'production' }, 'late-prod.png');
   await devChecks(' (run from the parent directory with --root)', {}, 'late-root.png', { fromParent: true });
+  await devChecks(' (no crop service)', {}, 'late-noservice.png', { cropService: false });
 
   console.log(`\ncms-image-packed: ${passed} passed`);
 } finally {

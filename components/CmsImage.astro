@@ -59,8 +59,10 @@
  *   a service without the marker fails with an error naming the image and
  *   the setting (an ignored crop would ship the uncropped photo without a
  *   word); in dev the crop is skipped instead, the point staying in the
- *   original's frame, so the preview still renders. A plain <img> (SVG,
- *   GIF, the dev original) cannot crop: the point only.
+ *   original's frame, so the preview still renders, with the <img> marked
+ *   data-cms-image="crop-skipped" and a console warning, since the build of
+ *   the same commit will refuse it. A plain <img> (SVG, GIF, the dev
+ *   original) cannot crop: the point only.
  * Every other attribute (data-aa-field, loading, fetchpriority, priority,
  * class...) is forwarded to the <img> in every branch.
  */
@@ -168,6 +170,7 @@ const stored = src.startsWith('/images/') ? imageMetadata(src) : { focalPoint: n
 let focalPoint = applyFocalPoint ? stored.focalPoint : null;
 let crop = image ? stored.crop : null; // a plain <img> cannot crop
 let cropBox: { left: number; top: number; width: number; height: number } | undefined;
+let cropSkipped = false;
 if (image && crop) {
   // The LOADED service's own marker, not the entrypoint string: Astro takes
   // a string or URL there, so a site may name this service by a local
@@ -176,14 +179,17 @@ if (image && crop) {
   // there is a crop to apply.)
   const service = (await getConfiguredImageService()) as { supportsCrop?: boolean };
   if (service.supportsCrop !== true) {
-    if (!IS_ASTRO_DEV) {
-      throw new Error(
-        `CmsImage: "${src}" has a crop stored in public/images/.metadata.json, but the site's image ` +
-          `service cannot apply it. Add image: { service: { entrypoint: '${CROP_SERVICE}' } } to ` +
-          `astro.config.mjs, or clear the crop in the admin.`,
-      );
-    }
-    crop = null; // dev: the preview shows the photo uncropped rather than nothing
+    const reason =
+      `CmsImage: "${src}" has a crop stored in public/images/.metadata.json, but the site's image ` +
+      `service cannot apply it. Add image: { service: { entrypoint: '${CROP_SERVICE}' } } to ` +
+      `astro.config.mjs, or clear the crop in the admin.`;
+    if (!IS_ASTRO_DEV) throw new Error(reason);
+    // dev: the preview shows the photo uncropped rather than nothing, and
+    // says so where the editor looks (the <img> is marked, the log warns),
+    // since the build of the same commit will refuse it.
+    console.warn(reason);
+    crop = null;
+    cropSkipped = true;
   } else {
     cropBox = cropPixels(crop, image.width, image.height);
     if (focalPoint) {
@@ -217,7 +223,8 @@ function withObjectPosition(style: unknown, position: string): unknown {
   return declaration;
 }
 // With no point the attributes are `rest` itself: no style is added or moved.
-const imgAttributes = objectPosition ? { ...rest, style: withObjectPosition(rest.style, objectPosition) } : rest;
+const positioned = objectPosition ? { ...rest, style: withObjectPosition(rest.style, objectPosition) } : rest;
+const imgAttributes = cropSkipped ? { ...positioned, 'data-cms-image': 'crop-skipped' } : positioned;
 
 const sourceWidth = cropBox ? cropBox.width : image ? image.width : 0;
 const sourceHeight = cropBox ? cropBox.height : image ? image.height : 0;

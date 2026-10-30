@@ -112,7 +112,10 @@ const service = {
   },
 
   async transform(inputBuffer, transformOptions, config, logger) {
-    if (transformOptions.crop === undefined || transformOptions.crop === null) {
+    // An SVG is served as its own bytes by the parent (format 'svg'): a crop
+    // would rasterise it first and the PNG would be served as SVG, so the
+    // crop is ignored for it, as it is for any image with none.
+    if (transformOptions.crop === undefined || transformOptions.crop === null || transformOptions.format === 'svg') {
       return sharpService.transform(inputBuffer, transformOptions, config, logger);
     }
     const crop = parseCrop(transformOptions.crop);
