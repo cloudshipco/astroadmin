@@ -857,7 +857,9 @@ no node_modules of its own (that folder is never removed, only the doctor's own 
 folder in it: another doctor may be between its mkdir and mkdtemp there); SIGINT/SIGTERM
 during the build kill its process group, remove its folder and exit 130/143, never the
 CLI's global exit 0; interrupted before a build started, it does not claim to have removed
-one, and `--json` prints nothing on stdout; ~20 s), `doctor-publish` (the editor scans the publish check's own build in a child
+one, and after its build finished it says only that the folder was removed, never that a
+build was stopped (`buildStopped` is whether a process group was still alive); `--json`
+prints nothing on stdout; ~20 s), `doctor-publish` (the editor scans the publish check's own build in a child
 process rooted at the check's worktree, so it reads the commit's entries; a scan stuck in a
 synchronous loop is killed at its cap; an error is "unavailable" with a fixed reason and the
 error in the server log, never a failed publish; `unoptimised-images` is command-line

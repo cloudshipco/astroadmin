@@ -321,6 +321,42 @@ export const collections = { pages: defineCollection({ loader: glob({ pattern: '
     assert.equal(stdout, '', 'an interrupted --json run prints nothing on stdout');
   });
 
+  await checkAsync('interrupted after its build finished: exit 130, the folder is removed, and it does not claim to have stopped a build', async () => {
+    // The build writes a page and exits at once; the content config, loaded
+    // by the built checks in the doctor's own process, then waits.
+    const startedFile = path.join(tempRoot, 'interrupted-after-build.started');
+    const loadingFile = path.join(tempRoot, 'interrupted-after-build.loading');
+    const site = failingBuildSite('interrupted-after-build', `import fs from 'fs';
+import path from 'path';
+const outDir = process.argv[process.argv.indexOf('--outDir') + 1];
+fs.mkdirSync(outDir, { recursive: true });
+fs.writeFileSync(path.join(outDir, 'index.html'), '<html><body><h1>Built</h1></body></html>');
+fs.writeFileSync(${JSON.stringify(startedFile)}, outDir);
+`);
+    writeFile(site, 'src/content.config.ts', `import fs from 'fs';
+fs.writeFileSync(${JSON.stringify(loadingFile)}, 'yes');
+await new Promise((resolve) => setTimeout(resolve, 20000));
+export const collections = {};
+`);
+    const child = spawn('bun', [path.join(repoRoot, 'bin/cli.js'), 'doctor', '--project', site, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const exited = new Promise((resolve) => child.on('exit', (code, exitSignal) => resolve({ code, exitSignal })));
+    await waitFor(() => fs.existsSync(loadingFile), 'the content config to load after the build');
+    // Positive control: the build ran and its folder is there.
+    const outDir = fs.readFileSync(startedFile, 'utf-8');
+    assert.ok(fs.existsSync(path.join(outDir, 'index.html')), `${outDir} holds the build`);
+    child.kill('SIGINT');
+    const exit = await exited;
+    assert.equal(exit.code, 130, `exit ${JSON.stringify(exit)}\n${stderr}`);
+    assert.match(stderr, /The doctor was interrupted; its build folder was removed\./, stderr);
+    assert.doesNotMatch(stderr, /stopped/, stderr);
+    assert.equal(fs.existsSync(outDir), false, `${outDir} was left behind`);
+    assert.equal(stdout, '', 'an interrupted --json run prints nothing on stdout');
+  });
+
   await checkAsync('a site with no node_modules of its own builds into an ignored .astroadmin-doctor folder; interrupted, its build is removed and the folder kept', async () => {
     // A site in a subdirectory of its repository, astro hoisted to the top.
     const monorepo = path.join(tempRoot, 'monorepo-fallback');

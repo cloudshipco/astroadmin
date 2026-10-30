@@ -23,8 +23,10 @@ export class DoctorInterrupted extends Error {
   constructor() {
     super('The doctor was interrupted.');
     this.name = 'DoctorInterrupted';
-    /** Set when its build had started, and was then stopped and removed. */
-    this.buildRemoved = false;
+    /** Set when a build process was still running and was stopped. */
+    this.buildStopped = false;
+    /** Set when a build folder had been made, and was removed. */
+    this.buildFolderRemoved = false;
   }
 }
 
@@ -32,6 +34,7 @@ export class DoctorInterrupted extends Error {
  * SIGKILL each process group, then wait (up to 2 s) until none of its
  * members is left, so nothing writes after the caller removes its folder.
  * @param {number[]} groupIds
+ * @returns {Promise<boolean>} whether any group was still running
  */
 async function killProcessGroups(groupIds) {
   const alive = (groupId) => {
@@ -42,6 +45,7 @@ async function killProcessGroups(groupIds) {
       return false;
     }
   };
+  const anyRunning = groupIds.some(alive);
   for (const groupId of groupIds) {
     try {
       process.kill(-groupId, 'SIGKILL');
@@ -51,6 +55,7 @@ async function killProcessGroups(groupIds) {
   }
   const deadline = Date.now() + 2000;
   while (groupIds.some(alive) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  return anyRunning;
 }
 
 /**
@@ -153,10 +158,15 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
   } finally {
     // Stop a build still running before removing its folder, or it writes
     // into the site after the doctor has gone.
-    if (signal?.aborted) await killProcessGroups(context.processGroups);
+    const buildStopped = signal?.aborted ? await killProcessGroups(context.processGroups) : false;
     for (const cleanup of context.cleanups) await cleanup().catch(() => {});
-    // The CLI says a build was stopped and removed only when one had started.
-    if (failure instanceof DoctorInterrupted) failure.buildRemoved = context.cleanups.length > 0;
+    // What the CLI may claim: a build stopped only when one was still
+    // running (not after it finished, nor before it was spawned), a folder
+    // removed only when one had been made.
+    if (failure instanceof DoctorInterrupted) {
+      failure.buildStopped = buildStopped;
+      failure.buildFolderRemoved = context.cleanups.length > 0;
+    }
   }
 
   const counts = { pass: 0, warn: 0, fail: 0, skip: 0 };

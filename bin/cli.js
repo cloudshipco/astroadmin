@@ -379,8 +379,13 @@ program
         });
       } catch (error) {
         if (!(error instanceof DoctorInterrupted)) throw error;
-        // Only a build that had started was stopped and removed.
-        console.error(`\nThe doctor was interrupted${error.buildRemoved ? '; its build was stopped and removed' : ''}.`);
+        // "stopped" only for a build still running; "removed" only for a
+        // folder that had been made.
+        let what = '';
+        if (error.buildStopped && error.buildFolderRemoved) what = '; its build was stopped and removed';
+        else if (error.buildStopped) what = '; its build was stopped';
+        else if (error.buildFolderRemoved) what = '; its build folder was removed';
+        console.error(`\nThe doctor was interrupted${what}.`);
         process.exit(exitCode);
       }
       if (options.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
