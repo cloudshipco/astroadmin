@@ -12,6 +12,11 @@
  *   Astro 7, an unset vite.build.cssTarget warns. A publicDir other than
  *   ./public (or one not readable statically) warns for CmsImage and for
  *   CmsVideo, whose globs are fixed at /public/images/** (#86).
+ * - image-crop-service (static): images.crop in astroadmin.config.js without
+ *   image.service.entrypoint 'astroadmin/image-service' in the Astro config,
+ *   the service without images.crop, and a crop stored in
+ *   public/images/.metadata.json on a site without the service (named by its
+ *   site-path key) each warn; both opt-ins pass; neither is a skip.
  *
  * Each is shown red on a mutated copy of a healthy fixture.
  *
@@ -312,8 +317,128 @@ await check('prerequisites: a site using neither component is a skip whatever it
   assert.equal(result.severity, 'skip', JSON.stringify(result));
 });
 
-await check('both checks name the version that added them', async () => {
-  for (const id of ['unoptimised-images', 'cms-image-prerequisites']) {
+// --- image-crop-service ------------------------------------------------------
+//
+// A crop an editor sets (public/images/.metadata.json) is applied only by
+// astroadmin/image-service, and the editor shows the crop control only with
+// images.crop in astroadmin.config.js. Each half without the other warns, and
+// so does a crop already stored on a site without the service, since a build
+// that renders it fails.
+
+const SERVICE_ENTRYPOINT = "image: { service: { entrypoint: 'astroadmin/image-service' } },";
+const configWithImage = (imageOption) => CONFIG_WITH_CSS_TARGET.replace('integrations: [astroadmin()],', `integrations: [astroadmin()],\n  ${imageOption}`);
+const CONFIG_WITH_CROP_SERVICE = configWithImage(SERVICE_ENTRYPOINT);
+const ADMIN_CONFIG_WITH_CROP = 'export default { images: { crop: true } };\n';
+const METADATA_WITH_CROPS = JSON.stringify({
+  '/images/team/photo.jpg': { alt: 'The team', crop: { x: 10, y: 5, width: 60, height: 80 } },
+  'legacy.jpg': { crop: { x: 0, y: 0, width: 50, height: 50 } },
+  '/images/hero.jpg': { alt: 'Hero', focalPoint: { x: 30, y: 20 } },
+  '/images/plain.jpg': { alt: 'Plain', crop: null },
+}, null, 2);
+const METADATA_WITHOUT_CROPS = JSON.stringify({ '/images/hero.jpg': { alt: 'Hero', focalPoint: { x: 30, y: 20 } } });
+
+/** A CmsImage site (makePrereqSite) plus an astroadmin.config.js and a metadata file. */
+function makeCropSite({ config = CONFIG_WITH_CROP_SERVICE, adminConfig = ADMIN_CONFIG_WITH_CROP, metadata = METADATA_WITHOUT_CROPS } = {}) {
+  const siteDir = makePrereqSite({ config });
+  if (adminConfig !== null) writeFile(siteDir, 'astroadmin.config.js', adminConfig);
+  if (metadata !== null) writeFile(siteDir, 'public/images/.metadata.json', metadata);
+  return siteDir;
+}
+
+async function cropResult(siteDir) {
+  const report = await runDoctor({ projectRoot: siteDir, build: false, phases: ['static'] });
+  const result = report.results.find((item) => item.id === 'image-crop-service');
+  assert.ok(result, `the doctor has an image-crop-service check (ids: ${report.results.map((item) => item.id).join(', ')})`);
+  const text = [result.title, result.message, ...result.details].join('\n');
+  assert.ok(!text.includes(siteDir), `no server path in the result: ${text}`);
+  return result;
+}
+
+await check('crop: images.crop true and image.service.entrypoint astroadmin/image-service passes (a const too)', async () => {
+  const viaConst = `const service = { entrypoint: 'astroadmin/image-service' };\n${configWithImage('image: { service },')}`;
+  for (const config of [CONFIG_WITH_CROP_SERVICE, viaConst]) {
+    const result = await cropResult(makeCropSite({ config }));
+    assert.equal(result.severity, 'pass', `${config}\n${JSON.stringify(result)}`);
+  }
+});
+
+await check('crop: a site with neither opt-in and no stored crop is a skip (focal points and alt text alone are fine)', async () => {
+  for (const site of [
+    makeCropSite({ config: CONFIG_WITH_CSS_TARGET, adminConfig: null, metadata: null }),
+    makeCropSite({ config: CONFIG_WITH_CSS_TARGET, adminConfig: 'export default { images: { crop: false } };\n' }),
+    makeCropSite({ config: CONFIG_WITH_CSS_TARGET, adminConfig: 'export default { preview: { url: "http://localhost:4321" } };\n' }),
+  ]) {
+    const result = await cropResult(site);
+    assert.equal(result.severity, 'skip', JSON.stringify(result));
+  }
+});
+
+await check('crop MUTATION: images.crop true without the service warns, naming both settings and the publish check', async () => {
+  const result = await cropResult(makeCropSite({ config: CONFIG_WITH_CSS_TARGET }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes('images.crop') && result.message.includes('astroadmin/image-service'), result.message);
+  assert.ok(result.message.includes('image.service.entrypoint') && result.message.includes('publish'), result.message);
+  assert.ok(result.message.includes('optimised-images.md#crop'), result.message);
+});
+
+await check('crop MUTATION: another entrypoint with images.crop true warns, naming it', async () => {
+  const result = await cropResult(makeCropSite({ config: configWithImage("image: { service: { entrypoint: './src/my-service.js' } },") }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes("'./src/my-service.js'") && result.message.includes('astroadmin/image-service'), result.message);
+});
+
+await check('crop MUTATION: the service set but images.crop not true warns that editors cannot crop', async () => {
+  for (const adminConfig of [null, 'export default { images: { crop: false } };\n', 'export default { images: {} };\n']) {
+    const result = await cropResult(makeCropSite({ adminConfig }));
+    assert.equal(result.severity, 'warn', `${adminConfig}\n${JSON.stringify(result)}`);
+    assert.ok(result.message.includes('images.crop') && result.message.includes('astroadmin.config.js'), result.message);
+    assert.ok(/cannot crop/.test(result.message), result.message);
+  }
+});
+
+await check('crop MUTATION: a stored crop on a site without the service warns, naming the image by its site path', async () => {
+  for (const adminConfig of [null, ADMIN_CONFIG_WITH_CROP]) {
+    const result = await cropResult(makeCropSite({ config: CONFIG_WITH_CSS_TARGET, adminConfig, metadata: METADATA_WITH_CROPS }));
+    assert.equal(result.severity, 'warn', JSON.stringify(result));
+    assert.ok(result.message.includes('.metadata.json') && result.message.includes('2 '), result.message);
+    const details = result.details.join('\n');
+    assert.ok(details.includes('/images/team/photo.jpg') && details.includes('legacy.jpg'), details);
+    assert.ok(!details.includes('hero.jpg') && !details.includes('plain.jpg'), `only entries with a crop: ${details}`);
+  }
+});
+
+await check('crop: a stored crop with the service set passes (control)', async () => {
+  const result = await cropResult(makeCropSite({ metadata: METADATA_WITH_CROPS }));
+  assert.equal(result.severity, 'pass', JSON.stringify(result));
+  assert.ok(result.message.includes('2 '), result.message);
+});
+
+await check('crop MUTATION: a service the doctor cannot read statically warns to check by hand only when a crop is in play', async () => {
+  const unreadable = configWithImage('image: { service: sharpImageService() },').replace("import { defineConfig } from 'astro/config';", "import { defineConfig, sharpImageService } from 'astro/config';");
+  assert.ok(unreadable.includes('sharpImageService()'), 'the call was added');
+  for (const options of [{ config: unreadable }, { config: unreadable, adminConfig: null, metadata: METADATA_WITH_CROPS }]) {
+    const result = await cropResult(makeCropSite(options));
+    assert.equal(result.severity, 'warn', JSON.stringify(result));
+    assert.ok(result.message.includes('check by hand') && result.message.includes('image.service.entrypoint'), result.message);
+  }
+  const quiet = await cropResult(makeCropSite({ config: unreadable, adminConfig: null }));
+  assert.equal(quiet.severity, 'skip', JSON.stringify(quiet));
+});
+
+await check('crop MUTATION: an astroadmin.config.js that does not load warns, naming the file', async () => {
+  const result = await cropResult(makeCropSite({ adminConfig: 'throw new Error("boom");\n' }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes('astroadmin.config.js') && result.message.includes('boom'), result.message);
+});
+
+await check('crop MUTATION: a .metadata.json that is not JSON warns', async () => {
+  const result = await cropResult(makeCropSite({ metadata: '{ not json' }));
+  assert.equal(result.severity, 'warn', JSON.stringify(result));
+  assert.ok(result.message.includes('.metadata.json'), result.message);
+});
+
+await check('the checks name the version that added them', async () => {
+  for (const id of ['unoptimised-images', 'cms-image-prerequisites', 'image-crop-service']) {
     const definition = DOCTOR_CHECKS.find((item) => item.id === id);
     assert.ok(definition && /^\d+\.\d+\.\d+$/.test(definition.since), `${id} since`);
   }

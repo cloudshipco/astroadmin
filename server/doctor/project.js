@@ -43,7 +43,18 @@ const SHARP_TIMEOUT_MS = 20_000;
  *   doctor cannot read statically (a call, an env variable); 'unreadable' is
  *   a config in which the doctor cannot find publicDir at all (a syntax
  *   error, a function passed to defineConfig, a spread that may set it)
+ * @property {{state: 'unset'|'literal'|'unknown'|'unreadable', value: string|null}} imageService
+ *   - image.service.entrypoint, with the same states as publicDir: 'unset'
+ *   is Astro's default service; 'literal' carries the entrypoint as written;
+ *   'unknown' is a service the doctor cannot read statically (a call such as
+ *   sharpImageService(), a variable); 'unreadable' is a config in which the
+ *   doctor cannot find it at all
  */
+
+/** The entrypoint of AstroAdmin's image service, which applies a stored crop. */
+export const CROP_SERVICE_ENTRYPOINT = 'astroadmin/image-service';
+/** Where the editor keeps alt text, focal points and crops, relative to the site. */
+export const IMAGE_METADATA_FILE = 'public/images/.metadata.json';
 
 // A value that is there but cannot be read statically (a later spread, a
 // computed key, a call, a variable that is not a plain const).
@@ -190,7 +201,7 @@ function listCalls(listNode, localNames, resolve, depth = 0) {
  * @returns {Promise<AstroConfigFacts>}
  */
 export async function readAstroConfigFacts(projectRoot) {
-  const facts = { file: null, parseError: null, integrationImported: false, integrationCalled: 'no', allowedHosts: 'unknown', hmr: 'unknown', outDir: null, cssTarget: 'unknown', publicDir: { state: 'unknown', value: null } };
+  const facts = { file: null, parseError: null, integrationImported: false, integrationCalled: 'no', allowedHosts: 'unknown', hmr: 'unknown', outDir: null, cssTarget: 'unknown', publicDir: { state: 'unknown', value: null }, imageService: { state: 'unknown', value: null } };
   let source = null;
   for (const name of ASTRO_CONFIG_NAMES) {
     try {
@@ -201,14 +212,14 @@ export async function readAstroConfigFacts(projectRoot) {
       // try the next name
     }
   }
-  if (source === null) return { ...facts, publicDir: { state: 'unset', value: null } };
+  if (source === null) return { ...facts, publicDir: { state: 'unset', value: null }, imageService: { state: 'unset', value: null } };
 
   let ast;
   try {
     ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] });
   } catch (error) {
     facts.parseError = error.message;
-    return { ...facts, publicDir: { state: 'unreadable', value: null } };
+    return { ...facts, publicDir: { state: 'unreadable', value: null }, imageService: { state: 'unreadable', value: null } };
   }
 
   const localNames = new Set();
@@ -264,12 +275,84 @@ export async function readAstroConfigFacts(projectRoot) {
       const value = readPath(publicDir, resolve, urlHelperNames(ast), path.join(projectRoot, facts.file), projectRoot);
       if (value !== null) facts.publicDir = { state: 'literal', value };
     }
+    // image.service.entrypoint: the same states as publicDir. A service that
+    // is a call (Astro's sharpImageService()) or a variable has an entrypoint
+    // the doctor cannot read, so it is 'unknown' rather than 'unreadable'.
+    const service = getProperty(getProperty(configObject, 'image', resolve), 'service', resolve);
+    const entrypoint = getProperty(service, 'entrypoint', resolve);
+    if (entrypoint === undefined) facts.imageService = { state: 'unset', value: null };
+    else if (entrypoint === UNKNOWN) {
+      const serviceIsObject = service === UNKNOWN || resolve(service)?.type === 'ObjectExpression';
+      facts.imageService = { state: serviceIsObject ? 'unreadable' : 'unknown', value: null };
+    } else {
+      const value = staticString(resolve(entrypoint));
+      if (value !== null) facts.imageService = { state: 'literal', value };
+    }
   } else {
     // The export is not an object literal the doctor can read (a function
     // passed to defineConfig, a helper's result).
     facts.publicDir = { state: 'unreadable', value: null };
+    facts.imageService = { state: 'unreadable', value: null };
   }
   return facts;
+}
+
+/**
+ * @typedef {Object} AdminConfigFacts
+ * @property {boolean} present - the site has an astroadmin.config.js
+ * @property {string|null} loadError - why it could not be loaded
+ * @property {boolean} cropEnabled - `images.crop` is true in it
+ */
+
+/**
+ * Read the facts the doctor needs from the site's astroadmin.config.js, by
+ * loading it as the editor does (server/config.js imports the file; it is the
+ * site's own code, trusted like its astro.config). Not through the editor's
+ * getConfig(): that is bound to ASTROADMIN_PROJECT_ROOT when its module loads
+ * and caches one site's config, while the doctor takes the site as an
+ * argument (and its tests run several sites in one process).
+ * @param {string} projectRoot
+ * @returns {Promise<AdminConfigFacts>}
+ */
+export async function readAdminConfigFacts(projectRoot) {
+  const file = path.join(projectRoot, 'astroadmin.config.js');
+  if (!fs.existsSync(file)) return { present: false, loadError: null, cropEnabled: false };
+  try {
+    const imported = await import(pathToFileURL(file).href);
+    const config = imported.default || imported;
+    return { present: true, loadError: null, cropEnabled: config?.images?.crop === true };
+  } catch (error) {
+    return { present: true, loadError: error.message, cropEnabled: false };
+  }
+}
+
+/**
+ * The images whose editor metadata holds a crop, by the key the metadata
+ * file stores them under (the image's site path, `/images/x.jpg`, or for an
+ * entry written before 1.12.0 its bare file name). Content an editor set,
+ * never a server path. A crop of null (cleared) is no crop.
+ * @param {string} projectRoot
+ * @returns {{present: boolean, parseError: string|null, keys: string[]}}
+ */
+export function findStoredCrops(projectRoot) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(projectRoot, IMAGE_METADATA_FILE), 'utf-8');
+  } catch {
+    return { present: false, parseError: null, keys: [] };
+  }
+  let metadata;
+  try {
+    metadata = JSON.parse(text);
+  } catch (error) {
+    return { present: true, parseError: error.message, keys: [] };
+  }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return { present: true, parseError: 'not a JSON object', keys: [] };
+  const keys = Object.keys(metadata).filter((key) => {
+    const entry = metadata[key];
+    return entry && typeof entry === 'object' && entry.crop && typeof entry.crop === 'object';
+  });
+  return { present: true, parseError: null, keys };
 }
 
 /** A string literal, or a template literal with no expressions: its text. */

@@ -181,6 +181,123 @@ Check the result in a browser: the image's `currentSrc` width should be at
 least the painted width times the device pixel ratio, unless the original is
 smaller.
 
+## Focal point
+
+A cover-fitted slot shows the middle of the photo and cuts off the rest,
+which is the wrong part of it as often as not. In the image library an
+editor selects an upload from `public/images/` and clicks the preview where
+the subject is. The point is saved at once, as percentages of the
+original's width and height, in `public/images/.metadata.json`, the file
+that holds the alt text. Entries are keyed by the image's site path, the
+value the content holds:
+
+```json
+{
+  "/images/team/photo.jpg": {
+    "alt": "The team outside the workshop",
+    "focalPoint": { "x": 30, "y": 20 }
+  }
+}
+```
+
+"Reset focal point" removes it. Entries written by earlier versions are
+keyed by the bare file name (`"photo.jpg"`); they are still read, and the
+next change to such an image moves its entry to the site path.
+
+`CmsImage` reads the file when it renders, in a build and in `astro dev`
+(where it re-reads a changed file, so a point set in the editor reaches the
+preview on the next render), and adds `object-position: 30% 20%` to the
+`<img>`'s `style`. A `style` the site passes is kept, with the declaration
+appended after it. With no point the HTML is byte-identical to what it was.
+`object-position` only takes effect in a slot that crops the image,
+`object-fit: cover` (or `contain`), which is the slot the focal point is
+for. An inline style outranks a class, so a site's `object-top` (or any
+`object-position` in a stylesheet) is overridden on an image that has a
+point. To keep a slot's own alignment, opt that slot out:
+
+```astro
+<CmsImage src={data.heroImage} alt="" class="object-cover object-top" focalPoint={false} />
+```
+
+The focal point applies to `/images/` uploads rendered through `CmsImage`
+and nothing else. `image()` fields render through Astro's own `<Image>`,
+which reads no metadata, so the library shows no focal point control for
+them, nor for the files in `src/assets/images/`. `CmsVideo` has none
+either: `object-position` would move the playing frames.
+
+The metadata file is under the default `git.paths`, so it is committed and
+deployed with the site, at `/images/.metadata.json`. It holds only alt
+text, focal points and crops.
+
+## Crop
+
+A focal point moves the image within its slot; a crop changes which part of
+the image is used at all. An editor drags a rectangle over the preview in
+the image library, and the crop is stored beside the focal point, as
+percentages of the original:
+
+```json
+{
+  "/images/team/photo.jpg": {
+    "focalPoint": { "x": 30, "y": 20 },
+    "crop": { "x": 10, "y": 5, "width": 60, "height": 80 }
+  }
+}
+```
+
+The original file is not changed, and uploading it once per slot shape is
+no longer needed. `CmsImage` cuts every AVIF, WebP and JPEG variant from the
+crop: the candidate `widths` stop at the crop's width rather than the
+original's, the fallback's `width` and `height` attributes are the crop's,
+and the focal point, which is still set on the original, is translated into
+the crop frame. "Clear crop" removes it, and the next build renders the
+whole image again.
+
+Astro's image service resizes but has no crop step, so cropping needs the
+site to opt in twice:
+
+1. The image service, in the Astro config. `astroadmin/image-service` wraps
+   Astro's sharp service: it extracts the crop and hands the result to that
+   service for resizing and encoding. An image without a crop goes through
+   unchanged.
+
+   ```js
+   // astro.config.mjs
+   import { defineConfig } from 'astro/config';
+
+   export default defineConfig({
+     image: {
+       service: { entrypoint: 'astroadmin/image-service' },
+     },
+   });
+   ```
+
+2. The editor's crop control, in `astroadmin.config.js`. Without it the
+   image library shows no crop control, so no crop can be stored on a site
+   that cannot apply one.
+
+   ```js
+   // astroadmin.config.js
+   export default {
+     images: { crop: true },
+   };
+   ```
+
+Nothing is dropped quietly. A build that renders an image with a stored
+crop on a site whose service is not `astroadmin/image-service` fails,
+naming the image, and the publish check refuses the commit with that
+reason: add the service, or clear the crop in the image library.
+`astroadmin doctor` reports the three mismatches before a build does
+(`images.crop` without the service, the service without `images.crop`, and
+a stored crop on a site without the service); see
+[image-crop-service](./doctor.md#image-crop-service).
+
+In `astro dev`, a file uploaded after the server started renders as the
+plain original (see below) with its focal point only; the crop shows after
+a restart of the dev server, and in every build. The crop applies to the
+same images the focal point does: `/images/` uploads rendered through
+`CmsImage`, not `image()` fields or `CmsVideo`.
+
 ## In `astro dev` and the editor
 
 Vite reads the list of files in `public/images/` when the dev server starts,

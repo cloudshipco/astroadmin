@@ -8,7 +8,7 @@
 import { createRequire } from 'module';
 import { CHECKS, DOCS_BASE, NO_HTML_MESSAGE } from './checks.js';
 import { listBuiltPagePaths, scanBuiltPages } from './html-scan.js';
-import { readAstroConfigFacts } from './project.js';
+import { readAdminConfigFacts, readAstroConfigFacts } from './project.js';
 
 const require = createRequire(import.meta.url);
 const { version: ASTROADMIN_VERSION } = require('../../package.json');
@@ -101,6 +101,7 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
     // Process groups the checks started (the build): killed on interrupt.
     processGroups: [],
     astroConfig: () => remember('astroConfig', () => readAstroConfigFacts(projectRoot)),
+    adminConfig: () => remember('adminConfig', () => readAdminConfigFacts(projectRoot)),
     built: () => remember('built', async () => {
       // A build with no HTML (an empty or missing directory) has nothing to
       // check; every built check says so rather than reporting a clean result.

@@ -242,6 +242,36 @@ whole). Both components find `/images/...` files only in
 `public/images/`. See
 [The public folder](./optimised-images.md#the-public-folder).
 
+### image-crop-service
+
+*Since 1.12.0. Warns; skipped when the site uses neither setting and no
+image has a stored crop.*
+
+A crop an editor sets in the image library (stored in
+`public/images/.metadata.json`) is applied only by `astroadmin/image-service`,
+and the library shows the crop control only with `images: { crop: true }` in
+`astroadmin.config.js`. The check reads both files and warns when:
+
+- `images.crop` is true but the Astro config's `image.service.entrypoint` is
+  not `'astroadmin/image-service'` (not set, or another service). Editors
+  can set crops that are stored and never applied, and a build that renders
+  a cropped image fails, so the publish check refuses it. Set the service, or
+  remove `images.crop`.
+- the service is set but `images.crop` is not true: the library hides the
+  crop control, so editors cannot crop. Set `images: { crop: true }`.
+- `.metadata.json` already holds a crop for an image on a site without the
+  service (one that turned cropping off, say). The images are listed by the
+  key the file stores them under, the image's site path
+  (`/images/team/photo.jpg`), or for an entry from an earlier version its
+  bare file name. Set the service, or clear each crop in the image library.
+
+It also warns when the service cannot be read statically (`image.service` is
+a call such as `sharpImageService()`, or the config is not readable) and a
+crop is in play, when `astroadmin.config.js` does not load, and when
+`.metadata.json` is not JSON. `astroadmin.config.js` is loaded, not parsed,
+as the editor loads it. A focal point needs no setting and is never
+reported. See [Crop](./optimised-images.md#crop).
+
 ### build-runs
 
 *Since 1.4.8. Fails when the build fails.*
@@ -425,7 +455,8 @@ Checks live in `server/doctor/checks.js`, one entry each:
   problemTitle: 'My feature is not set up', // shown on a warn or fail
   // commandLineOnly: true,  // leave it out of the editor's post-publish scan
   async run(context) {
-    // context.projectRoot, context.distDir, context.astroConfig(), context.built()
+    // context.projectRoot, context.distDir, context.astroConfig(),
+    // context.adminConfig() (astroadmin.config.js), context.built()
     return { severity: 'warn', message: '...', details: ['...'] };
   },
 }

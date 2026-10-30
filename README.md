@@ -29,7 +29,9 @@ still builds. Publishing is a git commit and push.
   atomically and keeps its key order, comments and formatting. If the entry
   fails its schema, the save still goes through and the editor shows which
   fields are wrong.
-- Image uploads with alt text, and an image library.
+- Image uploads with alt text, a focal point and an optional crop, and an
+  image library. `CmsImage` applies both when it renders the image (see
+  [optimised images](./docs/optimised-images.md)).
 - Changes to `src/content.config.ts` are picked up without a restart; reload
   the editor tab to see new fields.
 

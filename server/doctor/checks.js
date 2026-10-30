@@ -44,10 +44,13 @@ import {
 import { bunExecutable, findAstroExecutable, shellQuote } from '../utils/astro-bin.js';
 import {
   compareVersions,
+  CROP_SERVICE_ENTRYPOINT,
   findAstroAssetsUse,
   findCmsImageUse,
   findCmsVideoUse,
   findCommittedLockfile,
+  findStoredCrops,
+  IMAGE_METADATA_FILE,
   isGitRepository,
   LOCKFILE_NAMES,
   probeSharp,
@@ -334,6 +337,62 @@ export const CHECKS = [
       if (warnings.length === 1) return { severity: 'warn', ...warnings[0] };
       if (warnings.length > 1) return { severity: 'warn', message: warnings.map((warning) => warning.message).join(' ') };
       return { severity: 'pass', message: `CmsImage is used (${usedIn}) with ${versions}, and vite.build.cssTarget is set.` };
+    },
+  },
+  {
+    id: 'image-crop-service',
+    since: '1.12.0',
+    phase: 'static',
+    title: 'Image crop service',
+    problemTitle: 'Image crop not set up',
+    async run(context) {
+      // A crop needs two opt-ins: images.crop in astroadmin.config.js shows
+      // the editor's crop control, and astroadmin/image-service in the Astro
+      // config applies the crop in a build. Either alone, or a crop already
+      // stored on a site without the service, is reported.
+      const admin = await context.adminConfig();
+      const facts = await context.astroConfig();
+      const crops = findStoredCrops(context.projectRoot);
+      const configFile = facts.file || 'the Astro config';
+      const cropsStored = crops.keys.length > 0;
+      const problems = [];
+      const details = [];
+      if (admin.loadError) problems.push(`astroadmin.config.js could not be loaded to read images.crop: ${admin.loadError}`);
+      if (crops.parseError) problems.push(`${IMAGE_METADATA_FILE} (the editor's alt text, focal points and crops) could not be read as JSON, so its crops could not be checked: ${crops.parseError}`);
+
+      let serviceSet;
+      if (facts.imageService.state === 'literal') serviceSet = facts.imageService.value === CROP_SERVICE_ENTRYPOINT;
+      else if (facts.imageService.state === 'unset') serviceSet = false;
+      else serviceSet = null;
+
+      const docs = `See ${OPTIMISED_IMAGES_DOCS}#crop.`;
+      if (serviceSet === null) {
+        if (admin.cropEnabled || cropsStored) {
+          const why = facts.imageService.state === 'unknown' ? 'its value is not a plain literal' : 'a spread or computed key may set it, or the config is not readable statically';
+          problems.push(`could not verify image.service.entrypoint in ${configFile} (${why}); check by hand that it is '${CROP_SERVICE_ENTRYPOINT}', which ${admin.cropEnabled ? 'images.crop in astroadmin.config.js' : 'the stored crops'} need, or a build that renders a cropped image fails and the publish check refuses it`);
+          if (cropsStored) details.push(...listSome(crops.keys));
+        }
+      } else if (!serviceSet) {
+        const serviceIs = facts.imageService.state === 'literal' ? `is '${facts.imageService.value}'` : 'is not set';
+        if (admin.cropEnabled) {
+          problems.push(`images.crop is true in astroadmin.config.js, so editors can crop images, but image.service.entrypoint in ${configFile} ${serviceIs}, not '${CROP_SERVICE_ENTRYPOINT}': a crop is stored and never applied, and a build that renders a cropped image fails, so the publish check refuses it. Set image: { service: { entrypoint: '${CROP_SERVICE_ENTRYPOINT}' } } in ${configFile}, or remove images.crop`);
+        }
+        if (cropsStored) {
+          problems.push(`${IMAGE_METADATA_FILE} holds a crop for ${crops.keys.length} ${crops.keys.length === 1 ? 'image' : 'images'}, but image.service.entrypoint in ${configFile} ${serviceIs}, not '${CROP_SERVICE_ENTRYPOINT}', so a build that renders ${crops.keys.length === 1 ? 'it' : 'one of them'} fails and the publish check refuses it. Set the service, or clear the crop in the image library`);
+          details.push(...listSome(crops.keys));
+        }
+      } else if (!admin.cropEnabled) {
+        problems.push(`image.service.entrypoint in ${configFile} is '${CROP_SERVICE_ENTRYPOINT}', but images.crop is not true in astroadmin.config.js, so the image library hides the crop control and editors cannot crop. Set images: { crop: true } in astroadmin.config.js`);
+      }
+
+      if (problems.length > 0) {
+        const title = serviceSet && !admin.cropEnabled && problems.length === 1 ? 'Image crop control hidden' : undefined;
+        return { severity: 'warn', ...(title ? { title } : {}), message: `${problems.join('. ')}. ${docs}`, details };
+      }
+      if (serviceSet) {
+        return { severity: 'pass', message: `images.crop is true in astroadmin.config.js and ${configFile} uses ${CROP_SERVICE_ENTRYPOINT} (${crops.keys.length} ${crops.keys.length === 1 ? 'image has' : 'images have'} a stored crop).` };
+      }
+      return { severity: 'skip', message: `The site does not enable image cropping (images.crop in astroadmin.config.js), and no image in ${IMAGE_METADATA_FILE} has a crop.` };
     },
   },
   {

@@ -326,6 +326,24 @@ export default {
 };
 ```
 
+## Images
+
+```javascript
+export default {
+  images: { crop: true },
+};
+```
+
+`images.crop` (default `false`) shows the crop control in the image library
+for uploads in `public/images/`: an editor drags a rectangle over the
+preview, and the crop is stored as percentages of the original in
+`public/images/.metadata.json`, beside the image's alt text and focal point.
+Turn it on only with `image.service.entrypoint: 'astroadmin/image-service'`
+in the Astro config, which applies the crop at build time; a stored crop on a
+site without that service fails the build, and so the publish check. The
+focal point needs no setting. See [Focal point](./optimised-images.md#focal-point)
+and [Crop](./optimised-images.md#crop).
+
 ## Translations
 
 ```javascript
