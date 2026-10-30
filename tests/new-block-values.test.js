@@ -138,5 +138,42 @@ await check('a new entry: a required nullable number is null, an optional one ab
   assertValid(entryZod, saved);
 });
 
+// --- Key order: a new object is saved in the order the form shows it ---------
+
+const literalBlockZod = z.object({ type: z.literal('s'), n: z.literal(5), label: z.string() });
+const literalBlock = toSchema(literalBlockZod);
+const literalPage = {
+  type: 'object',
+  properties: { title: { type: 'string' }, blocks: { type: 'array', blockTypes: { s: literalBlock }, items: { anyOf: [literalBlock] } } },
+  required: ['title', 'blocks'],
+};
+
+await check('a new block holding a number literal keeps `type` first and the schema order', () => {
+  const form = render(literalPage, { title: 'T', blocks: [] });
+  form.querySelector('.add-block-type').value = 's';
+  form.querySelector('.add-block-btn').click();
+  type(form, 'blocks[0].label', 'x');
+  assert.equal(JSON.stringify(fg.extractFormData(form, literalPage).blocks[0]), '{"type":"s","n":5,"label":"x"}');
+});
+
+await check('a new entry holding a number literal keeps the schema order', () => {
+  const schema = toSchema(z.object({ title: z.string(), f: z.literal(5), tags: z.array(z.literal(1)) }));
+  const form = render(schema, {}, { bind: false });
+  type(form, 'title', 'X');
+  assert.equal(JSON.stringify(fg.extractFormData(form, schema)), '{"title":"X","f":5,"tags":[]}');
+});
+
+await check('a hidden schema field is saved in its schema place, under its own key even with a dot in it', () => {
+  const schema = {
+    type: 'object',
+    properties: { title: { type: 'string' }, 'a.b': { type: 'string', hidden: true }, 'c[0]': { type: 'number', hidden: true }, after: { type: 'string' } },
+    required: ['title', 'after'],
+  };
+  const stored = { title: 'T', 'a.b': 'kept', 'c[0]': 3, after: 'z' };
+  const form = render(schema, stored);
+  type(form, 'title', 'T2');
+  assert.equal(JSON.stringify(fg.extractFormData(form, schema)), JSON.stringify({ ...stored, title: 'T2' }));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

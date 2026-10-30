@@ -42,7 +42,6 @@ export function generateForm(schema, data = {}) {
   }
 
   const formHtml = [];
-  const hiddenHtml = [];
   const carriedAlts = carriedOverAlts(schema.properties || {}, data || {});
 
   for (const [fieldName, fieldSchema] of Object.entries(schema.properties || {})) {
@@ -52,9 +51,12 @@ export function generateForm(schema, data = {}) {
     // Hidden fields are rendered as hidden inputs to preserve data. JSON-encode
     // every value, not just objects: a hidden input has no type to read back, so a
     // plain-string encoding would return a number or boolean as "4" / "true".
+    // In the schema's place, so a new entry's keys keep the schema's order, and
+    // named by the key itself (data-literal-key): read as a path, a key such as
+    // `a.b` was saved as `{a: {b}}`.
     if (fieldSchema.hidden) {
       if (value !== undefined && value !== null) {
-        hiddenHtml.push(`<input type="hidden" name="${fieldName}" value="${jsonAttr(value)}" data-json="true">`);
+        formHtml.push(`<input type="hidden" name="${escapeHtml(fieldName)}" value="${jsonAttr(value)}" data-json="true" data-literal-key>`);
       }
       continue;
     }
@@ -67,8 +69,7 @@ export function generateForm(schema, data = {}) {
     formHtml.push(fieldHtml);
   }
 
-  // Add hidden fields at the start
-  return hiddenHtml.join('\n') + '\n' + formHtml.join('\n');
+  return formHtml.join('\n');
 }
 
 /**
@@ -507,6 +508,20 @@ function generateField(name, rawSchema, value, path = '', ctx = {}) {
     `;
   }
 
+  // A fixed set of literals (a union of z.literal, or an enum of numbers):
+  // a select whose options keep their type. Before the number box, which
+  // would take any number for zod 3's `{type: 'number', enum: [1, 2]}`.
+  const choices = literalChoices(schema);
+  if (choices) {
+    if (nullable && !choices.includes(null)) choices.push(null);
+    return `
+      <div class="form-group">
+        <label for="${id}" class="form-label">${getFieldLabel(name, schema)}</label>
+        ${literalSelect(fullPath, choices, value, `id="${id}" class="form-input"`)}
+      </div>
+    `;
+  }
+
   // `integer` (z.number().int()) as well as `number`: the element must be
   // type="number" for extractFields to save a number rather than the string "4".
   if (isNumericType(schema.type)) {
@@ -739,6 +754,76 @@ function nullableBooleanSelect(fullPath, value, attributes) {
 }
 
 /**
+ * The values a field may take when its schema is a fixed set of literals
+ * that a plain (string) select cannot carry: a union of literals (zod 4: an
+ * `anyOf` of `const` members, nested unions and `null` included) or an enum
+ * holding anything but strings (zod 3's shape for a union of literals, zod
+ * 4's `z.literal([1, 2])`). Null for anything else, a string-only enum
+ * included: that is the plain select.
+ * @param {object} schema - the field's schema, nullable unwrapped
+ * @returns {?Array<*>}
+ */
+function literalChoices(schema) {
+  if (Array.isArray(schema?.enum)) {
+    return schema.enum.some((choice) => typeof choice !== 'string') ? [...schema.enum] : null;
+  }
+  const union = schema?.anyOf || schema?.oneOf;
+  if (!Array.isArray(union) || union.length === 0 || schema.type !== undefined) return null;
+  const choices = [];
+  for (const member of union) {
+    if (member?.const !== undefined) choices.push(member.const);
+    else if (member?.type === 'null') choices.push(null);
+    else if (Array.isArray(member?.enum)) choices.push(...member.enum);
+    else if (member?.anyOf || member?.oneOf) {
+      const inner = literalChoices(member);
+      if (inner === null) return null;
+      choices.push(...inner);
+    } else return null;
+  }
+  return choices;
+}
+
+/** Whether two JSON values are the same value. */
+function sameJsonValue(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * A select over a fixed set of literal values, each option's value its JSON
+ * (`1`, `"a"`, `null`), read back with its type (data-value-type="json"):
+ * as text, a number saved as "1". Null, when allowed, is "Not set" and comes
+ * first. A stored value that is not a choice is shown as its own option, so
+ * the select shows what is stored rather than the first choice. With no
+ * value (a new entry, block or item), "Choose..." is selected, an empty
+ * option read as nothing chosen: the first literal would be a value nobody
+ * chose.
+ * @param {string} fullPath - the control's name
+ * @param {Array<*>} choices - see literalChoices
+ * @param {*} value - the stored value
+ * @param {string} attributes - the rest of the element's attributes (id, class)
+ */
+function literalSelect(fullPath, choices, value, attributes) {
+  const ordered = choices.includes(null) ? [null, ...choices.filter((choice) => choice !== null)] : choices;
+  const label = (choice) => {
+    if (choice === null) return 'Not set';
+    if (typeof choice === 'string') return choice === '' ? '(empty)' : formatLabel(choice);
+    return String(choice);
+  };
+  const known = ordered.some((choice) => sameJsonValue(choice, value));
+  let stored = '';
+  if (value !== undefined && value !== null && !known) {
+    stored = `<option value="${jsonAttr(value)}" selected>${escapeHtml(displayText(value))}</option>`;
+  } else if (!known) {
+    stored = '<option value="" selected>Choose...</option>';
+  }
+  return `
+        <select name="${fullPath}" ${attributes} data-value-type="json">
+          ${stored}${ordered.map((choice) => `
+          <option value="${jsonAttr(choice)}" ${known && sameJsonValue(choice, value) ? 'selected' : ''}>${escapeHtml(label(choice))}</option>`).join('')}
+        </select>`;
+}
+
+/**
  * Generate blocks field (array with discriminated union)
  */
 function generateBlocksField(name, schema, value, fullPath, idPrefix = '') {
@@ -899,6 +984,22 @@ function generateArrayItem(arrayPath, rawItemSchema, value, index, idPrefix = ''
   // "true" and fails validation. A nullable item is marked as a nullable field is
   // (generateField), so a cleared one saves null rather than ''.
   const nullable = isNullableSchema(rawItemSchema);
+  // A list of one literal (z.array(z.literal(5))): each item can only be
+  // that value, so it is shown as text, not offered as a box to type
+  // another number into. It rides as JSON, so it keeps its type; the list's
+  // own add, remove and reorder still work.
+  if (itemSchema?.const !== undefined) {
+    const shown = value === undefined || value === null ? itemSchema.const : value;
+    return `
+      <span class="array-item-input array-item-fixed">${escapeHtml(displayText(shown))}</span>
+      <input type="hidden" name="${path}" value="${jsonAttr(itemSchema.const)}" data-json="true" data-schema-const>
+    `;
+  }
+  const choices = literalChoices(itemSchema);
+  if (choices) {
+    if (nullable && !choices.includes(null)) choices.push(null);
+    return literalSelect(path, choices, value, 'class="array-item-input form-input"');
+  }
   if (itemSchema?.type === 'boolean' && nullable) {
     return nullableBooleanSelect(path, value, 'class="array-item-input form-input"');
   }
@@ -1653,6 +1754,8 @@ function extractValues(container, schema) {
     });
   });
 
+  orderLikeForm(container, data, kept);
+
   // A const input the stored value was not put back for carries the schema's
   // value, not the editor's: cleanup writes it only where the key is required.
   const constants = new Set();
@@ -1737,8 +1840,68 @@ function renderedKeys(container) {
  */
 export function extractFields(container) {
   const data = readFields(container);
-  applyOriginalValues(container, data);
+  orderLikeForm(container, data, applyOriginalValues(container, data));
   return data;
+}
+
+/** Set an own, enumerable key, whatever its name (`__proto__` included). */
+function defineOwn(object, key, value) {
+  Object.defineProperty(object, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/**
+ * Put every object's keys in the order the form shows them. readFields reads
+ * in passes (JSON inputs, galleries, card lists, then the rest), so a key
+ * read in an early pass came first: a new block holding z.literal(5) saved
+ * `{"n": 5, "type": "s", ...}`, and a new entry `{"f": 5, "title": ...}`.
+ * A stored entry is put back in its own order by the server (orderLike), but
+ * a new object is written as sent. A value put back as stored (`restored`)
+ * keeps its own order inside; keys the form does not show keep theirs, after
+ * the ones it does.
+ * @param {HTMLElement} container
+ * @param {object} data - the value read (reordered in place)
+ * @param {Set<string>} restored - paths given their stored values
+ */
+function orderLikeForm(container, data, restored) {
+  /** @type {Map<string, string[]>} parent path (segments joined by \u0000) -> child keys, in form order */
+  const order = new Map();
+  const note = (segments) => {
+    let parent = '';
+    for (const segment of segments) {
+      if (!order.has(parent)) order.set(parent, []);
+      const keys = order.get(parent);
+      if (!keys.includes(segment)) keys.push(segment);
+      parent = `${parent}\u0000${segment}`;
+    }
+  };
+  container.querySelectorAll('[name], [data-field], [data-object-field]').forEach((element) => {
+    const name = element.getAttribute('name');
+    if (name !== null) {
+      note(element.hasAttribute('data-literal-key') ? [name] : name.split(/\.|\[|\]/).filter(Boolean));
+      return;
+    }
+    const path = element.getAttribute('data-field') ?? element.getAttribute('data-object-field');
+    if (path) note(path.split(/\.|\[|\]/).filter(Boolean));
+  });
+
+  const reorder = (value, parent, path) => {
+    if (path && restored.has(path)) return;
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => reorder(item, `${parent}\u0000${index}`, `${path}[${index}]`));
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    const wanted = order.get(parent) || [];
+    const keys = Object.keys(value);
+    const sorted = [...wanted.filter((key) => keys.includes(key)), ...keys.filter((key) => !wanted.includes(key))];
+    const entries = sorted.map((key) => [key, value[key]]);
+    for (const key of keys) delete value[key];
+    for (const [key, child] of entries) {
+      defineOwn(value, key, child);
+      reorder(child, `${parent}\u0000${key}`, path ? `${path}.${key}` : key);
+    }
+  };
+  reorder(data, '', '');
 }
 
 /**
@@ -1752,11 +1915,14 @@ function readFields(container) {
   // Hidden fields carrying JSON
   // (by path: a non-string const can sit in a block or an object)
   container.querySelectorAll('input[type="hidden"][data-json="true"]').forEach(input => {
+    const put = input.hasAttribute('data-literal-key')
+      ? (value) => defineOwn(data, input.name, value)
+      : (value) => setNestedValue(data, input.name, value);
     try {
-      setNestedValue(data, input.name, JSON.parse(input.value));
+      put(JSON.parse(input.value));
     } catch (e) {
       console.error('Failed to parse JSON field:', input.name, e);
-      setNestedValue(data, input.name, input.value);
+      put(input.value);
     }
   });
 
@@ -1799,6 +1965,16 @@ function readFields(container) {
     if (input?.type === 'number') fieldValue = toNumber(value);
     else if (input?.type === 'date' || input?.type === 'datetime-local') fieldValue = dateControlValue(input, value);
     else if (input?.dataset?.valueType === 'boolean' && (value === 'true' || value === 'false')) fieldValue = value === 'true';
+    else if (input?.dataset?.valueType === 'json') {
+      // "Choose..." (see literalSelect): nothing chosen, left out as an empty
+      // number box is. An item of a list keeps its place.
+      if (value === '' && !key.endsWith(']')) {
+        setNestedValue(data, key, value);
+        deleteNestedValue(data, key);
+        continue;
+      }
+      fieldValue = parseJsonChoice(value);
+    }
     setNestedValue(data, key, nullableControlValue(binding, input, fieldValue));
   }
 
@@ -1820,6 +1996,15 @@ function readFields(container) {
   });
 
   return data;
+}
+
+/** A literal select's option value (see literalSelect), parsed back to its type. */
+function parseJsonChoice(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 /**
