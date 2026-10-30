@@ -1,7 +1,7 @@
 # Image focal point and non-destructive crop (#82)
 
-Status: BUILT and reviewed on main (2026-10-30), three review rounds; ready to
-release as 1.12.0. Commits 8f7cc57 (server), a3e2dc2 (doctor and docs), 0efe52a (image
+Status: RELEASED as 1.12.0 (2026-10-30, tag v1.12.0 at c8b9549; npm publish
+by James). Three review rounds. Commits 8f7cc57 (server), a3e2dc2 (doctor and docs), 0efe52a (image
 library), a8ad6a8 (CmsImage, site-files, image service), 681e66c (a stored
 crop stays visible and clearable with `images.crop` off). Every check was
 seen red first or by a mutant (the lanes' notes are in
