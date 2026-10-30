@@ -413,8 +413,9 @@ try {
   };
   const notPublished = ({ status, body }) => assert.equal(status, 502, JSON.stringify(body));
 
-  await step('a push over ssh (core.sshCommand)', () => publishVia('ssh://127.0.0.1:1/site.git'), notPublished);
-  await step('a push over HTTP asking for credentials (credential.helper, core.askPass)', () => publishVia(authUrl), notPublished);
+  // Fetch and push both (a push URL apart from the fetch URL is refused before anything runs: pushesElsewhere in publish.js).
+  await step('a fetch and push over ssh (core.sshCommand)', () => publishVia('ssh://127.0.0.1:1/site.git', { fetchToo: true }), notPublished);
+  await step('a fetch and push over HTTP asking for credentials (credential.helper, core.askPass)', () => publishVia(authUrl, { fetchToo: true }), notPublished);
   await step('a fetch and push over git:// (core.gitProxy)', () => publishVia('git://127.0.0.1:1/site.git', { fetchToo: true }), notPublished);
 
   await step('the commit route (commit, rebase onto a moved remote, push)', async () => {
@@ -429,7 +430,7 @@ try {
 
   await step('a push to an ext:: URL the site config allows', async () => {
     git(projectRoot, 'config', 'protocol.ext.allow', 'always');
-    git(projectRoot, 'remote', 'set-url', '--push', 'origin', `ext::sh -c ${path.join(plants, 'ext-transport').replaceAll(' ', '% ')}`);
+    git(projectRoot, 'remote', 'set-url', 'origin', `ext::sh -c ${path.join(plants, 'ext-transport').replaceAll(' ', '% ')}`);
     assert.equal((await save('home', 'Home (ext)')).status, 200);
     return request('POST', '/api/publish', { message: 'Ext push' });
   }, ({ status, body }) => {
