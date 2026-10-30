@@ -94,18 +94,32 @@ function directoriesHoldingAstroFiles(dir, found = new Set()) {
  * @param {string} source
  * @param {string} target
  * @param {Set<string>} astroDirectories - from directoriesHoldingAstroFiles
+ * @param {string|null} [mirrorRoot] - a directory `target`'s tree mirrors at
+ *   the same relative place: a relative link in `source` that stays inside
+ *   it is kept relative, so it reaches the mirror's copy (pnpm links a
+ *   package's dependencies to their store directories this way)
  */
-function linkOrMirror(source, target, astroDirectories) {
+function linkOrMirror(source, target, astroDirectories, mirrorRoot = null) {
+  const stat = fs.lstatSync(source);
   if (astroDirectories.has(source)) {
     fs.mkdirSync(target);
     for (const entry of fs.readdirSync(source)) {
-      linkOrMirror(path.join(source, entry), path.join(target, entry), astroDirectories);
+      linkOrMirror(path.join(source, entry), path.join(target, entry), astroDirectories, mirrorRoot);
     }
-  } else if (source.endsWith('.astro') && fs.lstatSync(source).isFile()) {
+  } else if (source.endsWith('.astro') && stat.isFile()) {
     fs.copyFileSync(source, target);
+  } else if (mirrorRoot && stat.isSymbolicLink() && !path.isAbsolute(fs.readlinkSync(source))
+    && isInside(mirrorRoot, path.resolve(path.dirname(source), fs.readlinkSync(source)))) {
+    fs.symlinkSync(fs.readlinkSync(source), target);
   } else {
     fs.symlinkSync(source, target);
   }
+}
+
+/** Whether `candidate` is `dir` or below it (both absolute). */
+function isInside(dir, candidate) {
+  const relative = path.relative(dir, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 /**
@@ -127,18 +141,20 @@ function linkOrMirror(source, target, astroDirectories) {
  * so every package still has one instance.
  *
  * A package that is itself a link (pnpm: node_modules/<name> points into the
- * node_modules/.pnpm store) is followed to its real directory. One inside
- * this node_modules is mirrored at that real place, the store's dot-directory
- * included as far as needed, so its own dependencies beside it in the store
- * still resolve; the top-level link then points at the mirror.
+ * node_modules/.pnpm store) is followed to its real directory. One into a
+ * store (a dot-directory of this node_modules) points at the same place in
+ * the worktree's copy of that store, which is mirrored as a whole: real
+ * directories down to every .astro file of every store package (a
+ * dependency reached only from another store package ships components too),
+ * links for the rest, and the store's relative links kept relative so a
+ * package's dependencies beside it resolve to the copy.
  */
 async function linkNodeModules(sourceDir, targetDir) {
   fs.mkdirSync(targetDir, { recursive: true });
   const realSourceDir = fs.realpathSync(sourceDir);
-  // Directories inside a skipped dot-directory (pnpm's .pnpm store) that are
-  // mirrored all the same, because a package linked from the top level
-  // ships .astro files there.
-  const storeDirectories = new Set();
+  // Dot-directories of this node_modules that top-level packages link into
+  // (pnpm's .pnpm store); the other dot-directories are left out (above).
+  const stores = new Set();
 
   const linkPackage = (source, target) => {
     const stat = fs.lstatSync(source);
@@ -147,26 +163,23 @@ async function linkNodeModules(sourceDir, targetDir) {
       return;
     }
     const real = stat.isSymbolicLink() ? realDirectoryOrNull(source) : null;
+    const inside = real ? path.relative(realSourceDir, real) : '';
+    if (real && isInside(realSourceDir, real) && inside.split(path.sep)[0].startsWith('.')) {
+      // Into a store: the link points at the same place in the worktree's
+      // copy of the store, so its dependencies (pnpm puts them beside it,
+      // linked relatively) are found where the store's copy has them.
+      stores.add(path.join(realSourceDir, inside.split(path.sep)[0]));
+      fs.symlinkSync(path.join(targetDir, inside), target);
+      return;
+    }
     const astroDirectories = real ? directoriesHoldingAstroFiles(real) : new Set();
     if (astroDirectories.size === 0) {
       fs.symlinkSync(source, target);
       return;
     }
-    // A linked package with .astro files (pnpm, or a link to another
-    // package). Inside this node_modules, the real directory is mirrored
-    // where it is, so the package's own dependencies (pnpm puts them beside
-    // it in the store) still resolve, and the top-level link points there.
-    const inside = path.relative(realSourceDir, real);
-    if (!inside.startsWith('..') && !path.isAbsolute(inside)) {
-      const [first] = inside.split(path.sep);
-      if (first.startsWith('.')) {
-        let ancestor = real;
-        while (ancestor !== realSourceDir) {
-          storeDirectories.add(ancestor);
-          ancestor = path.dirname(ancestor);
-        }
-        for (const directory of astroDirectories) storeDirectories.add(directory);
-      }
+    if (isInside(realSourceDir, real)) {
+      // A link to another package of this node_modules, which is linked or
+      // mirrored at the same place.
       fs.symlinkSync(path.join(targetDir, inside), target);
       return;
     }
@@ -188,11 +201,14 @@ async function linkNodeModules(sourceDir, targetDir) {
     }
   }
 
-  // Only the parts of a store that lead to .astro files are real directories
-  // (everything else in them is linked); the rest of the store is not linked.
-  for (const entry of fs.readdirSync(realSourceDir)) {
-    const storeRoot = path.join(realSourceDir, entry);
-    if (storeDirectories.has(storeRoot)) linkOrMirror(storeRoot, path.join(targetDir, entry), storeDirectories);
+  // Each store a top-level package links into is copied as links: every
+  // directory on the way to an .astro file in ANY of its packages is real (a
+  // package reached only from another store package, as its dependency, can
+  // ship components too), everything else links to the live store, and the
+  // store's own relative links stay relative, so they reach the copy. The
+  // live store is never written. A store with no .astro file is one link.
+  for (const storeRoot of stores) {
+    linkOrMirror(storeRoot, path.join(targetDir, path.basename(storeRoot)), directoriesHoldingAstroFiles(storeRoot), realSourceDir);
   }
 }
 

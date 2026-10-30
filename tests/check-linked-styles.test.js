@@ -23,7 +23,9 @@
  * CmsVideo) and `widgets` (a component with a <style> and a bundled
  * <script>, one level down), and one pnpm-style package: `pnpm-widget` is a
  * link into `node_modules/.pnpm/pnpm-widget@1.0.0/node_modules/`, where its
- * own dependency `pnpm-dep` sits beside it (reachable from nowhere else).
+ * own dependency `pnpm-dep` sits beside it (reachable from nowhere else)
+ * and ships a styled component of its own (`Dep.astro`, used by the
+ * widget), which the check must mirror too.
  * The check must pass, the built page must carry the components' markup,
  * CSS and script (so the build really used them), and the live packages,
  * the store and node_modules' own entries must be left as they were.
@@ -53,6 +55,8 @@ const WIDGET_SCRIPT_MARKER = 'widget-script-ran';
 const PNPM_COLOUR = 'rgb(44, 55, 66)';
 const PNPM_COLOUR_BUILT = '#2c3742';
 const PNPM_DEP_MARKER = 'from-the-pnpm-dependency';
+const PNPM_DEP_COLOUR = 'rgb(1, 2, 3)';
+const PNPM_DEP_COLOUR_BUILT = '#010203';
 
 function git(cwd, ...args) {
   return execFileSync('/usr/bin/git', args, { cwd, encoding: 'utf-8' }).trim();
@@ -147,14 +151,18 @@ const { label } = Astro.props;
   }));
   writeFile(pnpmPackageDir, 'PnpmWidget.astro', `---
 import { greeting } from 'pnpm-dep';
+import Dep from 'pnpm-dep/Dep.astro';
 ---
-<p class="pnpm-widget">{greeting}</p>
+<p class="pnpm-widget">{greeting}</p><Dep />
 <style>
   .pnpm-widget { color: ${PNPM_COLOUR}; }
 </style>
 `);
   const pnpmDepDir = path.join(pnpmStore, 'pnpm-dep@1.0.0', 'node_modules', 'pnpm-dep');
-  writeFile(pnpmDepDir, 'package.json', JSON.stringify({ name: 'pnpm-dep', version: '1.0.0', type: 'module', exports: './index.js' }));
+  writeFile(pnpmDepDir, 'package.json', JSON.stringify({ name: 'pnpm-dep', version: '1.0.0', type: 'module', exports: { '.': './index.js', './Dep.astro': './Dep.astro' } }));
+  // A styled component in the dependency too: reachable only through the
+  // store, never from a top-level link.
+  writeFile(pnpmDepDir, 'Dep.astro', `<span class="dep-astro">dep</span>\n<style>.dep-astro { color: ${PNPM_DEP_COLOUR}; }</style>\n`);
   writeFile(pnpmDepDir, 'index.js', `export const greeting = '${PNPM_DEP_MARKER}';\n`);
   // As pnpm links them: relative links, the dependency reachable only from beside the package.
   fs.symlinkSync('../../pnpm-dep@1.0.0/node_modules/pnpm-dep', path.join(pnpmStore, 'pnpm-widget@1.0.0', 'node_modules', 'pnpm-dep'));
@@ -219,6 +227,13 @@ import PnpmWidget from 'pnpm-widget/PnpmWidget.astro';
     const rule = built.match(/\.pnpm-widget\[data-astro-cid-[a-z0-9]+\]\{color:([^}]+)\}/);
     assert.ok(rule, "the PnpmWidget's <style> is in the build");
     assert.strictEqual(rule[1], PNPM_COLOUR_BUILT);
+  });
+
+  await check("the pnpm package's own dependency's styled component built (a store package, not linked from the top)", () => {
+    assert.match(built, /<span class="dep-astro[^"]*"[^>]*>dep<\/span>/, 'Dep rendered');
+    const rule = built.match(/\.dep-astro\[data-astro-cid-[a-z0-9]+\]\{color:([^}]+)\}/);
+    assert.ok(rule, "Dep's <style> is in the build");
+    assert.strictEqual(rule[1], PNPM_DEP_COLOUR_BUILT);
   });
 
   await check('the live packages (and the store) are left as they were', () => {
