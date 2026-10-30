@@ -210,7 +210,13 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
     // includeIf on the git directory can configure a filter, or the
     // attributes using one, for worktrees only, and the rebase and the
     // check run in worktrees).
-    if (await filterDriverInUse(git) || await inLinkedWorktreeView(git, filterDriverInUse)) {
+    // A view that cannot be made (no worktree can be added) asks nothing:
+    // the rebase and the check need worktrees too, and fail on their own.
+    const inWorktreeView = () => inLinkedWorktreeView(git, filterDriverInUse).catch((error) => {
+      console.error('Could not read the config as a linked worktree sees it:', error.message);
+      return null;
+    });
+    if (await filterDriverInUse(git) || await inWorktreeView()) {
       // Logged with the driver's name; the editor gets a fixed sentence.
       prepared.blocked = true;
       prepared.blockedReason = 'filter';
@@ -248,15 +254,19 @@ async function inLinkedWorktreeView(git, task) {
   if (!head) return null;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-view-'));
   const worktreeDir = path.join(tempDir, 'worktree');
+  let added = false;
   try {
     await git.raw(['worktree', 'add', '--quiet', '--no-checkout', '--detach', worktreeDir, head]);
+    added = true;
     const worktreeGit = gitClientAt(worktreeDir);
     await worktreeGit.raw(['read-tree', head]);
     return await task(worktreeGit);
   } finally {
-    await git.raw(['worktree', 'remove', '--force', worktreeDir]).catch(() => {});
+    // Only what this added is cleaned up (a prune also removes an empty
+    // worktrees/ folder that is not ours to touch).
+    if (added) await git.raw(['worktree', 'remove', '--force', worktreeDir]).catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
-    await git.raw(['worktree', 'prune']).catch(() => {});
+    if (added) await git.raw(['worktree', 'prune']).catch(() => {});
   }
 }
 
