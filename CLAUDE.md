@@ -245,7 +245,10 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   is a select whose option values are JSON, read back typed (`data-value-type="json"`),
   with "Not set" for null, a stored non-choice shown as its own option, and "Choose..."
   (left out) with no value; a list of one literal is fixed text; untouched values
-  round-trip byte-identically; a string enum is the plain select. <1 s.
+  round-trip byte-identically; a string enum is the plain select. A NEW block or card
+  starts a literal union on "Choose..." (createEmptyBlock/createEmptyArrayItem leave it
+  absent; it was seeded `''`/`0`, shown as chosen and saved), "Choose..." is read as
+  absent, never `""`, for a required key too, and a `''` literal is its own option. <1 s.
 - `bun tests/unique-ids.test.js` — no id repeats in the document: nested blocks, after a
   delete and adds, and with the item modal open. <1 s.
 - `bun tests/nested-array-indexes.test.js` — lists inside list items (#56): Add counts the
@@ -474,8 +477,12 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   dry-run deploy is "nothing was uploaded" (info), a skipped deploy no deploy. A build or
   deploy that fails after the git step (a 200 with `success:false`, captured from the real
   server) goes through `showPublishResult` and says whether the changes reached the
-  repository, that the build/deploy failed and nothing is live, as an error toast that
-  stays 30 s; never "Failed to publish".
+  repository, that the build/deploy failed, as an error toast that stays 30 s. After a
+  PUSH a failed build or deploy here is never called "not live" (a build-on-push host may
+  still publish); every failure body with `committed: true` (409, 422, 502, build/deploy)
+  refreshes the Changes badge; a refusal message with its own lead-in ("Nothing was
+  published", "Your changes...", "Publishing failed") is shown as written, never after
+  "Failed to publish:". Run against the server's real body functions.
 - `bun tests/error-paths.test.js` — API errors send a fixed, route-specific message, over
   HTTP: an image() preview whose file vanishes after its stat() (sendFile's callback, not the
   error middleware), an unreadable `/images` file (the app error middleware), upload, delete,
@@ -838,8 +845,10 @@ queue, so the old body is never written back.
   local paths are served under it; a value that is not an .mp4/.webm path or URL (a typed
   bare name, a YouTube page) fails the build by name. A video is found on disk
   (`existsInPublicExactCase` in `components/site-files.js`, case-exact in every folder and
-  file name even on macOS, the path before any `?`/`#` so `#t=5` is kept, and a symlink
-  resolving outside public/ counts as missing), never
+  file name even on macOS, the path before any `?`/`#` so `#t=5` is kept, and a FILE that
+  is a symlink resolving outside both public/ and its own folder counts as missing, while
+  a linked folder such as `public/images -> /srv/shared/images` is followed; a poster's
+  `?v=2`/`#x` is checked without the suffix and kept on the URL), never
   through `import.meta.glob`, whose entries made Vite emit every video again under
   `_astro/` (#90): the build's `_astro/` holds no `.mp4`/`.webm`. ~20 s.
 

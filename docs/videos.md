@@ -86,10 +86,14 @@ it from a small script:
   poster is resized to `posterWidth` (default 1920) and encoded as WebP.
 - **Missing files fail the build**, naming the content value, as
   `CmsImage` does. A file counts only with the exact case of every folder and
-  file name (as a case-sensitive server serves it). A video file that is
-  itself a symlink pointing outside the site's `public/` folder is refused;
-  a symlinked folder (a shared `public/images`) is fine. A `?query` or `#t=5` after a local path
-  is kept on the `<source>` and is not part of the file name. In `astro dev` a
+  file name (as a case-sensitive server serves it). A FILE that is itself a
+  symlink counts as missing when it resolves outside both `public/` and the
+  folder it sits in (the build would publish whatever it points at); a linked
+  FOLDER is followed, so a deploy layout such as
+  `releases/N/public/images -> /srv/shared/images` builds. A `?query` or
+  `#t=5` after a local video or poster path is not part of the file name: the
+  file is checked without it, and it is kept on the URL (on the optimised
+  poster too). In `astro dev` a
   file uploaded after the server started is used as it is.
 - A local path is served under the site's `base`: `/images/loop.mp4` is
   requested as `/blog/images/loop.mp4` with `base: '/blog'`.
