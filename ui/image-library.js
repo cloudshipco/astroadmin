@@ -23,6 +23,14 @@ let forAstroImage = false;
 let libraryKind = 'image';
 /** @type {IntersectionObserver|null} the grid's lazy video thumbnails */
 let thumbnailObserver = null;
+// Whether the site renders crops (`/api/config` `imageCrop`, read at each
+// opening). Without the crop service a crop would be stored and never shown,
+// so the crop controls and the drag exist only when it is on; a click still
+// sets the focal point.
+let cropEnabled = false;
+
+/** A pointer press on the focal box moves this far (px) before it is a drag, not a click. */
+const DRAG_THRESHOLD = 4;
 
 /**
  * The words and file types for each kind. The caps and refusals are the
@@ -96,11 +104,26 @@ export async function openImageLibrary(onSelect, currentValue = '', { astroImage
   modal.classList.remove('hidden');
   pushModal(modal, closeImageLibrary);
 
-  // Load images
-  await loadImages();
+  // Load images, and whether this site renders crops
+  await Promise.all([loadImages(), loadCropSetting()]);
   // The field's current file, highlighted by renderImages, is a selection:
   // the footer names it and Select takes it.
   selectImage(selectedImageUrl);
+}
+
+/**
+ * Read `imageCrop` from /api/config. Any failure (an older server, a stubbed
+ * fetch) leaves crops off: the panel then offers the focal point only.
+ */
+async function loadCropSetting() {
+  cropEnabled = false;
+  try {
+    const response = await fetch('/api/config');
+    const data = await readJson(response);
+    cropEnabled = data.imageCrop === true;
+  } catch (error) {
+    console.error('Error loading config:', error);
+  }
 }
 
 /**
@@ -130,6 +153,7 @@ function labelModal(modal) {
   modal.querySelector('[data-select]').disabled = true;
   modal.querySelector('[data-selected-info]').textContent = `No ${noun} selected`;
   modal.querySelector('[data-alt-field]').classList.add('hidden');
+  renderFocalPanel(null);
 }
 
 /**
@@ -161,6 +185,20 @@ function createModal() {
         </div>
         <div class="image-library-empty hidden" data-empty>
           <p>No images yet. Upload your first image above.</p>
+        </div>
+      </div>
+      <div class="image-focal hidden" data-focal-panel data-crop-enabled="false">
+        <div class="image-focal-stage">
+          <div class="image-focal-box" data-focal-box>
+            <img class="image-focal-image" data-focal-image alt="" draggable="false">
+            <div class="image-focal-crop hidden" data-crop-rect></div>
+            <div class="image-focal-marker hidden" data-focal-marker></div>
+          </div>
+        </div>
+        <div class="image-focal-controls">
+          <span class="image-focal-hint" data-focal-hint>Click to set the focal point</span>
+          <button type="button" class="btn btn-sm btn-ghost hidden" data-reset-focal>Reset focal point</button>
+          <button type="button" class="btn btn-sm btn-ghost hidden" data-clear-crop>Clear crop</button>
         </div>
       </div>
       <div class="image-modal-footer">
@@ -252,6 +290,11 @@ function setupModalEvents(modal) {
       saveAltText();
     }
   });
+
+  // Focal point and crop: a click on the preview sets the point, a drag the crop
+  setupFocalPointer(modal.querySelector('[data-focal-box]'));
+  modal.querySelector('[data-reset-focal]').addEventListener('click', () => saveFocalPoint(null));
+  modal.querySelector('[data-clear-crop]').addEventListener('click', () => saveCrop(null));
 
   // Grid click delegation (for selecting and deleting images)
   const grid = modal.querySelector('[data-grid]');
@@ -388,7 +431,207 @@ function selectImage(url) {
     // Alt text describes an image; a video has none to give here
     altField.classList.toggle('hidden', image.kind === 'video');
     altInput.value = image.alt || '';
+    renderFocalPanel(image);
   }
+}
+
+/**
+ * The focal point and crop panel is for a public upload that is an image:
+ * a src/assets image is not ours to annotate, an image() file renders
+ * through Astro's <Image>, which reads no metadata, and a video's frames
+ * would be moved by object-position.
+ */
+function hasFocalPanel(image) {
+  return Boolean(image) && image.source === 'uploads' && (image.kind || 'image') === 'image';
+}
+
+/** A percentage the listing or a pointer gave: a finite number from 0 to 100. */
+function isPercent(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+function isFocalPoint(point) {
+  return Boolean(point) && typeof point === 'object' && isPercent(point.x) && isPercent(point.y);
+}
+
+function isCrop(crop) {
+  return Boolean(crop) && typeof crop === 'object'
+    && isPercent(crop.x) && isPercent(crop.y) && isPercent(crop.width) && isPercent(crop.height)
+    && crop.width > 0 && crop.height > 0;
+}
+
+/**
+ * Show the panel for `image` (null, or an image it does not apply to, hides
+ * it) with its stored point and, when crops are on, its stored crop.
+ */
+function renderFocalPanel(image) {
+  const modal = document.getElementById('imageLibraryModal');
+  const panel = modal.querySelector('[data-focal-panel]');
+  const applies = hasFocalPanel(image);
+  panel.classList.toggle('hidden', !applies);
+  if (!applies) return;
+  const preview = panel.querySelector('[data-focal-image]');
+  // Set only on a change: resetting the same src restarts its load and blanks the box
+  if (preview.getAttribute('src') !== image.url) preview.src = image.url;
+  panel.dataset.cropEnabled = String(cropEnabled);
+  panel.querySelector('[data-focal-hint]').textContent = cropEnabled
+    ? 'Click to set the focal point; drag to crop'
+    : 'Click to set the focal point';
+  drawFocalPoint(panel, image.focalPoint);
+  drawCrop(panel, cropEnabled ? image.crop : null);
+}
+
+/** Draw the marker ring at `point` (percentages), or none. */
+function drawFocalPoint(panel, point) {
+  const marker = panel.querySelector('[data-focal-marker]');
+  const resetButton = panel.querySelector('[data-reset-focal]');
+  const shown = isFocalPoint(point);
+  marker.classList.toggle('hidden', !shown);
+  resetButton.classList.toggle('hidden', !shown);
+  if (!shown) return;
+  marker.style.left = `${point.x}%`;
+  marker.style.top = `${point.y}%`;
+  marker.dataset.x = String(point.x);
+  marker.dataset.y = String(point.y);
+}
+
+/** Draw the crop rectangle (its box-shadow shades the rest of the box), or none. */
+function drawCrop(panel, crop) {
+  const rect = panel.querySelector('[data-crop-rect]');
+  const clearButton = panel.querySelector('[data-clear-crop]');
+  const shown = isCrop(crop);
+  rect.classList.toggle('hidden', !shown);
+  clearButton.classList.toggle('hidden', !shown);
+  if (!shown) return;
+  rect.style.left = `${crop.x}%`;
+  rect.style.top = `${crop.y}%`;
+  rect.style.width = `${crop.width}%`;
+  rect.style.height = `${crop.height}%`;
+  rect.dataset.x = String(crop.x);
+  rect.dataset.y = String(crop.y);
+  rect.dataset.width = String(crop.width);
+  rect.dataset.height = String(crop.height);
+}
+
+/** A client position as percentages over the box (clamped, two decimals). */
+function percentagesIn(box, clientX, clientY) {
+  const bounds = box.getBoundingClientRect();
+  const percent = (offset, size) => Math.round(Math.min(Math.max(offset / size * 100, 0), 100) * 100) / 100;
+  return { x: percent(clientX - bounds.left, bounds.width), y: percent(clientY - bounds.top, bounds.height) };
+}
+
+/** The rectangle between two box positions, as percentages. */
+function cropBetween(start, end) {
+  const round = (value) => Math.round(value * 100) / 100;
+  return {
+    x: Math.min(start.x, end.x),
+    y: Math.min(start.y, end.y),
+    width: round(Math.abs(end.x - start.x)),
+    height: round(Math.abs(end.y - start.y)),
+  };
+}
+
+/**
+ * A press on the box: released within DRAG_THRESHOLD it is a click that sets
+ * the focal point; moved further it is a drag, which draws and saves a crop
+ * when crops are on and does nothing otherwise.
+ */
+function setupFocalPointer(box) {
+  const panel = box.closest('[data-focal-panel]');
+  let press = null;
+  const selected = () => currentImages.find(img => img.url === selectedImageUrl);
+  const restoreCrop = () => {
+    const image = selected();
+    drawCrop(panel, cropEnabled && image ? image.crop : null);
+  };
+
+  // The browser's own image drag would cancel the pointer sequence
+  box.addEventListener('dragstart', (e) => e.preventDefault());
+
+  box.addEventListener('pointerdown', (e) => {
+    if (press || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    press = { id: e.pointerId, clientX: e.clientX, clientY: e.clientY, start: percentagesIn(box, e.clientX, e.clientY), moved: false };
+    box.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  box.addEventListener('pointermove', (e) => {
+    if (!press || e.pointerId !== press.id) return;
+    if (!press.moved && Math.hypot(e.clientX - press.clientX, e.clientY - press.clientY) < DRAG_THRESHOLD) return;
+    press.moved = true;
+    if (cropEnabled) drawCrop(panel, cropBetween(press.start, percentagesIn(box, e.clientX, e.clientY)));
+  });
+
+  box.addEventListener('pointerup', (e) => {
+    if (!press || e.pointerId !== press.id) return;
+    const { moved, start } = press;
+    press = null;
+    if (box.hasPointerCapture(e.pointerId)) box.releasePointerCapture(e.pointerId);
+    if (!moved) {
+      saveFocalPoint(percentagesIn(box, e.clientX, e.clientY));
+      return;
+    }
+    if (!cropEnabled) return;
+    const crop = cropBetween(start, percentagesIn(box, e.clientX, e.clientY));
+    // A line is no crop (the server refuses a zero width or height)
+    if (crop.width === 0 || crop.height === 0) {
+      restoreCrop();
+      return;
+    }
+    saveCrop(crop);
+  });
+
+  box.addEventListener('pointercancel', (e) => {
+    if (!press || e.pointerId !== press.id) return;
+    press = null;
+    restoreCrop();
+  });
+}
+
+/**
+ * Save one metadata field of `image` through the same PUT as alt text, and
+ * keep the listing's copy in step; a failure is reported as alt text's is.
+ * @returns {Promise<boolean>} whether it was saved
+ */
+async function saveImageMetadata(image, patch, what) {
+  try {
+    const response = await fetch(`/api/images/${encodeURIComponent(image.filename)}/metadata`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await readJson(response);
+    if (data.success) {
+      Object.assign(image, patch);
+      return true;
+    }
+    alert(`Failed to save ${what}: ` + data.error);
+  } catch (error) {
+    console.error(`Error saving ${what}:`, error);
+    alert(`Error saving ${what}: ` + error.message);
+  }
+  return false;
+}
+
+/** Set (or with null, reset) the selected upload's focal point and save it. */
+async function saveFocalPoint(point) {
+  const image = currentImages.find(img => img.url === selectedImageUrl);
+  if (!hasFocalPanel(image)) return;
+  const panel = document.getElementById('imageLibraryModal').querySelector('[data-focal-panel]');
+  drawFocalPoint(panel, point);
+  await saveImageMetadata(image, { focalPoint: point }, 'focal point');
+  // Whatever was saved (or not), show the stored state, unless the editor has moved on
+  if (selectedImageUrl === image.url) renderFocalPanel(image);
+}
+
+/** Set (or with null, clear) the selected upload's crop and save it. */
+async function saveCrop(crop) {
+  const image = currentImages.find(img => img.url === selectedImageUrl);
+  if (!hasFocalPanel(image) || !cropEnabled) return;
+  const panel = document.getElementById('imageLibraryModal').querySelector('[data-focal-panel]');
+  drawCrop(panel, crop);
+  await saveImageMetadata(image, { crop }, 'crop');
+  if (selectedImageUrl === image.url) renderFocalPanel(image);
 }
 
 /**
@@ -504,6 +747,7 @@ async function deleteImage(filename) {
         const modal = document.getElementById('imageLibraryModal');
         modal.querySelector('[data-select]').disabled = true;
         modal.querySelector('[data-selected-info]').textContent = `No ${KINDS[libraryKind].noun} selected`;
+        renderFocalPanel(null);
       }
 
       // Reload images

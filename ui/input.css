@@ -1046,6 +1046,46 @@
     @apply flex gap-2;
   }
 
+  /* Focal point and crop panel (a public upload selected in the library):
+     the box wraps the rendered image exactly, so a percentage over the box
+     is a percentage over the image; the marker and rectangle are placed by
+     script and take no pointer events, so every press reaches the box. */
+  .image-focal {
+    @apply flex flex-col gap-2 px-6 py-3 border-t border-gray-200 shrink-0;
+  }
+
+  .image-focal-stage {
+    @apply flex justify-center;
+  }
+
+  .image-focal-box {
+    @apply relative inline-block overflow-hidden select-none cursor-crosshair bg-gray-100;
+    touch-action: none;
+  }
+
+  .image-focal-image {
+    @apply block w-auto h-auto max-w-full max-h-[220px];
+  }
+
+  .image-focal-marker {
+    @apply absolute w-5 h-5 rounded-full border-2 border-white ring-2 ring-primary-500 -translate-x-1/2 -translate-y-1/2 pointer-events-none;
+  }
+
+  .image-focal-crop {
+    @apply absolute border border-white pointer-events-none;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  }
+
+  /* As tall as its buttons before they appear: a button shown by a click or
+     mid-drag must not grow the panel and move the box under the pointer. */
+  .image-focal-controls {
+    @apply flex flex-wrap items-center gap-3 justify-center min-h-8;
+  }
+
+  .image-focal-hint {
+    @apply text-xs text-gray-500;
+  }
+
   .image-uploading {
     @apply flex items-center gap-2 text-sm text-gray-600;
   }

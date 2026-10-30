@@ -16,8 +16,9 @@
  * image-field-astro). Run those by name before a release. Every other
  * tests/*.test.js file is in FAST_TESTS below.
  *
- * One fast test needs a browser: image-serving checks in Chromium that an
- * uploaded SVG runs no script, and fails (never skips) without one. It uses
+ * Two fast tests need a browser: image-serving checks in Chromium that an
+ * uploaded SVG runs no script, and fails (never skips) without one, and
+ * image-focal-browser drives the library's focal point panel (~3 s). Both use
  * CHROMIUM_PATH, else a headless shell in Playwright's cache
  * (tests/chromium-path.js); get one with
  * `npx playwright-core install chromium-headless-shell`.
@@ -47,6 +48,7 @@ const FAST_TESTS = [
   'markdown-transforms', 'markdown-body-not-named', 'focus-editor-field',
   'api-basics', 'api-response', 'login-log', 'rate-limit', 'untrusted-proxy', 'trust-proxy-config', 'cross-origin', 'auth',
   'error-paths', 'image-serving', 'image-symlink', 'image-picker-astro', 'image-metadata',
+  'image-focal-browser',
   'video-upload', 'git-api', 'git-subdir', 'git-subdir-routes',
   'git-paths-scope', 'git-paths-commit', 'git-log-limit', 'git-environment', 'git-hardening', 'git-nested-repos', 'checkout-lock', 'publish-sync', 'publish-dirty-checkout', 'publish-filters', 'publish-force-push', 'publish-worktrees', 'publish-bodies',
   'publish-message', 'publish-api', 'publish-failure', 'publish-live-status',
