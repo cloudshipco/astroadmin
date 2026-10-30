@@ -56,6 +56,14 @@ loaded entry (never a new one); the item modal binds the item it was opened with
 surface that renders stored data must bind it, or every lossy value is rewritten on the next
 save. Edited controls still need their own rules: a cleared nullable saves null, a chosen
 reference saves its id, a real `z.date()` with a date-only value is a date input.
+The item modal saves the item it was opened with, with every top-level key it renders taken
+from what was read: a rendered key the read left out (an emptied optional, an empty number
+box, #61) is dropped, never brought back from the stored item; only keys the schema does not
+render are kept as stored (`extractItem`). A non-string `z.literal` rides as JSON
+(`data-json`) so it saves with its type; a textarea's markup content goes through
+`textareaContent` (the parser drops one newline after `<textarea>`), or set `.value` in
+script. No element id may repeat: a control id is `idPrefix` + its path, and an element
+without a name carries no id (a reindex would not move it).
 Three corollaries. (1) **Cleanup (`cleanEmptyValues`) touches only what the DOM produced**:
 `applyOriginalValues` returns the paths it restored and cleanup skips them, and the items of
 a JSON-backed card list are final (the item modal saves through `extractItem`, the same
@@ -216,7 +224,16 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   least (no 100px floor in the renderer, `autoGrowTextarea` or the CSS); setup fits each
   once; borders are counted; an unlaid-out one keeps its rows. `.meta({ multiline:
   false|true })` picks an input or a textarea, and a stored value with a line break stays a
-  textarea. <1 s.
+  textarea; a block's textareas are refit when it is opened or added. <1 s.
+- `bun tests/modal-item-save.test.js` — what the item modal saves, through the card's Edit
+  button and Done: a cleared number (optional, required, in an object, in a top-level card
+  list) is gone, a cleared nullable is null, unrendered properties are kept; a new block or
+  card starts an optional number empty. <1 s.
+- `bun tests/legacy-alt.test.js` — alt text stored under the picker's old `<image>Alt` key
+  moves to the declared alt (#88 follow-up): shown in the declared box, saved there by a
+  title-only edit (top level, item modal, block); a declared alt with text is left alone. <1 s.
+- `bun tests/unique-ids.test.js` — no id repeats in the document: nested blocks, after a
+  delete and adds, and with the item modal open. <1 s.
 - `bun tests/nested-array-indexes.test.js` — lists inside list items (#56): Add counts the
   list's own items (`directItems`); every `label[for]` resolves to the control in its form
   group, on the form and in the item modal, after add/delete; references renumber through
@@ -274,9 +291,9 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   and dropped the new commit); an inherited `rebase.autoStash` leaves no markers; and a save
   arriving while a publish commits and moves the checkout waits, so it cannot land between
   the commit and the move to the rebased commit (`reset --keep`), where it would be lost;
-  likewise a save during `/api/git/pull` and an image-details update during publish's commit
-  (the details the rebase brings in survive); `/api/git/pull` waits for a publish's check
-  (the git lock, #59), and the commit route's refused check is a 422 that keeps the commit
+  likewise an image-details update during publish's commit (the details the rebase brings
+  in survive); the commit route waits for a publish's check (the git lock, #59), there is
+  no pull route (404), and the commit route's refused check is a 422 that keeps the commit
   local. Timed by a `git` wrapper first on the server's PATH (before/after one subcommand)
   and an armable `build.check` the test releases, never by git hooks (the server disables
   them) or sleeps, and each asserts the waiting request is still pending (~25 s). An upload in progress is
@@ -292,20 +309,31 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   modified file no longer blocks a publish onto a moved remote and stays byte-identical; a
   modified file the remote also changes, or an untracked file where the remote adds one, is
   a fixed path-free 409 (`localChangesBody`) leaving the branch, the local commit and the
-  file as they were. Red with `reset --hard` in place of `--keep`. ~17 s, in test:unit.
+  file as they were. Red with `reset --hard` in place of `--keep`. A commit the upstream
+  force-pushed away is not brought back (`--fork-point`), and a file staged as one version
+  and changed since refuses rather than lose its staged version. ~17 s, in test:unit.
+- `bun tests/publish-filters.test.js` — a site whose files go through a git filter (an
+  attribute naming `lfs`, configured or not, or a driver with a clean/smudge/process command
+  in any scope; tracked or new non-ignored files, anywhere in the repo) is refused by publish
+  and the commit route with a fixed 409 before anything is staged; an attribute naming an
+  unconfigured driver, or a configured driver nothing uses (git-lfs's global config),
+  publishes. `ls-files` attr magic does not descend into untracked directories, so new files
+  go through `check-attr`. ~3 s.
 - `bun tests/git-environment.test.js` — git's environment (#64), through a real publish:
   `GIT_AUTHOR_*`/`GIT_COMMITTER_*` set the commit identity over the repo's user.name,
   `GIT_SSH_COMMAND` carries the push (an ssh:// remote whose "ssh" is a script), and an
   ambient `GIT_DIR`/`GIT_WORK_TREE` redirects nothing. ~2 s.
 - `bun tests/git-hardening.test.js` — no code a site repo plants in its git config or hooks
   runs (#67): seven hooks, fsmonitor, a smudge/clean filter, textconv, diff.external, gpg
-  signing and an ext:: push URL each write a marker; the control shows each fires under
-  plain git; save, status, diff, show, revert, publish (including both worktrees), pull and
-  the commit route leave none. ~14 s.
+  signing, an ext:: push URL, a merge driver, upload-pack/receive-pack, core.sshCommand,
+  a credential helper, askpass and core.gitProxy each write a marker; the control shows each
+  fires under plain git; save, status, diff, show, revert, publish (including both
+  worktrees) and the commit route leave none. ~14 s.
 - `bun tests/check-linked-styles.test.js` — the publish check builds a site whose packages
   ship `.astro` components with a `<style>` and a `<script>` (the real CmsVideo, and one a
-  directory down), with the site and the check's TMPDIR under different top directories
-  (#89). ~2 s, not in test:unit.
+  directory down, and a pnpm-style link into `.pnpm`), with the site and the check's TMPDIR
+  under different top directories (#89); the live packages and store are unchanged.
+  ~2 s, not in test:unit.
 - `bun tests/checkout-lock.test.js` — `server/utils/checkout-lock.js`: writes share the
   checkout, the exclusive hold waits for running writes and later writes wait for it, a
   failure releases either, nested writes run (reentrant), the exclusive hold from inside a
@@ -337,12 +365,17 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   `{success, adapter, dryRun}` while rsync's "created directory <destination>" goes to the
   log, and a failed build carries the code sentences. ~2 s.
 - `bun tests/production-build.test.js` — Publish's production build runs through
-  `runCommand`: no admin secrets in its environment, killed with its process group at
-  `build.productionTimeoutMs`. ~2 s.
+  `runCommand`: no admin secrets in its environment (but `ASTROADMIN_DB`, which the db
+  store's loader reads), killed with its process group at `build.productionTimeoutMs`;
+  `runCommand` kills the group when the shell exits as well (a descendant that left the
+  group is waited for 2 s at most) and keeps the first and last halves of output past the
+  10 MB cap. ~4 s.
 - `bun tests/deploy.test.js` — rsync destinations `--delete` must not touch are refused
   (root, home and above, project and above, inside the project, dist and inside; remote `/`,
-  `~`, `..`), `allowDestructivePath: true` overrides; the key path and port reach a fake ssh
-  as single arguments through real rsync (#10).
+  `~`, `~name`, `..`), `allowDestructivePath: true` overrides; the key path and port reach a
+  fake ssh as single arguments through real rsync (#10); `user`/`host` are validated (rsync
+  hands `user@host` to ssh as one argument even after `--`), and a `host:path` in `path`
+  with no host is refused.
 - `bun tests/astro-bin.test.js` — the default build commands run the site's OWN installed
   astro (`server/utils/astro-bin.js`), never a package runner: with no astro installed the
   publish check and the production build refuse and a fake `bunx`/`npx` first on PATH is
@@ -397,7 +430,9 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   (a failed or slow host build, #54) or stays unreachable gets a plain warning that the
   changes were sent but could not be confirmed live, never a success tick. With nothing to
   poll (no publicUrl, or no page for the entry) a push is the same warning, never
-  "Published!" (`showPublishOutcome`); a commit with no remote is not green either.
+  "Published!" (`showPublishOutcome`); a commit with no remote is not green either; a
+  dry-run deploy is "nothing was uploaded" (info), a failed deploy an error, a skipped
+  deploy no deploy.
 - `bun tests/error-paths.test.js` — API errors send a fixed, route-specific message, over
   HTTP: an image() preview whose file vanishes after its stat() (sendFile's callback, not the
   error middleware), an unreadable `/images` file (the app error middleware), upload, delete,
@@ -430,7 +465,8 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   (exact own-key match), and every resolved file is checked for containment, through realpath,
   after its final name is built (`server/utils/glob-files.js`: `assertDeclaredCollection`,
   `assertSafeSlug`, `assertContainedPath`). `path.normalize` alone is not a guard: it turns
-  `/../../` into `/`. Refusals are 400s that name no server path.
+  `/../../` into `/`. Refusals are 400s that name no server path. `sanitizePath` refuses
+  `..` as a SEGMENT of the value as given (split on `/` and `\`), so `faq..old` is a name.
 - `bun tests/image-serving.test.js` — site files the admin serves on its own origin (`/images`,
   `/assets`, for editor thumbnails) carry `Content-Security-Policy: ...; sandbox` and `nosniff`,
   so an uploaded SVG opened directly runs no script with the editor's session. A response CSP
@@ -489,11 +525,9 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   siblings at the repo root (one, `src/content/pages/root-only.md`, has a site-relative
   name inside the git paths) and in `other/` (#68), over HTTP through the real app: status,
   diff (all, one file, since a commit, between commits), log, file-history, show, revert,
-  restore, pull, commit and publish name no sibling and no `site-a/` prefix, while the
-  site's own changes are listed site-relative. A rename into the site is `created`, one out
-  of it `deleted` (`scopeStatusRenames`); pull's files come from `git diff --numstat
-  --relative` between the HEADs either side of it (`scopedChangesBetween`), never from the
-  pull's diffstat (repo-root paths, `{other => site-a/...}` renames, `.../` truncation); the
+  restore, commit and publish name no sibling and no `site-a/` prefix, while the site's own
+  changes are listed site-relative (upstream commits are brought in with plain git). A
+  rename into the site is `created`, one out of it `deleted` (`scopeStatusRenames`); the
   log lists only commits touching the git paths. Every path in a git response goes through
   `scopeRepoPath`, or asks git for projectRoot-relative paths under the same pathspecs.
   6 of 9 checks red on the pre-fix code. ~3 s.
@@ -519,7 +553,13 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   a signed-in session's burst of 150 passes (own budget, `sessionMax`, keyed by a session
   digest); not signed in and every login attempt keep 100 per address; a 429 is JSON with
   Retry-After. Failed logins also have their own budget per address (`loginMax`, 10; a
-  success does not count): failure 11 is a 429 while an anonymous GET still passes.
+  success does not count): failure 11 is a 429 while an anonymous GET still passes. "Per
+  address" is per IPv4 address and per IPv6 /56 (`rateLimitKey`,
+  server/utils/client-address.js; an IPv4-mapped address counts as its IPv4 form), while
+  the auth.failed line logs the client's own address (`clientAddress`). By default
+  production trusts X-Forwarded-For only from a loopback peer (`trustProxy`/`TRUST_PROXY`,
+  express's forms): a non-loopback peer, simulated by overriding the accepted socket's
+  `remoteAddress`, is counted and logged by its own address whatever header it sends.
   `bun tests/api-response.test.js` — the dashboard's `readJson`
   (ui/api-response.js) turns any 429 or non-JSON body into a readable error, and no ui/
   file calls `.json()` itself. `bun tests/login-log.test.js` — a login logs a session
@@ -802,13 +842,20 @@ git-exec's settings; its private `gitClientAt` opens another worktree of the rep
 simple-git refuses `-C`); anything else uses git-exec's `runGit`/`runGitSync`; never
 `execFile('git')`. Both apply
 `HARDENING_CONFIG` (`core.hooksPath=/dev/null`, `core.fsmonitor=false`,
-`commit.gpgSign=false`, `protocol.ext.allow=never`) and `filterDriverOverrides` (every
-configured `filter.<name>` set to empty commands, `required=false`; LFS files are committed
-as their real bytes), because the site's code runs on the host and can write `.git/hooks`
-and `.git/config`. Every diff and show adds `NO_DIFF_PROGRAMS`. Only `GIT_ENVIRONMENT`'s
-variables reach git (simple-git 4 drops the other `GIT_*` ones); a new one an operator needs
-goes in that list. Never time a test with git hooks. Not covered yet: merge drivers,
-`core.sshCommand`, `credential.helper`, `url.*.insteadOf`.
+`commit.gpgSign=false`, `protocol.ext.allow=never`, `core.sshCommand=ssh`,
+`credential.helper=`, `core.askPass=`) and `namedCommandOverrides` (every configured
+`filter.<name>` set to empty commands with `required=false`, every `merge.<name>.driver` set
+to `git merge-file`), because the site's code runs on the host and can write `.git/hooks`
+and `.git/config`. Every fetch and push passes `--upload-pack`/`--receive-pack` (a `-c`
+cannot override those: git keeps the first value it reads), `GIT_PROXY_COMMAND` is empty by
+default and `GIT_TERMINAL_PROMPT=0`. The operator's `GIT_SSH_COMMAND` and `GIT_ASKPASS` are
+the only ways to supply ssh and HTTPS credentials (no credential helper, osxkeychain
+included). A site whose files go through a filter (LFS or any clean/smudge driver an
+attribute uses) is refused (409) rather than recommitted as raw bytes
+(`server/utils/filter-attributes.js`). Every diff and show adds `NO_DIFF_PROGRAMS`. Only
+`GIT_ENVIRONMENT`'s variables reach git (simple-git 4 drops the other `GIT_*` ones); a new
+one an operator needs goes in that list. Never time a test with git hooks. Not covered:
+`url.*.insteadOf`, `remote.<r>.vcs` (runs `git-remote-<x>` from the trusted PATH).
 
 ## Schema validation: saves warn, the site's own Astro gates the push
 
@@ -824,10 +871,14 @@ Two layers, deliberately unequal:
    else the site's own installed astro (`server/utils/astro-bin.js`), runs in a throwaway `git worktree` at HEAD, after the commit
    and after the commit is rebased onto the upstream (in that order: before the commit the
    saves are unstaged, #57). The rebase runs in a throwaway detached worktree
-   (`--no-autostash --no-update-refs`) and the live checkout is moved to its result with
+   (`--no-autostash --no-update-refs`, and `--fork-point` against the branch's
+   remote-tracking ref when the fetch moved it, as `pull --rebase` did, so a commit
+   force-pushed away upstream is not replayed) and the live checkout is moved to its result with
    `git reset --keep`, so uncommitted changes elsewhere in the repository do not block it
    (#83); `--keep` refuses, changing nothing, when an incoming change touches a locally
-   modified file or an untracked file is in the way (409, `localChangesBody`). Never a hard
+   modified file or an untracked file is in the way (409, `localChangesBody`); a file
+   outside the editor's paths staged as one version and changed since refuses too (`--keep`
+   would drop its staged version). Never a hard
    reset or checkout there. The commit and the rebase run in ONE exclusive
    checkout hold (`server/utils/checkout-lock.js`, `commitInCheckout`): every write to the
    checkout (content store writes, revert/restore, image writes) takes a shared hold, so a
@@ -835,7 +886,7 @@ Two layers, deliberately unequal:
    (`reset --keep`), or after HEAD is read (a moved HEAD aborts the publish). Inside the hold, an unfinished rebase,
    merge or unmerged files refuse the publish (409) before anything is staged: they are
    someone else's, and aborting an earlier rebase resets to ITS starting point. Only our own
-   conflicting rebase is aborted (409). `/api/git/pull` takes the exclusive hold too. Multer
+   conflicting rebase is aborted (409). There is no pull route. Multer
    streams an upload into its own temporary folder OUTSIDE the site, and only the complete
    file is installed under a hold (`installUpload`: copy to a hidden name, rename). Writing
    into the site as the body arrived let a publish commit 64 KB of a 256 KB image; holding
@@ -848,7 +899,7 @@ Two layers, deliberately unequal:
    `git.includeDb` (a SQLite write after the commit dirties the tracked DB; #66), and build
    or deploy commands, which must write only ignored output (`dist/`) and deploy outside the
    checkout (holding the lock across a build would stall every save behind a queued publish). The whole
-   thing runs under `withGitLock` (which `/api/git/pull` also takes) so
+   thing runs under `withGitLock` (which the commit route also takes) so
    the commit checked is the commit pushed. The push names that SHA and the branch's
    upstream explicitly (`pushCheckedCommit`), so a configured push refspec or
    `push.default=matching` cannot send unchecked refs. A failure keeps the commit local
@@ -892,7 +943,9 @@ component's `<style>`/`<script>` sub-module through `normalizeFilename`, which j
 absolute path sharing no top directory with the root onto the root, so a linked component
 with a `<style>` failed with "No cached compile metadata found". It passes by accident
 wherever the checkout and TMPDIR share a top directory (macOS `/private`), so test it with
-them apart. A tracked `.env` is the committed one; only gitignored `.env*` files are
+them apart. A package that is a link (pnpm's `.pnpm` store) and ships `.astro` files is
+mirrored at its real place inside the worktree's node_modules, so its store-local
+dependencies resolve. A tracked `.env` is the committed one; only gitignored `.env*` files are
 copied in from the live checkout.
 
 ## Releasing

@@ -150,3 +150,29 @@ folder; stale docs. Decisions: refuse LFS sites; delete `/api/git/pull`;
 one release after the fixes (not a 1.10.1 hotfix); the npm release does not
 need the NixOS module change. Fix lanes A (publish/git), B (editor), C
 (server/auth/deploy), D (doctor/tests/docs, #90) running.
+
+### Review 1 fixes (merged 2026-10-30)
+
+All four lanes merged; gate passed on the combined tree (`npm test` 81/81, and
+every slow, browser and packed test by name). A (publish/git): fork-point
+rebase; filter-using sites refused (LFS and any clean/smudge driver); merge
+drivers, upload/receive-pack, sshCommand, credential helpers, askpass and
+gitProxy neutralised, `GIT_TERMINAL_PROMPT=0`; pnpm packages mirrored;
+`/api/git/pull` deleted; missing default git paths no longer logged; a partly
+staged file refuses. B (editor): item-modal clear kept; legacy `<x>ImageAlt`
+carried into the declared alt; dry-run/failed deploys reported as such; no
+repeated ids; leading newlines kept; textareas refit; optional numbers start
+empty; typed literals. C (server): rsync `~user`, user/host validation and
+`host:path` refusal; IPv6 /56 login limiting; `trust proxy` loopback with
+`TRUST_PROXY`; `ASTROADMIN_DB` to the production build; `..` as a segment;
+build process groups killed on exit. D: doctor Ctrl-C cleanup; every test file
+classified; docs; publicDir wording; Chromium on Linux; #90 fixed. Filed #91
+(CmsImage ships every public image as an unused `_astro` original).
+
+Behaviour change for operators: git credential helpers (osxkeychain, gh) are no
+longer used; HTTPS remotes need `GIT_ASKPASS` (docs/configuration.md, "Push
+credentials").
+
+Still before release: the real-browser save check (CLAUDE.md recipe) for the
+item-modal clear, the legacy alt and typed literals; a second review pass if
+wanted.

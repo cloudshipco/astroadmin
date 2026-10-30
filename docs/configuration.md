@@ -192,8 +192,11 @@ Publish runs these steps, in order:
    to the checkout sorts those files out, then publishes again. If the
    checkout is already in the middle of a rebase or merge (someone left one
    unfinished on the server), publishing is refused before anything is
-   committed, and the editor's saves stay as they are. A repository that
-   uses Git LFS is refused;
+   committed, and the editor's saves stay as they are. A commit someone
+   force-pushed away upstream is not brought back. A repository whose files
+   go through a git filter (Git LFS, or any clean/smudge filter) is refused
+   before anything is committed: AstroAdmin runs git with every filter
+   switched off, so it would commit those files' raw bytes;
 3. build the resulting commit with the site's Astro (the pre-push check,
    below);
 4. push that commit to the current branch's upstream;
@@ -218,6 +221,23 @@ folder. `paths: []` stages nothing. `git.enabled: false` (or
 `GIT_ENABLED=false`) hides the editor's changes panel and leaves Publish to
 the deploy adapter alone. `git.autoPush` (or `GIT_AUTO_PUSH=true`) makes a
 commit from the changes panel push too; Publish always pushes.
+
+### Push credentials
+
+AstroAdmin runs git with the repository's hooks, filters, merge drivers,
+credential helpers and `core.sshCommand` switched off, because the site's own
+code (its build, its integrations) can write `.git/config`. So the push takes
+its credentials only from the environment the admin is started with:
+
+- an SSH remote uses `ssh`, or `GIT_SSH_COMMAND` when it is set (for example
+  `ssh -i /path/to/deploy-key -o IdentitiesOnly=yes`);
+- an HTTPS remote needs `GIT_ASKPASS`, a program that prints the token.
+  A credential helper in git's config (osxkeychain, the GitHub CLI's helper)
+  is not used. git never prompts (`GIT_TERMINAL_PROMPT=0`), so a push with no
+  credentials fails at once instead of waiting.
+
+`GIT_AUTHOR_NAME`/`EMAIL` and `GIT_COMMITTER_NAME`/`EMAIL`, when set, name the
+commits; otherwise the repository's `user.name` and `user.email` do.
 
 ### The pre-push build check
 
