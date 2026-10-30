@@ -30,11 +30,11 @@ import { spawn } from 'child_process';
 // hanging the process at 0% CPU. These paths run git and builds, so they use
 // the sync calls (small files, bounded walks).
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { ASTRO_NOT_INSTALLED_MESSAGE, DEFAULT_BUILD_ARGS, defaultAstroCommand } from './astro-bin.js';
 import { buildProblems, describeRefusedEntries } from './build-failure.js';
 import { runGit } from './git-exec.js';
+import { makeWorktreeDir, removeOwnStaleWorktrees, removeWorktree, worktreeAdminDir } from './throwaway-worktree.js';
 
 const DEFAULT_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
@@ -474,6 +474,9 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
   const timeoutMs = fullConfig.build?.checkTimeoutMs || DEFAULT_CHECK_TIMEOUT_MS;
   let commit = '';
   let tempDir = null;
+  let worktree = null;
+  let adminDir = null;
+  const runInCheckout = (args) => git(projectRoot, args);
   let siteDirs = [];
   let checkSiteDir = null; // the site in the check's worktree: the commit's own content config
 
@@ -498,13 +501,16 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     // place inside the worktree.
     const { realRepoTop, siteSubdir } = await locateSite(projectRoot);
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-check-'));
-    const worktreeDir = path.join(tempDir, 'worktree');
+    await removeOwnStaleWorktrees(runInCheckout);
+    worktree = makeWorktreeDir('astroadmin-check');
+    tempDir = worktree.tempDir;
+    const { worktreeDir } = worktree;
     // Checked out by git run IN the worktree, whose overrides are read as a
     // linked worktree sees the config (an includeIf on the git directory can
     // name a filter for worktrees only); `worktree add` would check out with
     // the checkout's overrides.
     await git(projectRoot, ['worktree', 'add', '--no-checkout', '--detach', worktreeDir, commit]);
+    adminDir = worktreeAdminDir(worktreeDir);
     await git(worktreeDir, ['reset', '--quiet', '--hard', commit]);
 
     // A worktree does not populate submodules (gitlinks, mode 160000), so
@@ -561,14 +567,8 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     return fail('The publish check could not run, so nothing was pushed; see the server log.',
       `${error.stack || error.message}\n${error.stdout || ''}${error.stderr || ''}`);
   } finally {
-    // Deleting the directory and pruning removes the worktree and git's record of it.
-    if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        // best effort: the prune below still drops git's record of the worktree
-      }
-    }
-    await git(projectRoot, ['worktree', 'prune']).catch(() => {});
+    // This worktree only, by its path, and its record: never a prune, which
+    // drops every stale worktree record in the repository (throwaway-worktree.js).
+    if (worktree) await removeWorktree(runInCheckout, worktree, adminDir ?? worktreeAdminDir(worktree.worktreeDir));
   }
 }

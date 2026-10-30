@@ -15,7 +15,6 @@
 import crypto from 'crypto';
 import express from 'express';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { simpleGit } from 'simple-git';
 import { recordDoctorAfterCheck } from '../doctor/editor.js';
@@ -30,6 +29,7 @@ import { buildProblems } from '../utils/build-failure.js';
 import { withCheckoutExclusive } from '../utils/checkout-lock.js';
 import { filterDriverInUse } from '../utils/filter-attributes.js';
 import { getAllowedGitPaths } from '../utils/git-paths.js';
+import { makeWorktreeDir, removeOwnStaleWorktrees, removeWorktree, worktreeAdminDir } from '../utils/throwaway-worktree.js';
 import { FETCH_PROGRAMS, GIT_PASSED_ENVIRONMENT, NO_DIFF_PROGRAMS, PUSH_PROGRAMS, SIMPLE_GIT_UNSAFE, gitEnvironment, hardenedConfig } from '../utils/git-exec.js';
 
 const router = express.Router();
@@ -212,8 +212,16 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
     // check run in worktrees).
     // A view that cannot be made (no worktree can be added) asks nothing:
     // the rebase and the check need worktrees too, and fail on their own.
+    // Anything failing once the view exists (its config cannot be read, as
+    // when only linked worktrees include a broken file) fails CLOSED: it is
+    // the question itself that could not be answered, the answer could be a
+    // filter the rebase's and the check's worktrees would then hold, and
+    // nothing has been committed yet. It throws, so the route answers with
+    // its fixed 500 ("see the server log"), not the filter refusal, whose
+    // message would name a cause nobody found.
     const inWorktreeView = () => inLinkedWorktreeView(git, filterDriverInUse).catch((error) => {
-      console.error('Could not read the config as a linked worktree sees it:', error.message);
+      if (!(error instanceof ViewNotMadeError)) throw error;
+      console.error(error.message);
       return null;
     });
     if (await filterDriverInUse(git) || await inWorktreeView()) {
@@ -263,23 +271,33 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
  * @returns {Promise<T|null>}
  */
 async function inLinkedWorktreeView(git, task) {
-  const head = (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
+  const head = await headCommit(git);
   if (!head) return null;
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-view-'));
-  const worktreeDir = path.join(tempDir, 'worktree');
-  let added = false;
+  const runGit = (args) => git.raw(args);
+  await removeOwnStaleWorktrees(runGit);
+  const worktree = makeWorktreeDir('astroadmin-view');
   try {
-    await git.raw(['worktree', 'add', '--quiet', '--no-checkout', '--detach', worktreeDir, head]);
-    added = true;
-    const worktreeGit = gitClientAt(worktreeDir);
+    await git.raw(['worktree', 'add', '--quiet', '--no-checkout', '--detach', worktree.worktreeDir, head]);
+  } catch (error) {
+    // Only this may fail open: see commitInCheckout.
+    await removeWorktree(runGit, worktree, worktreeAdminDir(worktree.worktreeDir));
+    throw new ViewNotMadeError(error);
+  }
+  const adminDir = worktreeAdminDir(worktree.worktreeDir);
+  try {
+    const worktreeGit = gitClientAt(worktree.worktreeDir);
     await worktreeGit.raw(['read-tree', head]);
     return await task(worktreeGit);
   } finally {
-    // Only what this added is cleaned up (a prune also removes an empty
-    // worktrees/ folder that is not ours to touch).
-    if (added) await git.raw(['worktree', 'remove', '--force', worktreeDir]).catch(() => {});
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    if (added) await git.raw(['worktree', 'prune']).catch(() => {});
+    await removeWorktree(runGit, worktree, adminDir);
+  }
+}
+
+/** The filter view's worktree could not be added (inLinkedWorktreeView). */
+class ViewNotMadeError extends Error {
+  constructor(cause) {
+    super(`Could not add a worktree to read the config as a linked worktree sees it: ${cause.message}`);
+    this.name = 'ViewNotMadeError';
   }
 }
 
@@ -523,14 +541,18 @@ async function lastKnownBase(git, baseLimit, candidates) {
  * checkout's branch (it points at `localHead`) without its files.
  */
 export async function rebaseInWorktree(git, localHead, upstreamHead, base = null) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'astroadmin-rebase-'));
-  const worktreeDir = path.join(tempDir, 'worktree');
+  const runGit = (args) => git.raw(args);
+  await removeOwnStaleWorktrees(runGit);
+  const worktree = makeWorktreeDir('astroadmin-rebase');
+  const { worktreeDir } = worktree;
+  let adminDir = null;
   try {
     // Checked out by a client rooted in the worktree, never by `worktree
     // add` itself: its overrides are read as the worktree sees the config
     // (an includeIf on the git directory can name a filter for linked
     // worktrees only, which overrides read in the checkout never saw).
     await git.raw(['worktree', 'add', '--quiet', '--no-checkout', '--detach', worktreeDir, localHead]);
+    adminDir = worktreeAdminDir(worktreeDir);
     const worktreeGit = gitClientAt(worktreeDir);
     await worktreeGit.raw(['reset', '--quiet', '--hard', localHead]);
     try {
@@ -546,9 +568,7 @@ export async function rebaseInWorktree(git, localHead, upstreamHead, base = null
     }
     return (await worktreeGit.raw(['rev-parse', 'HEAD'])).trim();
   } finally {
-    await git.raw(['worktree', 'remove', '--force', worktreeDir]).catch(() => {});
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    await git.raw(['worktree', 'prune']).catch(() => {});
+    await removeWorktree(runGit, worktree, adminDir ?? worktreeAdminDir(worktreeDir));
   }
 }
 
