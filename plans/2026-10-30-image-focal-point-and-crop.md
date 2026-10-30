@@ -1,6 +1,13 @@
 # Image focal point and non-destructive crop (#82)
 
-Status: IN PROGRESS (2026-10-30). Main at 5ef160f (1.11.0 released).
+Status: BUILT on main (2026-10-30), awaiting a review pass and release as
+1.12.0. Commits 8f7cc57 (server), a3e2dc2 (doctor and docs), 0efe52a (image
+library), a8ad6a8 (CmsImage, site-files, image service), 681e66c (a stored
+crop stays visible and clearable with `images.crop` off). Every check was
+seen red first or by a mutant (the lanes' notes are in
+`ignored-plans/2026-10-30-focal-crop-lanes/`, local only). On the merged
+tree: the fast suite, cms-image-packed (49), cms-video-packed (26),
+check-linked-styles (6) and image-focal-browser (11) pass.
 
 ## The request
 
