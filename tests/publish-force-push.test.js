@@ -221,8 +221,49 @@ async function symrefScenario(which, { committedEarlier = false } = {}) {
   });
 }
 
+/**
+ * A remote that pushes somewhere other than it fetches from (`how`:
+ * 'pushurl', 'pushInsteadOf' on a named remote, or 'pushInsteadOf' on a URL
+ * branch.<b>.remote) is refused before anything is committed: the pushed
+ * commit never appears where the next publish fetches, so its rebase would
+ * drop it from the branch.
+ */
+async function triangularScenario(how) {
+  const root = fs.mkdtempSync(path.join(tempRoot, 'triangular-'));
+  const fetchRemote = path.join(root, 'fetch.git');
+  const pushRemote = path.join(root, 'push.git');
+  const checkout = path.join(root, 'checkout');
+  git(root, 'init', '-q', '--bare', '-b', 'main', fetchRemote);
+  git(root, 'init', '-q', '--bare', '-b', 'main', pushRemote);
+  fs.mkdirSync(checkout);
+  git(checkout, 'init', '-q', '-b', 'main');
+  identity(checkout, 'Editor');
+  writeFile(checkout, 'a.md', 'a\n');
+  git(checkout, 'add', '-A');
+  git(checkout, 'commit', '-qm', 'initial');
+  git(checkout, 'remote', 'add', 'origin', fetchRemote);
+  git(checkout, 'push', '-q', '-u', 'origin', 'main');
+  git(checkout, 'push', '-q', pushRemote, 'main');
+  if (how === 'pushurl') git(checkout, 'config', 'remote.origin.pushurl', pushRemote);
+  if (how.startsWith('pushInsteadOf')) git(checkout, 'config', `url.${pushRemote}.pushInsteadOf`, fetchRemote);
+  if (how === 'pushInsteadOf, URL remote') git(checkout, 'config', 'branch.main.remote', fetchRemote);
+
+  await check(`a remote that pushes elsewhere than it fetches (${how}) is refused before anything is committed`, async () => {
+    const head = git(checkout, 'rev-parse', 'HEAD');
+    const outcome = await publish(checkout, 'edit.md');
+    assert.equal(outcome.blocked, true, JSON.stringify(outcome));
+    assert.equal(outcome.blockedReason, 'remote');
+    assert.equal(git(checkout, 'rev-parse', 'HEAD'), head, 'nothing committed');
+    assert.equal(git(pushRemote, 'rev-parse', 'main'), head, 'nothing pushed');
+    assert.equal(git(fetchRemote, 'rev-parse', 'main'), head, 'nothing pushed');
+  });
+}
+
 try {
   console.log('\n🧪 A force-pushed-away commit is not published again\n' + '='.repeat(40));
+  await triangularScenario('pushurl');
+  await triangularScenario('pushInsteadOf');
+  await triangularScenario('pushInsteadOf, URL remote');
   await symrefScenario('record');
   await symrefScenario('tracking');
   await symrefScenario('record', { committedEarlier: true });

@@ -124,7 +124,8 @@ export function withGitLock(task) {
  * unfinished rebase or merge (nothing staged or committed; left as it was),
  * or, with `blockedReason: 'submodules'`, when the checkout has a submodule,
  * or `'filter'`, when the repository's files go through a git filter driver
- * such as Git LFS (filter-attributes.js);
+ * such as Git LFS (filter-attributes.js), or `'remote'`, when the upstream
+ * remote pushes somewhere other than it fetches from (pushesElsewhere);
  * `conflict` when OUR rebase conflicted (it is aborted; the commit stays
  * local); `localChanges` when the incoming changes touch files with
  * uncommitted changes in the checkout (nothing moved; the commit stays
@@ -134,12 +135,13 @@ export function withGitLock(task) {
  * @param {object} fullConfig
  * @param {import('simple-git').SimpleGit} git
  * @param {{commit?: () => Promise<object|null>, onlyIfCommitted?: boolean}} [options]
- * @returns {Promise<{blocked: boolean, blockedReason: 'submodules'|'filter'|null, conflict: boolean, localChanges: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
+ * @returns {Promise<{blocked: boolean, blockedReason: 'submodules'|'filter'|'remote'|null, conflict: boolean, localChanges: boolean, commitResult: object|null, pushed: boolean, pushError: string|null, check: import('../utils/astro-check.js').AstroCheckResult|null}>}
  */
 export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyIfCommitted = false } = {}) {
   const outcome = { blocked: false, blockedReason: null, conflict: false, localChanges: false, commitResult: null, pushed: false, pushError: null, check: null };
   const prepared = await commitInCheckout(git, commit, {
     rebase: (commitResult) => !(onlyIfCommitted && !commitResult),
+    pushes: true,
   });
   outcome.blocked = prepared.blocked;
   outcome.blockedReason = prepared.blockedReason;
@@ -183,9 +185,9 @@ export async function pushIfAstroAccepts(fullConfig, git, { commit = null, onlyI
  * (when `commit` is given) and, when `rebase(commitResult)` says so, rebase
  * onto the upstream. `ready` means go on to check and push. Also the commit
  * route's path when it does not push.
- * @returns {Promise<{blocked: boolean, blockedReason: 'submodules'|'filter'|null, conflict: boolean, localChanges: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
+ * @returns {Promise<{blocked: boolean, blockedReason: 'submodules'|'filter'|'remote'|null, conflict: boolean, localChanges: boolean, ready: boolean, commitResult: object|null, upstream: {remote: string, ref: string}|null}>}
  */
-export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
+export function commitInCheckout(git, commit, { rebase = () => false, pushes = false } = {}) {
   return withCheckoutExclusive(async () => {
     const prepared = { blocked: false, blockedReason: null, conflict: false, localChanges: false, ready: false, commitResult: null, upstream: null };
     // First, before any git command that could look inside one: a
@@ -228,6 +230,11 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
       // Logged with the driver's name; the editor gets a fixed sentence.
       prepared.blocked = true;
       prepared.blockedReason = 'filter';
+      return prepared;
+    }
+    if (pushes && await pushesElsewhere(git)) {
+      prepared.blocked = true;
+      prepared.blockedReason = 'remote';
       return prepared;
     }
     // The branch before the editor's commit: no known upstream value may
@@ -418,6 +425,37 @@ async function rebaseOntoUpstream(git, upstream, headBeforeCommit) {
   return 'synced';
 }
 
+/**
+ * Whether the branch's upstream remote pushes somewhere other than it
+ * fetches from (`remote.<name>.pushurl`, or a `url.<base>.pushInsteadOf`
+ * matching its URL). Publish fetches the upstream, rebases onto it with the
+ * last commit it pushed as the base, and pushes: with a second place to push
+ * to, the pushed commit never appears where it fetches, so the next publish
+ * would drop it from the branch. Refused rather than published wrongly. The
+ * reason is logged only.
+ */
+async function pushesElsewhere(git) {
+  const upstream = await findUpstream(git);
+  if (!upstream) return false;
+  const named = (await git.raw(['config', '--get', `remote.${upstream.remote}.url`]).catch(() => '')).trim() !== '';
+  let fetchUrl;
+  let pushUrls;
+  if (named) {
+    fetchUrl = (await git.raw(['remote', 'get-url', upstream.remote])).trim();
+    pushUrls = (await git.raw(['remote', 'get-url', '--push', '--all', upstream.remote])).split('\n').filter(Boolean);
+  } else {
+    // branch.<b>.remote is a URL: only pushInsteadOf can send it elsewhere.
+    fetchUrl = (await git.raw(['ls-remote', '--get-url', upstream.remote])).trim();
+    const prefixes = (await git.raw(['config', '--get-regexp', '^url\\..*\\.pushinsteadof$']).catch(() => ''))
+      .split('\n').filter(Boolean).map((line) => line.slice(line.indexOf(' ') + 1));
+    pushUrls = prefixes.some((prefix) => upstream.remote.startsWith(prefix)) ? ['(rewritten by pushInsteadOf)'] : [fetchUrl];
+  }
+  if (pushUrls.every((url) => url === fetchUrl)) return false;
+  // The URLs themselves are not logged: an HTTPS one can carry a token.
+  console.error(`Publish refused: the branch's remote${named ? ` "${upstream.remote}"` : ''} pushes to a different URL than it fetches from (remote.<name>.pushurl or url.<base>.pushInsteadOf)`);
+  return true;
+}
+
 /** HEAD's commit, or '' on an unborn branch. */
 async function headCommit(git) {
   return (await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
@@ -606,7 +644,7 @@ async function pushCheckedCommit(git, commit, upstream) {
  * Response body for a checkout left mid-rebase or mid-merge by someone else,
  * a checkout with submodules (reason 'submodules'), or a repository whose
  * files go through a git filter (reason 'filter').
- * @param {'submodules'|'filter'|null} [reason]
+ * @param {'submodules'|'filter'|'remote'|null} [reason]
  */
 export function blockedBody(reason = null) {
   if (reason === 'submodules') {
@@ -617,6 +655,17 @@ export function blockedBody(reason = null) {
       commit: null,
       error: 'This site cannot be published from the editor',
       message: 'Nothing was published: the site\'s repository uses git submodules, '
+        + 'which publishing from the editor does not support. Your changes are saved. Contact your site administrator.',
+    };
+  }
+  if (reason === 'remote') {
+    return {
+      success: false,
+      committed: false,
+      pushed: false,
+      commit: null,
+      error: 'This site cannot be published from the editor',
+      message: "Nothing was published: the site's repository sends changes to a different place than it fetches them from, "
         + 'which publishing from the editor does not support. Your changes are saved. Contact your site administrator.',
     };
   }
