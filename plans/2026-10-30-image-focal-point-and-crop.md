@@ -9,6 +9,20 @@ seen red first or by a mutant (the lanes' notes are in
 tree: the fast suite, cms-image-packed (49), cms-video-packed (26),
 check-linked-styles (6) and image-focal-browser (11) pass.
 
+Review round 1 (high, fefcc4e..2078fab): nine findings, eight fixed in
+063bcde (metadata PUT/GET take `?source=`, so an image() folder item no
+longer writes to the same-named upload; a null patch on an image with no
+details writes nothing; alt saves share `saveImageMetadata`; one memoised
+`/api/config` read in `ui/admin-config.js`) and 853bf95 (the legacy
+bare-name fallback only for files directly under `/images/`; crop support
+detected on the LOADED service's `supportsCrop` marker, not the entrypoint
+string; an animated WebP keeps its frames and a 16-bit source its depth
+through a crop; `components/crop.js` holds the crop maths so CmsVideo no
+longer loads the sharp service). One finding rejected: a mis-cased path
+cannot render without its point, since the glob key is exact and the build
+fails on it. After the fixes: fast suite 92/92, cms-image-packed 52,
+cms-video-packed 26, check-linked-styles 6, video-picker-browser 11.
+
 ## The request
 
 Sites show photos in cover-fitted slots (full-height heroes, fixed-ratio
