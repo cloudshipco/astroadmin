@@ -41,9 +41,13 @@ export function collectionApiPath(collection, suffix = '') {
   return `/api/collections/${encodeURIComponent(collection)}${suffix}`;
 }
 
-/** `/api/content/<collection>/<slug>`, for reads, saves and deletes. */
-export function entryApiPath(collection, slug) {
-  return `/api/content/${encodeURIComponent(collection)}/${encodeURIComponent(slug)}`;
+/**
+ * `/api/content/<collection>/<slug>`, for reads, saves and deletes, with
+ * `?locale=` when a locale is given.
+ */
+export function entryApiPath(collection, slug, locale = null) {
+  const path = `/api/content/${encodeURIComponent(collection)}/${encodeURIComponent(slug)}`;
+  return locale ? `${path}?locale=${encodeURIComponent(locale)}` : path;
 }
 
 /** `/dashboard/<collection>/<slug>`, the dashboard's link to an entry. */

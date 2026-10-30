@@ -937,12 +937,16 @@ queue, so the old body is never written back.
   in a new entry saves null (untouched-structure). ~10 s.
 - `bun tests/autosave-leave-browser.test.js` — an edit made inside the 1 s autosave debounce
   survives leaving the page (#103), in real Chromium: a reload, a close and a navigation each
-  save it, sent by `sendUnsavedEditOnLeave` (beforeunload, pagehide, a hidden tab) as a
-  keepalive POST of the form as it is; a body over the keepalive cap (64 KiB) asks the browser
-  to confirm leaving and, kept, saves the ordinary way; a save still waiting on its preview
-  fetch when a newer snapshot is sent never POSTs its older one (each snapshot is numbered,
-  for a page restored from the back/forward cache); an untouched entry is not rewritten.
-  Seen red at HEAD (5 of 7) and with the snapshot guard removed. ~9 s, not in test:unit.
+  save it, sent by `sendUnsavedEditOnLeave` (beforeunload, pagehide, a hidden tab) through the
+  saver's own `runOnce` in its leaving mode (`sendOnLeave`: POST before any await, no preview
+  fetch first, keepalive), so it reports and finishes like an autosave (validation, a new
+  entry's title, picker and Delete). A body over the keepalive cap (64 KiB) is POSTed before
+  the browser asks to confirm leaving; a queued save holding an older snapshot skips its POST
+  (each snapshot is numbered, for a page restored from the back/forward cache); later leave
+  events send nothing more; the next save waits for the leave POST's answer (`leavePosts`,
+  never the whole run, whose preview refresh takes 2 s); a leave save that fails is saved
+  again the ordinary way; an untouched entry is not rewritten. Seen red at the first version
+  (5 of 11) and by one mutant per guard. ~18 s, not in test:unit.
 - `bun tests/dashboard-layout-browser.test.js` — the dashboard header and the markdown body
   toolbar in real Chromium at 360, 390, 768 (touch), 1024 and 1280 px, by measurement:
   no horizontal page scroll; every header control (picker, View live site, Publish,

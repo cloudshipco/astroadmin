@@ -91,6 +91,12 @@ await check('control: the unencoded path does NOT reach the content route (why e
   assert.equal((await response.json()).error, 'API endpoint not found');
 });
 
+await check('entryApiPath adds ?locale= only when given, encoded', async () => {
+  assert.equal(entryApiPath('pages', 'home', null), '/api/content/pages/home');
+  assert.equal(entryApiPath('pages', 'home', 'fr'), '/api/content/pages/home?locale=fr');
+  assert.equal(entryApiPath('pages', 'home', 'a&b#c'), '/api/content/pages/home?locale=a%26b%23c');
+});
+
 await check('read: entryApiPath reaches GET /:collection/:slug with the slug decoded', async () => {
   assert.equal(entryApiPath(NESTED.collection, NESTED.slug), '/api/content/articles/2024%2Ffirst-post');
   const response = await request(entryApiPath(NESTED.collection, NESTED.slug));

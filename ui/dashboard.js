@@ -735,10 +735,7 @@ async function loadEntry(collection, slug, updateUrl = true) {
 
   try {
     // Build URL with locale query param if i18n enabled
-    let apiUrl = entryApiPath(collection, slug);
-    if (i18nConfig.enabled && currentLocale) {
-      apiUrl += `?locale=${currentLocale}`;
-    }
+    const apiUrl = entryApiPath(collection, slug, i18nConfig.enabled ? currentLocale : null);
 
     const response = await fetch(apiUrl);
     const data = await readJson(response);
@@ -1370,28 +1367,28 @@ function debounce(func, wait) {
 // 64 KiB; leave room for anything else in flight.
 const KEEPALIVE_BODY_LIMIT = 60 * 1024;
 
-// The page is going away (#103): send the on-screen form's unsaved edit with a
-// keepalive request, which outlives the page. A debounced autosave would be
-// dropped, as would a save queued or waiting behind the one in flight.
-// Returns false when an edit is unsent and could not be sent.
+// The page is going away (#103): send the on-screen form's unsaved edit now,
+// with a keepalive request, which outlives the page. A debounced autosave would
+// be dropped, as would a save queued or waiting behind the one in flight.
+// Returns false when the edit went out in a request a closing page may cancel.
 function sendUnsavedEditOnLeave() {
   const saver = activeSaver;
   const deb = activeDebouncedSave;
   if (!saver) return true;
   if (!(deb && deb.pending()) && !saver.hasUnsentEdits()) return true;
-  if (!saver.sendOnLeave()) return false;
   if (deb) deb.cancel();
-  return true;
+  return saver.sendOnLeave();
 }
 
 // beforeunload comes first on a reload or close: an edit too big for keepalive
-// starts its ordinary save and asks the browser to confirm leaving. pagehide
-// covers navigations that skip beforeunload, and a hidden tab (often the last
-// event a phone delivers before discarding a page) sends it too.
+// is sent the ordinary way and the browser asked to confirm leaving, which
+// gives the request time. pagehide covers navigations that skip beforeunload,
+// and a hidden tab (often the last event a phone delivers before discarding a
+// page) sends the edit too. A save already POSTed is not waited for, so on a
+// real unload it can overlap the one sent here.
 function installLeaveHandlers() {
   window.addEventListener('beforeunload', (event) => {
     if (sendUnsavedEditOnLeave()) return;
-    if (activeDebouncedSave) activeDebouncedSave.flush();
     event.preventDefault();
     event.returnValue = '';
   });
@@ -1459,6 +1456,9 @@ function updateSaveStatus(message) {
  * navigation saves the entry being left, not the one arrived at. Saves are
  * serialized per target and coalesced (one trailing save), so two POSTs for the
  * same entry never overlap and an older snapshot can't overwrite a newer one.
+ * The one exception is a save sent as the page goes away (`sendOnLeave`),
+ * which cannot wait: it may overlap a POST already sent, and every later save
+ * waits for its answer.
  * UI side effects tied to the on-screen entry are gated on `isTargetCurrent()`.
  */
 function makeSaver(target) {
@@ -1467,52 +1467,69 @@ function makeSaver(target) {
     currentSlug === target.slug &&
     currentLocale === target.locale;
 
-  const entryApiUrl = () => {
-    let apiUrl = entryApiPath(target.collection, target.slug);
-    if (i18nConfig.enabled && target.locale) apiUrl += `?locale=${target.locale}`;
-    return apiUrl;
+  const entryApiUrl = () => entryApiPath(target.collection, target.slug, i18nConfig.enabled ? target.locale : null);
+
+  // One save is one numbered snapshot of the form. A save sent when the page is
+  // left (sendOnLeave, #103) goes out at once, outside the queue, so a queued
+  // save that took an older snapshot and has not POSTed yet skips its POST: a
+  // page frozen in the back/forward cache and restored would otherwise send it
+  // over the newer one.
+  let snapshotCount = 0;
+  let newestPosted = 0;
+  let awaitingPost = false;
+  // The POSTs of saves sent on leaving, until each is answered.
+  const leavePosts = new Set();
+
+  const takeSnapshot = () => {
+    const formData = extractFormData(target.form, target.schema);
+    // The body is read with the fields, so one save is one snapshot. No body
+    // editor on the form means no `body` key, and the API then keeps the
+    // stored body.
+    const body = JSON.stringify(savePayload(target.form, formData, target.type));
+    return { formData, body, number: ++snapshotCount };
   };
 
-  // Every snapshot is numbered. A snapshot sent on leaving the page
-  // (sendOnLeave) is newer than any save still waiting to POST, which then
-  // skips its POST: a page frozen in the back/forward cache and restored would
-  // otherwise send that older snapshot over the newer one.
-  let snapshotCount = 0;
-  let newestSent = 0;
-  let awaitingPost = false;
-
-  const runOnce = async (silent) => {
-    const formData = extractFormData(target.form, target.schema);
-    // Read the body with the fields, before any await, so one save is one
-    // snapshot. No body editor on the form means no `body` key, and the API
-    // then keeps the stored body.
-    const payload = savePayload(target.form, formData, target.type);
-    const snapshot = ++snapshotCount;
-    awaitingPost = true;
+  // `leaving`: POST before any await (so the request starts inside the page's
+  // leave event), with no preview fetch first, and with keepalive when asked.
+  const runOnce = async (silent, snapshot = takeSnapshot(), { leaving = false, keepalive = false } = {}) => {
+    const { formData, body } = snapshot;
     const current = isTargetCurrent();
 
     if (current) updateSaveStatus('Saving...');
 
     // Preview change-detection only matters if this entry is on screen.
     let originalHash = null;
-    if (current) {
-      const previewPageUrl = getPreviewPageUrl();
-      if (previewPageUrl) {
-        try {
-          const res = await fetch(withCacheBuster(previewPageUrl), { cache: 'no-store' });
-          originalHash = quickHash(await res.text());
-        } catch { /* proceed without hash */ }
+    if (!leaving) {
+      awaitingPost = true;
+      if (current) {
+        const previewPageUrl = getPreviewPageUrl();
+        if (previewPageUrl) {
+          try {
+            const res = await fetch(withCacheBuster(previewPageUrl), { cache: 'no-store' });
+            originalHash = quickHash(await res.text());
+          } catch { /* proceed without hash */ }
+        }
       }
+      // A save sent on leaving went out while this one waited: let it land
+      // first, so this POST does not overlap it.
+      if (leavePosts.size) await Promise.all(leavePosts);
     }
 
     try {
-      awaitingPost = false;
-      if (snapshot < newestSent) return;
-      const response = await fetch(entryApiUrl(), {
+      if (!leaving) awaitingPost = false;
+      if (snapshot.number < newestPosted) return;
+      newestPosted = snapshot.number;
+      const request = fetch(entryApiUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body,
+        keepalive,
       });
+      if (leaving) {
+        const answered = request.then(() => {}, () => {}).finally(() => leavePosts.delete(answered));
+        leavePosts.add(answered);
+      }
+      const response = await request;
       const result = await readJson(response);
 
       if (!result.success) {
@@ -1520,6 +1537,7 @@ function makeSaver(target) {
           updateSaveStatus('Error');
           if (!silent) showNotification('Failed to save: ' + result.error, 'error');
         }
+        if (leaving) retryAfterLeaving();
         return;
       }
 
@@ -1545,6 +1563,8 @@ function makeSaver(target) {
           const localeLabel = i18nConfig.enabled && currentLocale ? ` (${currentLocale.toUpperCase()})` : '';
           document.getElementById('editorTitle').textContent =
             `Editing: ${entryDisplayTitle(target.collection, target.slug)}${localeLabel}`;
+          // Saved, so it can be deleted (hidden while it was unsaved).
+          document.getElementById('deleteEntryBtn').style.display = 'inline-block';
           document.getElementById('pageSelector').value = entryValue(target.collection, target.slug);
           syncEntryPickerLabel(document.getElementById('pageSelector'));
           if (i18nConfig.enabled) {
@@ -1579,8 +1599,12 @@ function makeSaver(target) {
         const rateLimited = error instanceof ApiResponseError && error.rateLimited;
         if (!silent || rateLimited) showNotification(failureText('Failed to save changes', error), 'error');
       }
+      if (leaving) retryAfterLeaving();
     }
   };
+  // The page lived on (a hidden tab) and the save sent on leaving failed: the
+  // queued saves it replaced were skipped, so save the form the ordinary way.
+  const retryAfterLeaving = () => { if (!disabled) saver(true); };
 
   // Serialize + coalesce: while a save runs, a further request sets `again` so
   // exactly one more save runs afterward with the latest form state. Once
@@ -1601,42 +1625,27 @@ function makeSaver(target) {
     })().finally(() => { inFlight = null; });
     return inFlight;
   };
-  // Resolves once no save is in flight — used before a destructive op (delete).
-  saver.whenIdle = () => inFlight || Promise.resolve();
+  // Resolves once no save is in flight, a save sent on leaving included — used
+  // before a destructive op (delete).
+  saver.whenIdle = () => Promise.all([inFlight, ...leavePosts]);
   // Make the saver inert for good (future calls no-op; an in-flight save still
   // finishes its current run against its own bound target).
   saver.disable = () => { disabled = true; };
   // Has an edit not yet been POSTed? A trailing save queued behind the one in
   // flight, or a save still waiting (on the preview) to send its POST.
   saver.hasUnsentEdits = () => !disabled && (again || awaitingPost);
-  // The page is going away (#103): POST the form as it is NOW, synchronously,
-  // with keepalive so the request outlives the page. Returns false when it
-  // cannot (the saver is disabled, or the body is over the keepalive cap).
+  // The page is going away (#103): POST the form as it is now, at once. Its
+  // snapshot replaces any queued save. Returns true when the request outlives
+  // the page (keepalive), false when the body is over the keepalive cap and
+  // went out in an ordinary request, which a closing page may cancel.
   saver.sendOnLeave = () => {
-    if (disabled) return false;
-    const formData = extractFormData(target.form, target.schema);
-    const body = JSON.stringify(savePayload(target.form, formData, target.type));
-    if (new Blob([body]).size > KEEPALIVE_BODY_LIMIT) return false;
-    newestSent = ++snapshotCount;
+    if (disabled) return true;
+    const snapshot = takeSnapshot();
+    const keepalive = new Blob([snapshot.body]).size <= KEEPALIVE_BODY_LIMIT;
     again = false;
-    fetch(entryApiUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      keepalive: true,
-    }).then(readJson).then((result) => {
-      // Only seen when the page lived on (a hidden tab, a cancelled unload).
-      if (result.success) {
-        target.isNew = false;
-        updateEntryTitleCache(target.collection, target.slug, formData);
-        updateChangesBadge();
-      }
-      if (isTargetCurrent()) updateSaveStatus(result.success ? 'Saved' : 'Error');
-    }).catch((error) => {
-      console.error('Save failed:', error);
-      if (isTargetCurrent()) updateSaveStatus('Error');
-    });
-    return true;
+    awaitingPost = false;
+    runOnce(true, snapshot, { leaving: true, keepalive });
+    return keepalive;
   };
   return saver;
 }
@@ -2064,10 +2073,7 @@ document.getElementById('deleteEntryBtn').addEventListener('click', async () => 
     // A failed save must not stop the delete (they're independent) — swallow it.
     if (pendingSave) await pendingSave.catch(() => {});
 
-    let apiUrl = entryApiPath(target.collection, target.slug);
-    if (i18nConfig.enabled && target.locale) {
-      apiUrl += `?locale=${target.locale}`;
-    }
+    const apiUrl = entryApiPath(target.collection, target.slug, i18nConfig.enabled ? target.locale : null);
 
     const response = await fetch(apiUrl, { method: 'DELETE' });
     const result = await readJson(response);

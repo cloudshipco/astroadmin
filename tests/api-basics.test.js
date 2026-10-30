@@ -154,10 +154,12 @@ try {
   });
 
   await check('a body express.json() refuses is a 4xx with fixed text, never a 500 or the parser\'s message (#104)', async () => {
+    const NOT_JSON = 'The request body must be a JSON object or array.';
     const refusals = [
-      ['"text"', 400], ['42', 400], ['null', 400], ['true', 400],
-      ['{"title": oops', 400],
-      [JSON.stringify({ title: 'x'.repeat(200 * 1024) }), 413],
+      ['"text"', 400, NOT_JSON], ['42', 400, NOT_JSON], ['null', 400, NOT_JSON], ['true', 400, NOT_JSON],
+      ['{"title": oops', 400, NOT_JSON],
+      [JSON.stringify({ title: 'x'.repeat(200 * 1024) }), 413, 'The request body is too large.'],
+      ['{"title": "oops"}', 415, 'The request body\'s character set is not supported.', 'application/json; charset=koi8-r'],
     ];
     const routes = [
       ['PUT', '/api/images/photo.png/metadata', cookie],
@@ -173,15 +175,15 @@ try {
     console.warn = (...args) => warnings.push(args.join(' '));
     try {
       for (const [method, route, sessionCookie] of routes) {
-        for (const [body, expectedStatus] of refusals) {
-          const headers = { 'Content-Type': 'application/json' };
+        for (const [body, expectedStatus, expectedError, contentType = 'application/json'] of refusals) {
+          const headers = { 'Content-Type': contentType };
           if (sessionCookie) headers.cookie = sessionCookie;
           const response = await fetch(base + route, { method, headers, body });
           const text = await response.text();
           const label = `${method} ${route} with ${body.slice(0, 20)}`;
           assert.equal(response.status, expectedStatus, `${label}: ${response.status} ${text}`);
           const parsed = JSON.parse(text);
-          assert.deepEqual(Object.keys(parsed), ['error'], label);
+          assert.deepEqual(parsed, { error: expectedError }, label);
           assert.ok(!/oops|Unexpected|token|position|strict/i.test(text), `${label} carries the parser's text: ${text}`);
         }
       }
