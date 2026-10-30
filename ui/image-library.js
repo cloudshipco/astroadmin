@@ -7,6 +7,7 @@ import { escapeHtml } from './escape-html.js';
 import { readJson, failureText } from './api-response.js';
 import { MAX_IMAGE_SIZE, MAX_VIDEO_SIZE, megabytes, mediaRefusal } from './media-kinds.js';
 import { pushModal, removeModal } from './modal-stack.js';
+import { loadAdminConfig } from './admin-config.js';
 
 let currentCallback = null;
 let currentImages = [];
@@ -23,10 +24,10 @@ let forAstroImage = false;
 let libraryKind = 'image';
 /** @type {IntersectionObserver|null} the grid's lazy video thumbnails */
 let thumbnailObserver = null;
-// Whether the site renders crops (`/api/config` `imageCrop`, read at each
-// opening). Without the crop service a crop would be stored and never shown,
-// so the crop controls and the drag exist only when it is on; a click still
-// sets the focal point.
+// Whether the site renders crops (`/api/config` `imageCrop`, through the
+// page's shared config, read at each opening). Without the crop service a
+// crop would be stored and never shown, so the crop controls and the drag
+// exist only when it is on; a click still sets the focal point.
 let cropEnabled = false;
 
 /** A pointer press on the focal box moves this far (px) before it is a drag, not a click. */
@@ -112,18 +113,12 @@ export async function openImageLibrary(onSelect, currentValue = '', { astroImage
 }
 
 /**
- * Read `imageCrop` from /api/config. Any failure (an older server, a stubbed
- * fetch) leaves crops off: the panel then offers the focal point only.
+ * Read `imageCrop` from the admin config (one fetch per page load). An older
+ * server, or a config that could not be read, leaves crops off: the panel
+ * then offers the focal point only.
  */
 async function loadCropSetting() {
-  cropEnabled = false;
-  try {
-    const response = await fetch('/api/config');
-    const data = await readJson(response);
-    cropEnabled = data.imageCrop === true;
-  } catch (error) {
-    console.error('Error loading config:', error);
-  }
+  cropEnabled = (await loadAdminConfig()).imageCrop === true;
 }
 
 /**
@@ -591,13 +586,19 @@ function setupFocalPointer(box) {
 }
 
 /**
- * Save one metadata field of `image` through the same PUT as alt text, and
- * keep the listing's copy in step; a failure is reported as alt text's is.
+ * Save one or more details of `image` (alt, focalPoint, crop) through the
+ * metadata PUT, naming the item's folder (`?source=`, the listing's field:
+ * the image() folder's `/assets/images/<name>` is listed beside a same-named
+ * `/images/<name>`, and a bare filename would reach the wrong one), and keep
+ * the listing's copy in step; a failure is reported in an alert.
+ * @param {object} image - an item of the listing
+ * @param {object} patch - the keys to set (null deletes one)
+ * @param {string} what - named in the failure message
  * @returns {Promise<boolean>} whether it was saved
  */
 async function saveImageMetadata(image, patch, what) {
   try {
-    const response = await fetch(`/api/images/${encodeURIComponent(image.filename)}/metadata`, {
+    const response = await fetch(`/api/images/${encodeURIComponent(image.filename)}/metadata?source=${encodeURIComponent(image.source)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -653,31 +654,14 @@ async function saveAltText() {
   saveBtn.disabled = true;
   saveBtn.textContent = 'Saving...';
 
-  try {
-    const response = await fetch(`/api/images/${encodeURIComponent(image.filename)}/metadata`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alt: newAlt }),
-    });
-
-    const data = await readJson(response);
-
-    if (data.success) {
-      // Update local cache
-      image.alt = newAlt;
-      saveBtn.textContent = 'Saved!';
-      setTimeout(() => {
-        saveBtn.textContent = 'Save';
-        saveBtn.disabled = false;
-      }, 1500);
-    } else {
-      alert('Failed to save alt text: ' + data.error);
+  const saved = await saveImageMetadata(image, { alt: newAlt }, 'alt text');
+  if (saved) {
+    saveBtn.textContent = 'Saved!';
+    setTimeout(() => {
       saveBtn.textContent = 'Save';
       saveBtn.disabled = false;
-    }
-  } catch (error) {
-    console.error('Error saving alt text:', error);
-    alert('Error saving alt text: ' + error.message);
+    }, 1500);
+  } else {
     saveBtn.textContent = 'Save';
     saveBtn.disabled = false;
   }

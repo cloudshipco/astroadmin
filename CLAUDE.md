@@ -827,9 +827,16 @@ queue, so the old body is never written back.
   the stored size), and without a crop returns the parent's bytes. <1 s.
 - `bun tests/image-metadata.test.js` — image details (#82) through the real routes: an entry
   is keyed by the image's SITE PATH as the listing's `url` (`/images/<name>`,
-  `/assets/images/<name>`, first folder in `imageDirectories()` order), a read falls back
-  to the bare-filename key an older admin wrote and a PUT moves that entry's remaining
-  fields under the new key; the PUT body goes through `validateMetadataPatch` (only alt,
+  `/assets/images/<name>`), in the folder the request's `?source=` names (the listing's
+  field: `source`, `uploads` or `assets`; absent, the first folder in `imageDirectories()`
+  order holding the file, for an older editor; anything else a fixed 400): the image()
+  folder's `shared.png` is written and read under `/assets/images/shared.png` with
+  `/images/shared.png` untouched, and the listing shows each alt on its own item. A read
+  falls back to the bare-filename key an older admin wrote and a PUT moves that entry's
+  remaining fields under the new key; an entry left with no keys is removed (both keys),
+  and a null patch on an image with no details creates no file and changes nothing
+  (`applyMetadataPatch`; `updateMetadata` writes only on change). The PUT body goes
+  through `validateMetadataPatch` (only alt,
   focalPoint, crop; `{x, y}` and `{x, y, width, height}` finite percentages inside the
   image, or null to delete; a prototype key, an unknown key, `[]`, a wrong type or
   `x: 150` is a 400 with fixed text naming the field, never the value, and writes
@@ -843,13 +850,18 @@ queue, so the old body is never written back.
   the rendered image (src/assets and videos show none; the alt field stays); a click 30%
   across and 20% down writes `focalPoint {30, 20}` to `public/images/.metadata.json` and
   draws the marker there (`elementFromPoint`); reopening draws the stored point from the
-  listing; Reset writes null. With `/api/config` `imageCrop: true` (forced through
+  listing; Reset writes null. Every metadata PUT names the item's folder
+  (`?source=uploads`), and Save alt text goes through the same `saveImageMetadata` path
+  (one PUT with the trimmed alt, Saved! while disabled, Save again; Enter saves too).
+  `/api/config` is read ONCE per page load (`ui/admin-config.js`, shared by dashboard.js
+  and the library; the count is asserted), so the page is reloaded before each flip of
+  the `imageCrop` override. With `/api/config` `imageCrop: true` (forced through
   `page.route`; everything else is the real server) a drag from (10%,10%) to (60%,70%)
   writes `crop {10, 10, 50, 60}`, draws the shaded rectangle, and Clear writes null; with
   `imageCrop: false` the same drag writes nothing and sets no point while a click still
   does, and a crop stored earlier is still drawn with Clear offered (the build applies it
   whatever the setting). The control row is as tall as its buttons before they appear
-  (seen red: a button shown mid-drag moved the box under the pointer). ~3 s.
+  (seen red: a button shown mid-drag moved the box under the pointer). ~5 s.
 
 - `bun tests/video-upload.test.js` — videos through the real upload route: MP4 and WebM
   (real ffmpeg fixtures in `tests/fixtures/video`, commands in the test header) install

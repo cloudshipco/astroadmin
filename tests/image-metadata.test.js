@@ -4,10 +4,14 @@
  *
  * The rules it pins: an entry is keyed by the image's SITE PATH as the
  * listing returns it (`/images/<name>` for src/assets and public uploads,
- * `/assets/images/<name>` for the image() folder), found in imageDirectories()
- * order; a read (GET, the listing) falls back to the bare-filename key an
- * older admin wrote, and a PUT moves such an entry's remaining fields under
- * the new key and deletes the old one. The PUT body goes through
+ * `/assets/images/<name>` for the image() folder), in the folder the
+ * request's `?source=` names (the listing's `source` field; absent: the
+ * first folder in imageDirectories() order holding the file, for an older
+ * editor; anything else a fixed 400); a read (GET, the listing) falls back
+ * to the bare-filename key an older admin wrote, and a PUT moves such an
+ * entry's remaining fields under the new key and deletes the old one. An
+ * entry left with no keys is removed, and a null patch on an image with no
+ * details creates no file. The PUT body goes through
  * `validateMetadataPatch`: only alt, focalPoint and crop, each of its shape or
  * null (null deletes the key), anything else a 400 with fixed text that
  * names the field and never the sent value. DELETE removes the entry (both
@@ -119,6 +123,8 @@ write('src/assets/images/shared.png', png(8, 8, 8));
 write('src/content/assets/images/shared.png', png(7, 7, 7));
 write('src/content/assets/images/asset-only.png', png(6, 6, 6));
 write('public/images/gone-soon.png', png(5, 5, 5));
+write('public/images/lonely.png', png(4, 4, 4));
+write('public/images/bare.png', png(3, 3, 3));
 writeMetadata({
   'legacy.png': { alt: 'Legacy alt', focalPoint: { x: 10, y: 20 } },
   'read-legacy.png': { alt: 'Read me' },
@@ -159,8 +165,10 @@ async function request(route, options = {}) {
   }
   return { status: response.status, body, text };
 }
-const putMetadata = (filename, body) => request(`/api/images/${encodeURIComponent(filename)}/metadata`, { method: 'PUT', body: typeof body === 'string' ? body : JSON.stringify(body) });
-const getMetadata = (filename) => request(`/api/images/${encodeURIComponent(filename)}/metadata`);
+/** The metadata route for `filename`, with `?source=` (the listing's field) when given. */
+const metadataRoute = (filename, source) => `/api/images/${encodeURIComponent(filename)}/metadata${source === undefined ? '' : `?source=${encodeURIComponent(source)}`}`;
+const putMetadata = (filename, body, source) => request(metadataRoute(filename, source), { method: 'PUT', body: typeof body === 'string' ? body : JSON.stringify(body) });
+const getMetadata = (filename, source) => request(metadataRoute(filename, source));
 const listImages = async () => {
   const { status, body } = await request('/api/images');
   assert.equal(status, 200, 'the listing');
@@ -325,6 +333,93 @@ try {
     const after = await listImages();
     assert.equal(after.find((image) => image.url === '/images/shared.png').alt, 'Shared');
     assert.equal(after.find((image) => image.url === '/assets/images/shared.png').alt, '');
+  });
+
+  await check('?source= names the folder: a PUT on the image() folder\'s shared.png writes /assets/images/shared.png and leaves /images/shared.png alone', async () => {
+    const before = readMetadata();
+    assert.deepEqual(before['/images/shared.png'], { alt: 'Shared' }, 'control: the /images entry from the check above');
+    const set = await putMetadata('shared.png', { alt: 'Asset shared', focalPoint: { x: 5, y: 6 } }, 'assets');
+    assert.equal(set.status, 200, set.text);
+    assert.deepEqual(set.body.metadata, { alt: 'Asset shared', focalPoint: { x: 5, y: 6 } });
+    const stored = readMetadata();
+    assert.deepEqual(stored['/assets/images/shared.png'], { alt: 'Asset shared', focalPoint: { x: 5, y: 6 } });
+    assert.deepEqual(stored['/images/shared.png'], { alt: 'Shared' }, 'the /images entry is untouched');
+    assert.ok(!Object.hasOwn(stored, 'shared.png'));
+    // GET reads by source too; with no source, the first folder as before.
+    assert.deepEqual((await getMetadata('shared.png', 'assets')).body.metadata, { alt: 'Asset shared', focalPoint: { x: 5, y: 6 } });
+    assert.deepEqual((await getMetadata('shared.png', 'source')).body.metadata, { alt: 'Shared' });
+    assert.deepEqual((await getMetadata('shared.png')).body.metadata, { alt: 'Shared' });
+    const listed = await listImages();
+    assert.equal(listed.find((image) => image.url === '/assets/images/shared.png').alt, 'Asset shared');
+    assert.deepEqual(listed.find((image) => image.url === '/assets/images/shared.png').focalPoint, { x: 5, y: 6 });
+    assert.equal(listed.find((image) => image.url === '/images/shared.png').alt, 'Shared');
+    assert.equal(listed.find((image) => image.url === '/images/shared.png').focalPoint, null);
+    // A folder the file is not in is a 404; the uploads folder's own file is /images.
+    assert.equal((await putMetadata('asset-only.png', { alt: 'x' }, 'uploads')).status, 404);
+    assert.equal((await getMetadata('asset-only.png', 'source')).status, 404);
+    assert.equal((await putMetadata('photo.png', { alt: 'Photo (uploads)' }, 'uploads')).status, 200);
+    assert.deepEqual(readMetadata()['/images/photo.png'], { alt: 'Photo (uploads)' });
+  });
+
+  await check('an unknown ?source= is a 400 with fixed text that writes nothing', async () => {
+    const before = fs.readFileSync(metadataPath, 'utf8');
+    for (const source of ['bogus', '', 'public/images', '../assets']) {
+      for (const response of [await putMetadata('shared.png', { alt: 'x' }, source), await getMetadata('shared.png', source)]) {
+        assert.equal(response.status, 400, `${JSON.stringify(source)}: ${response.status} ${response.text}`);
+        assert.equal(response.body?.success, false);
+        assert.equal(response.body?.error, 'source must be source, uploads or assets');
+        assertNoServerPath(response.text, source);
+      }
+    }
+    // Two sources (express parses `?source=a&source=b` as an array) are not one.
+    const repeated = await request('/api/images/shared.png/metadata?source=assets&source=uploads', { method: 'PUT', body: JSON.stringify({ alt: 'x' }) });
+    assert.equal(repeated.status, 400, repeated.text);
+    assert.equal(fs.readFileSync(metadataPath, 'utf8'), before, 'a refused source writes nothing');
+  });
+
+  await check('a null patch on an image with no details creates no file and no entry', async () => {
+    const aside = `${metadataPath}.aside`;
+    fs.renameSync(metadataPath, aside);
+    try {
+      for (const body of [{ focalPoint: null }, { crop: null }, {}, { focalPoint: null, crop: null }]) {
+        const response = await putMetadata('lonely.png', body);
+        assert.equal(response.status, 200, `${JSON.stringify(body)}: ${response.text}`);
+        assert.deepEqual(response.body.metadata, {});
+        assert.ok(!fs.existsSync(metadataPath), `${JSON.stringify(body)}: the metadata file was created`);
+      }
+      // Positive control: a value does create it.
+      assert.equal((await putMetadata('lonely.png', { alt: 'Lonely' })).status, 200);
+      assert.deepEqual(readMetadata(), { '/images/lonely.png': { alt: 'Lonely' } });
+    } finally {
+      fs.rmSync(metadataPath, { force: true });
+      fs.renameSync(aside, metadataPath);
+    }
+    // With the file present, a null patch on an image that has no entry adds none.
+    const before = fs.readFileSync(metadataPath, 'utf8');
+    assert.deepEqual((await putMetadata('lonely.png', { focalPoint: null })).body.metadata, {});
+    assert.equal(fs.readFileSync(metadataPath, 'utf8'), before, 'the file is unchanged');
+    assert.ok(!Object.hasOwn(readMetadata(), '/images/lonely.png'));
+  });
+
+  await check('clearing the last key of an entry removes the entry, site-path and legacy keys both', async () => {
+    assert.equal((await putMetadata('lonely.png', { focalPoint: { x: 1, y: 1 } })).status, 200);
+    assert.ok(Object.hasOwn(readMetadata(), '/images/lonely.png'), 'control: the entry exists');
+    const cleared = await putMetadata('lonely.png', { focalPoint: null });
+    assert.equal(cleared.status, 200, cleared.text);
+    assert.deepEqual(cleared.body.metadata, {});
+    assert.ok(!Object.hasOwn(readMetadata(), '/images/lonely.png'), `the emptied entry is gone: ${Object.keys(readMetadata())}`);
+    // A legacy bare-filename entry whose only key is cleared: neither key is left.
+    writeMetadata({ ...readMetadata(), 'bare.png': { crop: { x: 0, y: 0, width: 10, height: 10 } } });
+    assert.deepEqual((await getMetadata('bare.png')).body.metadata, { crop: { x: 0, y: 0, width: 10, height: 10 } }, 'control');
+    const emptied = await putMetadata('bare.png', { crop: null });
+    assert.equal(emptied.status, 200, emptied.text);
+    assert.deepEqual(emptied.body.metadata, {});
+    const stored = readMetadata();
+    assert.ok(!Object.hasOwn(stored, 'bare.png'), 'the legacy key is gone');
+    assert.ok(!Object.hasOwn(stored, '/images/bare.png'), 'no empty site-path entry');
+    // An empty alt is a value, not an empty entry.
+    assert.deepEqual((await putMetadata('bare.png', { alt: '' })).body.metadata, { alt: '' });
+    assert.deepEqual(readMetadata()['/images/bare.png'], { alt: '' });
   });
 
   await check('DELETE removes the entry under both keys, so a file back under the same name has no alt', async () => {

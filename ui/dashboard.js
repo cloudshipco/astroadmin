@@ -36,6 +36,7 @@ import { savePayload } from './save-payload.js';
 import { liveSiteHref } from './live-url.js';
 import { showEntryProblems, renderPublishProblems, localeToOpen, goToField } from './content-problems.js';
 import { readJson, failureText, ApiResponseError } from './api-response.js';
+import { loadAdminConfig } from './admin-config.js';
 
 // Reference fields can appear anywhere a field can — including inside the array item
 // modal — so hand their wiring to the shared field layer rather than binding it to
@@ -107,11 +108,10 @@ async function checkAuth() {
   }
 }
 
-// Load config
+// Load config (read once per page load, shared with the image library)
 async function loadConfig() {
   try {
-    const response = await fetch('/api/config');
-    const data = await readJson(response);
+    const data = await loadAdminConfig();
     previewUrl = data.previewUrl;
     publicUrl = data.publicUrl || '';
     gitEnabled = data.gitEnabled !== false;

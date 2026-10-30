@@ -183,7 +183,10 @@ export function validateMetadataPatch(body) {
  * moves to the site-path key (an entry under the bare filename, from an
  * older admin, contributes the fields the site-path entry lacks and is
  * deleted), then each patched key is set, or deleted when the patch says
- * null. Returns the entry as written.
+ * null. An entry left with no keys is removed rather than stored as `{}`,
+ * so a null patch on an image with no details changes nothing (and
+ * updateMetadata then writes nothing: no file is created or dirtied).
+ * Returns the entry as written.
  * @param {object} metadata
  * @param {string} url - the image's site path
  * @param {string} filename
@@ -191,13 +194,13 @@ export function validateMetadataPatch(body) {
  */
 function applyMetadataPatch(metadata, url, filename, patch) {
   const entry = { ...(entryAt(metadata, filename) || {}), ...(entryAt(metadata, url) || {}) };
-  if (Object.hasOwn(metadata, filename)) delete metadata[filename];
   for (const key of METADATA_KEYS) {
     if (!Object.hasOwn(patch, key)) continue;
     if (patch[key] === null) delete entry[key];
     else entry[key] = patch[key];
   }
-  metadata[url] = entry;
+  removeMetadataEntry(metadata, url, filename);
+  if (Object.keys(entry).length > 0) metadata[url] = entry;
   return entry;
 }
 
@@ -332,17 +335,41 @@ function invalidFilename(res) {
   return res.status(400).json({ success: false, error: 'Invalid image filename' });
 }
 
+const SOURCE_REFUSAL = 'source must be source, uploads or assets';
+
 /**
- * Where the library lists this name: the first image folder (in listing
- * order) holding it as a file, by stat as the listing does, with the site
- * path the listing gives it (its metadata key); or null.
+ * The `?source=` of a metadata request: the listing's `source` field, naming
+ * the folder the item is in (a bare filename is not enough: the image()
+ * folder's `/assets/images/<name>` is listed beside a same-named
+ * `/images/<name>`). Absent means every folder in listing order (an older
+ * editor). Anything else (a name not in imageDirectories(), a repeated
+ * parameter) is refused with fixed text.
+ * @param {unknown} value - req.query.source
+ * @returns {{source: string|null, error?: undefined} | {error: string, source?: undefined}}
+ */
+function metadataSource(value) {
+  if (value === undefined) return { source: null };
+  if (typeof value !== 'string' || !imageDirectories().some((folder) => folder.source === value)) {
+    return { error: SOURCE_REFUSAL };
+  }
+  return { source: value };
+}
+
+/**
+ * Where the library lists this name: the folder named by `source`, else the
+ * first image folder (in listing order) holding it as a file, by stat as the
+ * listing does, with the site path the listing gives it (its metadata key);
+ * or null.
+ * @param {string} filename
+ * @param {string|null} [source] - a library source (imageDirectories), or null for the first folder holding the file
  * @returns {Promise<{source: string, directory: string, url: string}|null>}
  */
-async function imageLocation(filename) {
-  for (const { source, directory, urlBase } of imageDirectories()) {
+async function imageLocation(filename, source = null) {
+  const folders = imageDirectories().filter((folder) => source === null || folder.source === source);
+  for (const { source: folderSource, directory, urlBase } of folders) {
     try {
       if ((await fs.stat(path.join(directory, filename))).isFile()) {
-        return { source, directory, url: `${urlBase}/${filename}` };
+        return { source: folderSource, directory, url: `${urlBase}/${filename}` };
       }
     } catch {
       // not in this directory
@@ -793,15 +820,22 @@ router.post('/:filename/entry-value', express.json(), async (req, res) => {
 });
 
 /**
- * GET /api/images/:filename/metadata
- * Get metadata for a specific image: the entry at its site path, else the
- * one under its bare filename. An image in no folder has only the latter.
+ * GET /api/images/:filename/metadata?source=<source|uploads|assets>
+ * Get metadata for a specific image: the entry at its site path (in the
+ * folder `source` names, else the first folder holding the file), else the
+ * one under its bare filename. An image in no folder has only the latter;
+ * with a source named, an image not in that folder is a 404.
  */
 router.get('/:filename/metadata', async (req, res) => {
   try {
     const sanitizedFilename = imageFilenameFromParam(req.params.filename);
     if (!sanitizedFilename) return invalidFilename(res);
-    const [metadata, location] = await Promise.all([loadMetadata(), imageLocation(sanitizedFilename)]);
+    const { source, error } = metadataSource(req.query.source);
+    if (error) return res.status(400).json({ success: false, error });
+    const [metadata, location] = await Promise.all([loadMetadata(), imageLocation(sanitizedFilename, source)]);
+    if (source !== null && !location) {
+      return res.status(404).json({ success: false, error: 'Image not found' });
+    }
     const imageMeta = getImageMetadata(metadata, location ? location.url : sanitizedFilename, sanitizedFilename);
 
     res.json({
@@ -820,18 +854,22 @@ router.get('/:filename/metadata', async (req, res) => {
 });
 
 /**
- * PUT /api/images/:filename/metadata
+ * PUT /api/images/:filename/metadata?source=<source|uploads|assets>
  * Body: any of { alt, focalPoint, crop } (validateMetadataPatch); null
- * deletes a key. Written under the image's site-path key; a legacy
- * bare-filename entry is moved in. Responds with the entry as written.
+ * deletes a key. Written under the image's site-path key in the folder
+ * `source` names (the listing's field; absent: the first folder holding the
+ * file); a legacy bare-filename entry is moved in. Responds with the entry
+ * as written.
  */
 router.put('/:filename/metadata', express.json(), async (req, res) => {
   try {
     const sanitizedFilename = imageFilenameFromParam(req.params.filename);
     if (!sanitizedFilename) return invalidFilename(res);
+    const { source, error: sourceError } = metadataSource(req.query.source);
+    if (sourceError) return res.status(400).json({ success: false, error: sourceError });
     const { patch, error } = validateMetadataPatch(req.body);
     if (error) return res.status(400).json({ success: false, error });
-    const location = await imageLocation(sanitizedFilename);
+    const location = await imageLocation(sanitizedFilename, source);
     if (!location) {
       return res.status(404).json({ success: false, error: 'Image not found' });
     }

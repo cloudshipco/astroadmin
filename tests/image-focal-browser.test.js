@@ -17,10 +17,15 @@
  * it whatever the setting, so an editor must be able to see and clear it).
  *
  * `/api/config` is intercepted: `imageCrop` is forced per check (the UI reads
- * only the response). Every other request reaches the real server, and the
- * crop checks assert the metadata file as written.
+ * only the response). The dashboard reads the config ONCE per page load
+ * (`ui/admin-config.js`, shared with the library), so the page is reloaded
+ * before each flip of the override, and the fetch count is asserted. Every
+ * other request reaches the real server, and the crop checks assert the
+ * metadata file as written. Every metadata PUT names the item's folder
+ * (`?source=uploads`), and the alt text goes through the same save path as
+ * the point and the crop, with the button's Saving/Saved feedback.
  *
- *   bun tests/image-focal-browser.test.js     (~3 s; FOCAL_SCREENSHOT=<file> saves the crop state)
+ *   bun tests/image-focal-browser.test.js     (~4 s; FOCAL_SCREENSHOT=<file> saves the crop state)
  */
 
 import assert from 'assert';
@@ -121,15 +126,22 @@ page.on('pageerror', (error) => pageErrors.push(error.message));
 
 /** Every metadata PUT the dashboard sends, as its JSON body. */
 const metadataPuts = [];
+/** The `?source=` of each of those PUTs, in the same order. */
+const metadataPutSources = [];
 page.on('request', (request) => {
-  if (request.method() === 'PUT' && /^\/api\/images\/[^/]+\/metadata$/.test(new URL(request.url()).pathname)) {
+  const url = new URL(request.url());
+  if (request.method() === 'PUT' && /^\/api\/images\/[^/]+\/metadata$/.test(url.pathname)) {
     metadataPuts.push(request.postDataJSON());
+    metadataPutSources.push(url.searchParams.get('source'));
   }
 });
 
 /** What `imageCrop` is forced to on the real /api/config response (null: as the server says). */
 let imageCropOverride = null;
+/** How many times the page asked for /api/config since the last load. */
+let configFetches = 0;
 await page.route('**/api/config', async (route) => {
+  configFetches++;
   const response = await route.fetch();
   const body = await response.json();
   if (imageCropOverride !== null) body.imageCrop = imageCropOverride;
@@ -142,6 +154,12 @@ const box = panel.locator('[data-focal-box]');
 const marker = panel.locator('[data-focal-marker]');
 const cropRect = panel.locator('[data-crop-rect]');
 
+/** Load the entry afresh, so the memoised config is read again (with the override as it now is). */
+async function reloadDashboard() {
+  configFetches = 0;
+  await page.goto(`${base}/dashboard/pages/home`);
+  await page.locator('.image-picker[data-field="heroImage"]').waitFor();
+}
 async function openLibrary(field) {
   // A failed check may leave the library open; it would cover the picker.
   if (await modal.isVisible()) await modal.locator('[data-cancel]').click();
@@ -171,9 +189,10 @@ try {
   await page.goto(`${base}/login`);
   await page.fill('#username', 'admin');
   await page.fill('#password', 'admin');
-  await Promise.all([page.waitForURL(/dashboard/), page.press('#password', 'Enter')]);
-  await page.goto(`${base}/dashboard/pages/home`);
-  await page.locator('.image-picker[data-field="heroImage"]').waitFor();
+  // The dashboard the login lands on reads the config as it starts; wait for
+  // that, or its fetch lands after reloadDashboard's reset of the count.
+  await Promise.all([page.waitForURL(/dashboard/), page.waitForResponse('**/api/config'), page.press('#password', 'Enter')]);
+  await reloadDashboard();
 
   console.log('\n🧪 focal point and crop in the image library\n' + '='.repeat(40));
 
@@ -245,6 +264,9 @@ try {
     near(markerRect.x + markerRect.width / 2, expected.x, 1.5, 'marker centre x');
     near(markerRect.y + markerRect.height / 2, expected.y, 1.5, 'marker centre y');
     assert.equal(await marker.getAttribute('data-x'), '30');
+    // The library has now been opened four times on this page load: the
+    // config was read once, at startup, and shared (ui/admin-config.js).
+    assert.equal(configFetches, 1, `/api/config fetched ${configFetches} times on one page load`);
   });
 
   await check('Reset focal point clears the stored point and the marker', async () => {
@@ -257,8 +279,38 @@ try {
     await modal.locator('[data-cancel]').click();
   });
 
+  await check('Save alt text sends {alt} for the upload, shows Saved! and re-enables the button; the listing keeps it', async () => {
+    await openLibrary('heroImage');
+    await selectUpload();
+    const saveButton = modal.locator('[data-save-alt]');
+    const altInput = modal.locator('[data-alt-input]');
+    assert.equal(await altInput.inputValue(), '', 'no alt stored yet');
+    const putsBefore = metadataPuts.length;
+    await altInput.fill('  A grey rectangle  ');
+    await saveButton.click();
+    await page.waitForFunction(() => document.querySelector('#imageLibraryModal [data-save-alt]')?.textContent === 'Saved!');
+    assert.equal(await saveButton.isDisabled(), true, 'disabled while it says Saved!');
+    assert.deepEqual(metadataPuts.slice(putsBefore), [{ alt: 'A grey rectangle' }], 'one PUT with the trimmed alt');
+    assert.equal(metadataPutSources[putsBefore], 'uploads', 'the PUT names the folder');
+    await waitForMetadata((entry) => entry?.alt === 'A grey rectangle', 'the alt was not written');
+    await page.waitForFunction(() => document.querySelector('#imageLibraryModal [data-save-alt]')?.textContent === 'Save');
+    assert.equal(await saveButton.isDisabled(), false, 'enabled again');
+    // Enter saves too; the listing's copy was updated, so reselecting shows it.
+    await altInput.fill('A grey rectangle, again');
+    await altInput.press('Enter');
+    await waitUntil(() => metadataPuts.length > putsBefore + 1, 'no PUT followed Enter');
+    assert.deepEqual(metadataPuts.slice(putsBefore + 1), [{ alt: 'A grey rectangle, again' }]);
+    await waitForMetadata((entry) => entry?.alt === 'A grey rectangle, again', 'the second alt was not written');
+    await modal.locator('.image-library-item[data-url="/images/source.png"]').click();
+    await modal.locator('.image-library-item[data-url="/images/photo.png"]').click();
+    assert.equal(await altInput.inputValue(), 'A grey rectangle, again');
+    assert.deepEqual(photoMetadata().focalPoint, undefined, 'the alt save left the (cleared) focal point alone');
+    await modal.locator('[data-cancel]').click();
+  });
+
   await check('with imageCrop true, a drag from (10%,10%) to (60%,70%) saves crop {10,10,50,60} and shades it', async () => {
     imageCropOverride = true;
+    await reloadDashboard();
     await openLibrary('heroImage');
     const rect = await selectUpload();
     assert.equal(await panel.getAttribute('data-crop-enabled'), 'true');
@@ -301,6 +353,7 @@ try {
 
   await check('with imageCrop false, the same drag saves nothing and sets no focal point; a click still does', async () => {
     imageCropOverride = false;
+    await reloadDashboard();
     await openLibrary('heroImage');
     const rect = await selectUpload();
     assert.equal(await panel.getAttribute('data-crop-enabled'), 'false');
@@ -353,6 +406,11 @@ try {
     assert.equal(await cropRect.isVisible(), false);
     assert.equal(JSON.stringify(photoMetadata()), entryBefore, 'the file is unchanged by the drag');
     await modal.locator('[data-cancel]').click();
+  });
+
+  await check('every metadata PUT named the upload\'s folder (?source=uploads)', () => {
+    assert.ok(metadataPuts.length >= 8, `${metadataPuts.length} PUTs were sent`);
+    assert.deepEqual(metadataPutSources, metadataPuts.map(() => 'uploads'));
   });
 
   await check('no script errors on the page', () => {
