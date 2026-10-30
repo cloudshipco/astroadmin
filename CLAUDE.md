@@ -882,6 +882,16 @@ queue, so the old body is never written back.
   does, and a crop stored earlier is still drawn with Clear offered (the build applies it
   whatever the setting). The control row is as tall as its buttons before they appear
   (seen red: a button shown mid-drag moved the box under the pointer). ~5 s.
+- `bun tests/image-crop-preview-browser.test.js` — a stored crop is SHOWN by the editor's
+  previews, in Chromium, by measurement: the image field's preview and the library's grid
+  thumbnail (`ui/crop-view.js`: the `<img>` moved into a `[data-crop-window]` the crop
+  region's shape, sized 100/width and offset -x/width of it; the container gets
+  `data-cropped` and a "Cropped" caption; no crop leaves the DOM as rendered), with a
+  red/blue PNG whose cropped box is read from a screenshot; a crop dragged in the library
+  crops the field on Cancel (no Select) and the thumbnail at once, Select shows the chosen
+  file's crop, Clear puts the whole image back; one `GET /api/images/<name>/metadata?source=uploads`
+  per file per page load (`ui/image-details.js`, seeded by the library's saves), none for
+  an image() or video value; the entry is never rewritten. Seen red (5 of 9). ~4 s.
 
 - `bun tests/video-upload.test.js` — videos through the real upload route: MP4 and WebM
   (real ffmpeg fixtures in `tests/fixtures/video`, commands in the test header) install

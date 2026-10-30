@@ -8,6 +8,8 @@ import { readJson, failureText } from './api-response.js';
 import { MAX_IMAGE_SIZE, MAX_VIDEO_SIZE, megabytes, mediaRefusal } from './media-kinds.js';
 import { pushModal, removeModal } from './modal-stack.js';
 import { loadAdminConfig } from './admin-config.js';
+import { showCropView, isCrop, isPercent } from './crop-view.js';
+import { rememberImageDetails } from './image-details.js';
 
 let currentCallback = null;
 let currentImages = [];
@@ -362,6 +364,20 @@ function renderImages(grid, empty) {
     </div>
   `).join('');
   loadVideoThumbnailsInView(grid);
+  const byUrl = new Map(currentImages.map((img) => [img.url, img]));
+  grid.querySelectorAll('.image-library-item').forEach((item) => showThumbnailCrop(item, byUrl.get(item.dataset.url)));
+}
+
+/**
+ * A thumbnail shows its image's stored crop (the listing carries it), so a
+ * crop is seen in the grid as it will be on the site; a video has none.
+ * @param {HTMLElement|null} item - the grid cell
+ * @param {object|undefined} image - its listing entry
+ */
+function showThumbnailCrop(item, image) {
+  if (!item || !image || (image.kind || 'image') !== 'image') return;
+  const thumbnail = item.querySelector('img');
+  if (thumbnail) showCropView(item, thumbnail, image.crop);
 }
 
 /**
@@ -440,19 +456,9 @@ function hasFocalPanel(image) {
   return Boolean(image) && image.source === 'uploads' && (image.kind || 'image') === 'image';
 }
 
-/** A percentage the listing or a pointer gave: a finite number from 0 to 100. */
-function isPercent(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
-}
-
+/** A focal point the listing or a click gave: percentages (isPercent, crop-view.js). */
 function isFocalPoint(point) {
   return Boolean(point) && typeof point === 'object' && isPercent(point.x) && isPercent(point.y);
-}
-
-function isCrop(crop) {
-  return Boolean(crop) && typeof crop === 'object'
-    && isPercent(crop.x) && isPercent(crop.y) && isPercent(crop.width) && isPercent(crop.height)
-    && crop.width > 0 && crop.height > 0;
 }
 
 /**
@@ -606,6 +612,12 @@ async function saveImageMetadata(image, patch, what) {
     const data = await readJson(response);
     if (data.success) {
       Object.assign(image, patch);
+      // The page's shared copy of the details (ui/image-details.js) is the
+      // entry as written, so an open field holding this file follows at once
+      const written = data.metadata && typeof data.metadata === 'object'
+        ? data.metadata
+        : { alt: image.alt, focalPoint: image.focalPoint, crop: image.crop };
+      rememberImageDetails(image.filename, image.source, written);
       return true;
     }
     alert(`Failed to save ${what}: ` + data.error);
@@ -635,6 +647,9 @@ async function saveCrop(crop) {
   drawCrop(panel, crop);
   await saveImageMetadata(image, { crop }, 'crop');
   if (selectedImageUrl === image.url) renderFocalPanel(image);
+  // The grid thumbnail shows the stored crop (whatever was saved, or not)
+  const grid = document.getElementById('imageLibraryModal').querySelector('[data-grid]');
+  showThumbnailCrop([...grid.querySelectorAll('.image-library-item')].find((item) => item.dataset.url === image.url), image);
 }
 
 /**

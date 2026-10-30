@@ -250,8 +250,10 @@ no longer needed. `CmsImage` cuts every AVIF, WebP and JPEG variant from the
 crop: the candidate `widths` stop at the crop's width rather than the
 original's, the fallback's `width` and `height` attributes are the crop's,
 and the focal point, which is still set on the original, is translated into
-the crop frame. "Clear crop" removes it, and the next build renders the
-whole image again.
+the crop frame. The editor shows the crop as soon as it is set: the image
+field's preview and the library's thumbnail are clipped to it (captioned
+"Cropped"), with the file itself untouched. "Clear crop" removes it, and the
+next build renders the whole image again.
 
 Astro's image service resizes but has no crop step, so cropping needs the
 site to opt in twice:

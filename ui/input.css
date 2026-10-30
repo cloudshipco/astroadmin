@@ -787,6 +787,51 @@
     @apply text-xs;
   }
 
+  /* Crop view (ui/crop-view.js): a preview of an image with a stored crop.
+     The window is the crop region's shape (--crop-aspect, set by script from
+     the picture's proportions) and clips the <img>, which the script sizes
+     and offsets from the crop's percentages (inline, with !important, so the
+     image's own sizing rules do not apply to it). The container that holds
+     the window carries data-cropped and captions it. */
+  .crop-window {
+    @apply relative overflow-hidden;
+    aspect-ratio: var(--crop-aspect);
+  }
+
+  .crop-window > img {
+    position: absolute !important;
+    max-width: none !important;
+    max-height: none !important;
+    object-fit: fill !important;
+  }
+
+  [data-cropped]::after {
+    content: 'Cropped';
+    @apply absolute left-1 bottom-1 px-1 rounded text-white pointer-events-none;
+    font-size: 0.625rem;
+    line-height: 1rem;
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  /* Contained in the field's preview as the whole image is (12rem tall at
+     most, 8rem in the compact variant), centred; the preview grows to it. */
+  .image-picker-preview > .crop-window {
+    width: min(100%, calc(12rem * var(--crop-aspect)));
+    margin-inline: auto;
+  }
+
+  .image-picker--compact .image-picker-preview > .crop-window {
+    width: min(100%, calc(8rem * var(--crop-aspect)));
+  }
+
+  /* Covering a square box (a library grid cell, the thumbnail variant),
+     centred: as wide as the box or as tall as it, whichever fills it. */
+  .image-library-item > .crop-window,
+  .image-picker--thumb .image-picker-preview > .crop-window {
+    @apply absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2;
+    width: max(100%, calc(100% * var(--crop-aspect)));
+  }
+
   /* Hide labels inside simple array items - context is clear */
   .array-item .array-item-fields:not(.array-item-stacked) .form-label {
     @apply sr-only;
