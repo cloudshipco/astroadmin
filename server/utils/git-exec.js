@@ -87,7 +87,15 @@ const DROPPED = new Set(DROPPED_ENVIRONMENT);
  * - core.hooksPath=/dev/null: no hooks (pre-commit, post-checkout of the
  *   check's `worktree add`, post-merge, pre-push, reference-transaction...).
  * - core.fsmonitor=false: no fsmonitor command on status, add or checkout.
- * - commit.gpgSign=false: no gpg.program on commit.
+ * - commit.gpgSign=false, push.gpgSign=false: nothing is signed.
+ * - log.showSignature=false: `git log` (the history routes) does not verify
+ *   a signed commit's signature, which runs the signature program.
+ * - gpg.program=false and gpg.<format>.program=false (openpgp, x509, ssh):
+ *   any signing or verifying left (a `%G?` format, `--show-signature`) runs
+ *   `false`, never a program the repository names.
+ * - core.alternateRefsCommand=true: with `objects/info/alternates`, a fetch
+ *   runs this to list the other object store's refs; `true` lists none (an
+ *   empty value is run as a command and fails noisily).
  * - protocol.ext.allow=never: no `ext::` transport (a command) on fetch/push.
  * - core.sshCommand=ssh: plain ssh, not a command the repository names.
  *   GIT_SSH_COMMAND still outranks it. (An empty value is not "unset": git
@@ -108,6 +116,13 @@ export const HARDENING_CONFIG = Object.freeze([
   'core.hooksPath=/dev/null',
   'core.fsmonitor=false',
   'commit.gpgSign=false',
+  'push.gpgSign=false',
+  'log.showSignature=false',
+  'gpg.program=false',
+  'gpg.openpgp.program=false',
+  'gpg.x509.program=false',
+  'gpg.ssh.program=false',
+  'core.alternateRefsCommand=true',
   'protocol.ext.allow=never',
   'core.sshCommand=ssh',
   'credential.helper=',
@@ -133,6 +148,7 @@ export const SIMPLE_GIT_UNSAFE = Object.freeze({
   allowUnsafeMergeDriver: true,
   allowUnsafePack: true,
   allowUnsafeGitProxy: true,
+  allowUnsafeGpgProgram: true,
 });
 
 /**

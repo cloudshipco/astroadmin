@@ -16,13 +16,18 @@
  *     core.sshCommand, credential.helper, core.askPass and core.gitProxy,
  *     each reached by a push or fetch to an ssh://, http:// (a server that
  *     asks for credentials) or git:// URL;
+ *   - log.showSignature with that gpg.program (a plain `git log` of a signed
+ *     commit runs it to verify), and an `objects/info/alternates` file with a
+ *     core.alternateRefsCommand (run by a fetch);
  *   - (last phase) protocol.ext.allow=always and an ext:: push URL.
  *
  * CONTROL first: the same plants in a copy of the fixture fire under plain
- * git (commit, checkout, worktree add, status, diff, pull, push), so a clean
- * result below is not a dead plant. Then through the real createServer() app:
- * save, status, diff, show, revert, publish (whose check runs `git worktree
- * add`) and the commit route, with markers asserted absent after each.
+ * git (commit, checkout, worktree add, status, diff, pull, push, log), so a
+ * clean result below is not a dead plant. Then through the real
+ * createServer() app: save, status, diff, show, revert, publish (whose check
+ * runs `git worktree add`), the commit route, and the history routes (log,
+ * file-history, show) of a signed commit, with markers asserted absent after
+ * each.
  * No --no-verify anywhere: hooks must be off because git is told so.
  *
  *   bun tests/git-hardening.test.js
@@ -83,6 +88,11 @@ plant('ssh-command', 'exit 1');
 plant('credential-helper', 'cat > /dev/null; exit 0');
 plant('askpass', 'echo planted');
 plant('git-proxy', 'exit 1');
+// Run through a shell with the alternate's path; lists no refs.
+plant('alternate-refs', 'exit 0');
+// The other object store the site's alternates file names (empty).
+const alternateStore = path.join(tempRoot, 'alternate.git');
+execFileSync('/usr/bin/git', ['init', '-q', '--bare', alternateStore], { env: cleanEnv() });
 
 /** Plant everything in a site checkout (its .git/hooks and .git/config). */
 function plantInto(checkout, tag = '') {
@@ -117,6 +127,11 @@ function plantInto(checkout, tag = '') {
   git(checkout, 'config', 'credential.helper', wrap('credential-helper'));
   git(checkout, 'config', 'core.askPass', wrap('askpass'));
   git(checkout, 'config', 'core.gitProxy', wrap('git-proxy'));
+  // Verifying a signature on `git log` runs gpg.program (the history routes).
+  git(checkout, 'config', 'log.showSignature', 'true');
+  // A fetch lists an alternate object store's refs with this command.
+  writeFile(git(checkout, 'rev-parse', '--path-format=absolute', '--git-path', 'objects/info'), 'alternates', `${path.join(alternateStore, 'objects')}\n`);
+  git(checkout, 'config', 'core.alternateRefsCommand', wrap('alternate-refs'));
 }
 
 // An HTTPS remote that asks for credentials (and never accepts any). Its own
@@ -249,9 +264,16 @@ async function check(name, fn) {
   await check('control: every plant fires under plain git', async () => {
     const expected = [
       ...HOOKS.map((hook) => `hook-${hook}`), 'fsmonitor', 'smudge', 'clean', 'textconv', 'external-diff', 'gpg', 'ext-transport',
-      'merge-driver', 'upload-pack', 'receive-pack', 'ssh-command', 'credential-helper', 'askpass', 'git-proxy',
+      'merge-driver', 'upload-pack', 'receive-pack', 'ssh-command', 'credential-helper', 'askpass', 'git-proxy', 'alternate-refs',
     ].sort();
     assert.deepEqual(fired("control-"), expected, `fired: ${fired("control-").join(", ")}`);
+  });
+  clearMarkers();
+  // The control's commits are signed (commit.gpgSign), so a plain log
+  // verifies them: gpg.program runs for reading history, not only signing.
+  plain('log', '-2');
+  await check('control: a plain git log runs gpg.program to verify a signed commit', async () => {
+    assert.deepEqual(fired('control-'), ['gpg'], `fired: ${fired('control-').join(', ')}`);
   });
   clearMarkers();
   git(remoteDir, 'update-ref', '-d', 'refs/heads/control');
@@ -413,6 +435,26 @@ try {
   }, ({ status, body }) => {
     // The push is refused, so the editor is told it is not live.
     assert.equal(status, 502, JSON.stringify(body));
+  });
+
+  // A signed commit in the history (signed by plain git, with the planted
+  // gpg.program: its markers are cleared when the step starts).
+  writeFile(projectRoot, 'src/content/pages/about.md', page('About (signed)'));
+  git(projectRoot, 'commit', '-q', '-S', '-m', 'signed', '--', 'src/content/pages/about.md');
+  const signedCommit = git(projectRoot, 'rev-parse', 'HEAD');
+  assert.match(git(projectRoot, 'cat-file', 'commit', signedCommit), /^gpgsig /m, 'the commit is signed');
+
+  await step('history of a signed commit (log, file-history, show)', async () => ({
+    log: await request('GET', '/api/git/log'),
+    fileHistory: await request('GET', '/api/git/file-history?file=src/content/pages/about.md'),
+    show: await request('GET', `/api/git/show?commit=${signedCommit}&file=src/content/pages/about.md`),
+  }), ({ log, fileHistory, show }) => {
+    assert.equal(log.status, 200, JSON.stringify(log.body));
+    assert.equal(log.body.commits[0]?.hash, signedCommit, `the log lists the signed commit: ${JSON.stringify(log.body.commits[0])} (fired: ${fired().join(', ')})`);
+    assert.equal(fileHistory.status, 200, JSON.stringify(fileHistory.body));
+    assert.equal(fileHistory.body.commits[0].hash, signedCommit, 'the file history lists the signed commit');
+    assert.equal(show.status, 200, JSON.stringify(show.body));
+    assert.match(show.body.content, /About \(signed\)/);
   });
 
   console.log(`\n📊 ${passed} passed, ${failed} failed.`);
