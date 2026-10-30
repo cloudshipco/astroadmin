@@ -283,6 +283,7 @@ setTimeout(() => {
     assert.equal(finished, false, 'the build kept running after the doctor stopped');
     assert.equal(fs.existsSync(outDir), false, `${outDir} was left behind`);
     assert.equal(exit.code, 130, `exit ${JSON.stringify(exit)}\n${output}`);
+    assert.match(output, /The doctor was interrupted; its build was stopped and removed\./, output);
   });
 
   await checkAsync('SIGTERM during the doctor\'s build does the same, exit 143', async () => {
@@ -293,7 +294,34 @@ setTimeout(() => {
     assert.equal(exit.code, 143, `exit ${JSON.stringify(exit)}\n${output}`);
   });
 
-  await checkAsync('a site with no node_modules of its own builds into an ignored .astroadmin-doctor folder, removed when interrupted', async () => {
+  await checkAsync('interrupted with no build started: exit 130, and it does not claim to have removed a build', async () => {
+    // --build, so nothing is built; the content config (loaded in the
+    // doctor's own process) records that it is loading, then waits.
+    const site = makeSite('interrupted-no-build', HOSTED);
+    const loadingFile = path.join(tempRoot, 'interrupted-no-build.loading');
+    writeFile(site, 'src/content.config.ts', `import fs from 'fs';
+import { defineCollection, z } from 'astro:content';
+import { glob } from 'astro/loaders';
+fs.writeFileSync(${JSON.stringify(loadingFile)}, 'yes');
+await new Promise((resolve) => setTimeout(resolve, 20000));
+export const collections = { pages: defineCollection({ loader: glob({ pattern: '**/*.md', base: './src/content/pages' }), schema: z.object({ headline: z.string() }) }) };
+`);
+    const child = spawn('bun', [path.join(repoRoot, 'bin/cli.js'), 'doctor', '--project', site, '--build', path.join(site, 'prebuilt'), '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const exited = new Promise((resolve) => child.on('exit', (code, exitSignal) => resolve({ code, exitSignal })));
+    await waitFor(() => fs.existsSync(loadingFile), 'the content config to load');
+    child.kill('SIGINT');
+    const exit = await exited;
+    assert.equal(exit.code, 130, `exit ${JSON.stringify(exit)}\n${stderr}`);
+    assert.match(stderr, /The doctor was interrupted\./, stderr);
+    assert.doesNotMatch(stderr, /build was stopped/, stderr);
+    assert.equal(stdout, '', 'an interrupted --json run prints nothing on stdout');
+  });
+
+  await checkAsync('a site with no node_modules of its own builds into an ignored .astroadmin-doctor folder; interrupted, its build is removed and the folder kept', async () => {
     // A site in a subdirectory of its repository, astro hoisted to the top.
     const monorepo = path.join(tempRoot, 'monorepo-fallback');
     const site = path.join(monorepo, 'apps', 'site');
@@ -313,7 +341,12 @@ setTimeout(() => {
     assert.equal(finished, false, 'the build kept running after the doctor stopped');
     assert.equal(fs.existsSync(outDir), false, `${outDir} was left behind`);
     assert.equal(exit.code, 130, `exit ${JSON.stringify(exit)}\n${output}`);
-    assert.equal(fs.existsSync(path.join(site, '.astroadmin-doctor')), false, 'the .astroadmin-doctor folder was left behind');
+    // The fallback folder itself stays, holding only its .gitignore: another
+    // doctor may be between its mkdir and its mkdtemp there (removing the
+    // folder once it looked empty made that doctor's build fail with ENOENT,
+    // or deleted it mid-build). It ignores itself.
+    assert.deepEqual(fs.readdirSync(path.join(site, '.astroadmin-doctor')), ['.gitignore']);
+    assert.equal(untrackedDuringBuild(), '', 'the folder left behind shows up as untracked');
   });
 
   await checkAsync('an --build directory with no HTML fails, and the built checks do not pass', async () => {

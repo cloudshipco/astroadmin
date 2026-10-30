@@ -120,19 +120,15 @@ export function doctorOutDirParent(projectRoot) {
 export const DOCTOR_FALLBACK_DIR = '.astroadmin-doctor';
 
 /**
- * Remove a build folder made under doctorOutDirParent, and the fallback
- * folder around it once only its .gitignore is left.
+ * Remove a build folder made under doctorOutDirParent. The fallback folder
+ * around it stays (it ignores itself): another doctor may be between its
+ * mkdir and its mkdtemp there, or building in it, and removing the folder
+ * once it looked empty made that doctor's build fail with ENOENT, or
+ * deleted its build mid-run.
  * @param {string} outDir
  */
 function removeDoctorOutDir(outDir) {
   fs.rmSync(outDir, { recursive: true, force: true });
-  const parent = path.dirname(outDir);
-  if (path.basename(parent) !== DOCTOR_FALLBACK_DIR) return;
-  try {
-    if (fs.readdirSync(parent).every((name) => name === '.gitignore')) fs.rmSync(parent, { recursive: true, force: true });
-  } catch {
-    // already gone
-  }
 }
 
 /**

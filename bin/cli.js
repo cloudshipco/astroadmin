@@ -77,7 +77,9 @@ function cleanup() {
   process.exit(0);
 }
 
-// Register cleanup handlers
+// Register cleanup handlers. The doctor's action replaces them in the same
+// tick commander parses in (no signal is delivered in between: measured by a
+// preload watching the listeners), so an interrupted doctor never exits 0.
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
@@ -377,7 +379,8 @@ program
         });
       } catch (error) {
         if (!(error instanceof DoctorInterrupted)) throw error;
-        console.error('\nThe doctor was interrupted; its build was stopped and removed.');
+        // Only a build that had started was stopped and removed.
+        console.error(`\nThe doctor was interrupted${error.buildRemoved ? '; its build was stopped and removed' : ''}.`);
         process.exit(exitCode);
       }
       if (options.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

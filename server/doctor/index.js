@@ -23,6 +23,8 @@ export class DoctorInterrupted extends Error {
   constructor() {
     super('The doctor was interrupted.');
     this.name = 'DoctorInterrupted';
+    /** Set when its build had started, and was then stopped and removed. */
+    this.buildRemoved = false;
   }
 }
 
@@ -119,6 +121,7 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
   interrupted?.catch(() => {}); // handled where it is raced
 
   const results = [];
+  let failure = null;
   try {
     for (const definition of DOCTOR_CHECKS) {
       if (!phases.includes(definition.phase)) continue;
@@ -144,11 +147,16 @@ export async function runDoctor({ projectRoot, distDir = null, build = true, pha
         ...(outcome.data ? { data: outcome.data } : {}),
       });
     }
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
     // Stop a build still running before removing its folder, or it writes
     // into the site after the doctor has gone.
     if (signal?.aborted) await killProcessGroups(context.processGroups);
     for (const cleanup of context.cleanups) await cleanup().catch(() => {});
+    // The CLI says a build was stopped and removed only when one had started.
+    if (failure instanceof DoctorInterrupted) failure.buildRemoved = context.cleanups.length > 0;
   }
 
   const counts = { pass: 0, warn: 0, fail: 0, skip: 0 };

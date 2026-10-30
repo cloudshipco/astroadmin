@@ -31,7 +31,8 @@ npx astroadmin doctor --project ../site-a
 | `--json` | Print the report as JSON on stdout (progress goes to stderr), for CI or a dashboard that shows several sites at once. |
 
 The exit code is 1 when any check fails, otherwise 0. Warnings do not
-change the exit code.
+change the exit code. An interrupted doctor (Ctrl-C or SIGTERM) exits 130
+or 143 and prints no report: with `--json`, nothing at all on stdout.
 
 Each result is one of:
 
@@ -256,7 +257,9 @@ filesystem (a tmpfs `/tmp`, a VM's shared folder) breaks Astro's move of
 prerendered assets. A site with no `node_modules` of its own (a monorepo with
 hoisted packages) builds into a temporary directory in `.astroadmin-doctor/` in
 its root instead; that folder ignores itself (a `.gitignore` of `*`), so a
-commit made during the build picks up none of it. When
+commit made during the build picks up none of it. The doctor removes its own
+build directory inside it but leaves the folder, since another doctor run may
+be building there. When
 the build fails, its output is printed to the doctor's stderr, above the
 report. The built-HTML checks below need that build.
 
