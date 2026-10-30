@@ -154,7 +154,8 @@ over-redaction in every version of "show the output with server paths removed or
 
 Tests are standalone scripts under `tests/`, each run as its own process.
 `npm run test:unit` (`bun tests/run-unit.js [word...]`) runs the fast server-less
-ones in turn and prints a summary (~95 s, 77 files, measured 2026-10-29); a new fast test
+ones in turn and prints a summary (about 81 files, ~200 s on a loaded machine, measured
+2026-10-30; review lanes may add more); a new fast test
 goes in its list, and its header names every file it leaves out. The
 slow ones (full Astro builds, a browser) are run by name before a release, and the
 shelved SQLite store's are `npm run test:db`. Most run server-less and need env vars:
@@ -271,7 +272,8 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
 - `bun tests/publish-check.test.js` — the publish gate, against this repo's real Astro: a
   throwaway site with a bare remote; invalid content is committed but not pushed, the commit
   (not the working tree) is what is checked, a rebase onto the remote is checked as
-  combined, unstaged saves (edits of tracked files) are committed BEFORE the pull so they
+  combined, unstaged saves (edits of tracked files) are committed BEFORE the rebase onto the
+  upstream so they
   land on a remote that moved on (#57), a conflicting rebase is aborted and refused with a
   409 (the checkout back on its branch), a missing `image()` file is refused, only the checked commit is pushed (not
   other configured refs, even with a same-named tag), a failed push is reported as NOT
@@ -530,7 +532,8 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   rename into the site is `created`, one out of it `deleted` (`scopeStatusRenames`); the
   log lists only commits touching the git paths. Every path in a git response goes through
   `scopeRepoPath`, or asks git for projectRoot-relative paths under the same pathspecs.
-  6 of 9 checks red on the pre-fix code. ~3 s.
+  6 of the original 9 checks (one, the pull route's, since removed) were red on the pre-fix
+  code. ~3 s.
 - `bun tests/cross-origin.test.js` — every state-changing `/api` request (save, delete, upload,
   revert, commit, publish, login, logout) from another origin is a 403 that changes nothing on
   disk (`Sec-Fetch-Site: same-site`/`cross-site`, a foreign or `null` Origin, another port),
@@ -581,7 +584,8 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   shell in Playwright's cache on macOS or Linux: the revision playwright-core's
   browsers.json pins, else the newest). `image-serving` is in test:unit and FAILS without
   one (`launchChromium` says how to get it: `npx playwright-core install
-  chromium-headless-shell`), never skips its security checks. playwright-core is pinned at 1.57.0 because 1.64.1 never exits
+  chromium-headless-shell`), never skips its security checks. Every browser test launches
+  through `launchChromium`, never `chromium.launch` itself. playwright-core is pinned at 1.57.0 because 1.64.1 never exits
   after `browser.close()` with the downloaded shell.
 - `bun tests/dev-toolbar.test.js` — the integration hides Astro's dev toolbar in the
   preview AstroAdmin runs (ASTROADMIN_PROJECT_ROOT naming the site: `astroadmin dev`, the
@@ -792,7 +796,9 @@ queue, so the old body is never written back.
   video and poster uploaded after start are found in the site's public/; with `base: '/blog'`
   local paths are served under it; a value that is not an .mp4/.webm path or URL (a typed
   bare name, a YouTube page) fails the build by name. A video is found on disk
-  (`existsInPublicExactCase` in `components/site-files.js`, case-exact even on macOS), never
+  (`existsInPublicExactCase` in `components/site-files.js`, case-exact in every folder and
+  file name even on macOS, the path before any `?`/`#` so `#t=5` is kept, and a symlink
+  resolving outside public/ counts as missing), never
   through `import.meta.glob`, whose entries made Vite emit every video again under
   `_astro/` (#90): the build's `_astro/` holds no `.mp4`/`.webm`. ~20 s.
 
@@ -806,8 +812,11 @@ queue, so the old body is never written back.
 one; a failed build's details point at the output above, never a server log; the doctor
 builds under `<site>/node_modules/.cache`, since Astro 6.3 loses src/assets images when
 outDir is outside the root, #73, or in a self-ignoring `.astroadmin-doctor/` in a site with
-no node_modules of its own; SIGINT/SIGTERM during the build kill its process group, remove
-its folder and exit 130/143, never the CLI's global exit 0; ~20 s), `doctor-publish` (the editor scans the publish check's own build in a child
+no node_modules of its own (that folder is never removed, only the doctor's own build
+folder in it: another doctor may be between its mkdir and mkdtemp there); SIGINT/SIGTERM
+during the build kill its process group, remove its folder and exit 130/143, never the
+CLI's global exit 0; interrupted before a build started, it does not claim to have removed
+one, and `--json` prints nothing on stdout; ~20 s), `doctor-publish` (the editor scans the publish check's own build in a child
 process rooted at the check's worktree, so it reads the commit's entries; a scan stuck in a
 synchronous loop is killed at its cap; an error is "unavailable" with a fixed reason and the
 error in the server log, never a failed publish; `unoptimised-images` is command-line
@@ -816,9 +825,10 @@ only, absent from the editor scan but reported by `runDoctor`; ~15 s),
 originals in built HTML; CmsImage's prerequisites: the SITE's sharp, found by walking up
 `node_modules` from the site root, never Astro's nested copy, Astro >= 7, `cssTarget`; a
 `publicDir` other than `./public`, or unreadable, warns for CmsImage and CmsVideo, #86; a
-template literal and `new URL('./public', import.meta.url)`, bare or in `fileURLToPath`,
-are read, and a config the doctor cannot read at all says so rather than "not a plain
-string"). Run each with `bun tests/doctor-<name>.test.js`.
+template literal and `new URL('./public', import.meta.url)`, bare or in `fileURLToPath`
+or `url.fileURLToPath` (url imported whole), are read, and a config the doctor cannot read
+at all says so rather than that publicDir is "not a value the doctor can read
+statically"). Run each with `bun tests/doctor-<name>.test.js`.
 
 **The doctor and the publish check use synchronous fs, never `fs/promises`.** Under Bun 1.3.4
 on macOS an `fs/promises` call made while child processes start and exit can lose its completion
@@ -846,7 +856,8 @@ simple-git refuses `-C`); anything else uses git-exec's `runGit`/`runGitSync`; n
 `credential.helper=`, `core.askPass=`) and `namedCommandOverrides` (every configured
 `filter.<name>` set to empty commands with `required=false`, every `merge.<name>.driver` set
 to `git merge-file`), because the site's code runs on the host and can write `.git/hooks`
-and `.git/config`. Every fetch and push passes `--upload-pack`/`--receive-pack` (a `-c`
+and `.git/config`. A filter or merge driver whose name contains `=` cannot be overridden
+(`-c` splits at the first `=`), so git-exec refuses to run git at all in that repository. Every fetch and push passes `--upload-pack`/`--receive-pack` (a `-c`
 cannot override those: git keeps the first value it reads), `GIT_PROXY_COMMAND` is empty by
 default and `GIT_TERMINAL_PROMPT=0`. The operator's `GIT_SSH_COMMAND` and `GIT_ASKPASS` are
 the only ways to supply ssh and HTTPS credentials (no credential helper, osxkeychain
@@ -872,7 +883,8 @@ Two layers, deliberately unequal:
    and after the commit is rebased onto the upstream (in that order: before the commit the
    saves are unstaged, #57). The rebase runs in a throwaway detached worktree
    (`--no-autostash --no-update-refs`, and `--fork-point` against the branch's
-   remote-tracking ref when the fetch moved it, as `pull --rebase` did, so a commit
+   remote-tracking ref when the branch's remote-tracking ref points at the fetched commit,
+   as `pull --rebase` did, so a commit
    force-pushed away upstream is not replayed) and the live checkout is moved to its result with
    `git reset --keep`, so uncommitted changes elsewhere in the repository do not block it
    (#83); `--keep` refuses, changing nothing, when an incoming change touches a locally
