@@ -201,11 +201,15 @@ Publish runs these steps, in order:
    to the checkout sorts those files out, then publishes again. If the
    checkout is already in the middle of a rebase or merge (someone left one
    unfinished on the server), publishing is refused before anything is
-   committed, and the editor's saves stay as they are. A commit someone
-   force-pushed away upstream is not brought back. A repository whose files
-   go through a git filter (Git LFS, or any clean/smudge filter) is refused
-   before anything is committed: AstroAdmin runs git with every filter
-   switched off, so it would commit those files' raw bytes;
+   committed, and the editor's saves stay as they are. A file someone
+   staged (`git add`) and then changed again is refused the same way,
+   wherever it is, since moving the checkout would drop the staged
+   version. A commit someone
+   force-pushed away upstream is not brought back. A repository where any
+   file, anywhere, goes through a git filter (Git LFS or another) is
+   refused, even outside the site's folder. The refusal comes before
+   anything is committed: AstroAdmin runs git with every filter switched
+   off, so it would commit those files' raw bytes;
 3. build the resulting commit with the site's Astro (the pre-push check,
    below);
 4. push that commit to the current branch's upstream;
@@ -238,12 +242,18 @@ credential helpers and `core.sshCommand` switched off, because the site's own
 code (its build, its integrations) can write `.git/config`. So the push takes
 its credentials only from the environment the admin is started with:
 
-- an SSH remote uses `ssh`, or `GIT_SSH_COMMAND` when it is set (for example
-  `ssh -i /path/to/deploy-key -o IdentitiesOnly=yes`);
-- an HTTPS remote needs `GIT_ASKPASS`, a program that prints the token.
-  A credential helper in git's config (osxkeychain, the GitHub CLI's helper)
-  is not used. git never prompts (`GIT_TERMINAL_PROMPT=0`), so a push with no
-  credentials fails at once instead of waiting.
+- an SSH remote uses `ssh` from the admin's `PATH`, with the admin user's
+  `~/.ssh/config` and ssh agent, or `GIT_SSH_COMMAND` when it is set (for
+  example `ssh -i /path/to/deploy-key -o IdentitiesOnly=yes -o
+  BatchMode=yes`). `GIT_SSH` is not used;
+- an HTTPS remote takes its credentials from `GIT_ASKPASS` (a program that
+  prints the token) or from the remote URL itself. A credential helper in
+  git's config (osxkeychain, the GitHub CLI's helper) is not used.
+
+git itself never prompts (`GIT_TERMINAL_PROMPT=0`), so an HTTPS push with no
+credentials fails at once instead of waiting. That does not stop `ssh`
+asking for a passphrase or a host key on a terminal when the admin runs in
+one: add `-o BatchMode=yes` to `GIT_SSH_COMMAND` so it fails instead.
 
 `GIT_AUTHOR_NAME`/`EMAIL` and `GIT_COMMITTER_NAME`/`EMAIL`, when set, name the
 commits; otherwise the repository's `user.name` and `user.email` do.
