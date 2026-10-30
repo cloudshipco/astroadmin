@@ -333,8 +333,16 @@ async function rebaseOntoUpstream(git, upstream) {
     console.log('Fetch skipped:', fetchError.message);
     return 'synced';
   }
-  await recordUpstream(git, upstream, upstreamHead);
-  if (await isAncestor(git, upstreamHead, localHead)) return 'synced';
+  // The record moves only once the branch is on what was fetched (here,
+  // after the reset below, and after a push): a publish refused in between
+  // leaves the branch on its old base, and a record already moved past it
+  // would leave the next publish no known base, so it would fall back to the
+  // merge-base and replay a commit the upstream had dropped. (The fetch moves
+  // the tracking ref regardless; the record is the value that stays put.)
+  if (await isAncestor(git, upstreamHead, localHead)) {
+    await recordUpstream(git, upstream, upstreamHead);
+    return 'synced';
+  }
 
   // `reset --keep` resets the index. A file staged as one version and
   // changed since (not the editor's: its commit names its own paths) would
@@ -360,6 +368,7 @@ async function rebaseOntoUpstream(git, upstream) {
     console.error('Publish refused: uncommitted changes in the checkout are in files the upstream changes:', resetError.message);
     return 'local-changes';
   }
+  await recordUpstream(git, upstream, upstreamHead);
   console.log('✅ Rebased onto the latest changes');
   return 'synced';
 }

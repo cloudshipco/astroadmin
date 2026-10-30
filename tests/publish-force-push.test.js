@@ -108,8 +108,67 @@ async function scenario(name, configure) {
   });
 }
 
+/**
+ * The same, with a publish in between that is REFUSED after its fetch
+ * (`mode`): 'local-changes' (the developer's commit changes a file the
+ * checkout has an uncommitted change in) or 'conflict' (the editor's commit
+ * clashes with the developer's). The fetch moved what the admin knows of the
+ * upstream while the branch stayed on its old base; the record of the
+ * upstream must not move until the branch is on it, or the next publish
+ * finds no known base and replays the removed commit. Checked by file.
+ */
+async function refusedScenario(mode) {
+  const root = fs.mkdtempSync(path.join(tempRoot, 'refused-'));
+  const remote = path.join(root, 'remote.git');
+  const checkout = path.join(root, 'checkout');
+  const developer = path.join(root, 'developer');
+  git(root, 'init', '-q', '--bare', '-b', 'main', remote);
+  fs.mkdirSync(checkout);
+  git(checkout, 'init', '-q', '-b', 'main');
+  identity(checkout, 'Editor');
+  writeFile(checkout, 'a.md', 'a\n');
+  writeFile(checkout, 'shared.md', 'shared\n');
+  git(checkout, 'add', '-A');
+  git(checkout, 'commit', '-qm', 'initial');
+  git(checkout, 'remote', 'add', 'origin', remote);
+  git(checkout, 'push', '-q', '-u', 'origin', 'main');
+
+  await check(`a publish refused for ${mode} does not let the next one bring a force-pushed-away commit back`, async () => {
+    const mistake = await publish(checkout, 'mistake.md');
+    assert.equal(mistake.pushed, true, `the mistake was published: ${JSON.stringify(mistake)}`);
+    const mistakeCommit = git(remote, 'rev-parse', 'main');
+
+    git(root, 'clone', '-q', remote, developer);
+    identity(developer, 'Developer');
+    git(developer, 'reset', '-q', '--hard', `${mistakeCommit}~1`);
+    writeFile(developer, 'shared.md', 'developer\n');
+    git(developer, 'add', '-A');
+    git(developer, 'commit', '-qm', 'developer');
+    git(developer, 'push', '-q', '--force', 'origin', 'main');
+
+    if (mode === 'local-changes') {
+      writeFile(checkout, 'shared.md', 'changed on the server\n');
+      const refused = await publish(checkout, 'edit1.md');
+      assert.equal(refused.localChanges, true, `refused for local changes: ${JSON.stringify(refused)}`);
+      git(checkout, 'checkout', '--', 'shared.md');
+    } else {
+      const refused = await publish(checkout, 'shared.md');
+      assert.equal(refused.conflict, true, `refused for a conflict: ${JSON.stringify(refused)}`);
+      git(checkout, 'reset', '-q', '--hard', 'HEAD~1');
+    }
+
+    const edit = await publish(checkout, 'edit2.md');
+    assert.equal(edit.pushed, true, `the edit was published: ${JSON.stringify(edit)}`);
+    assert.ok(has(remote, 'main:edit2.md'), "the editor's commit is on the remote");
+    assert.equal(git(remote, 'show', 'main:shared.md'), 'developer', "the developer's commit is underneath");
+    assert.equal(has(remote, 'main:mistake.md'), false, `the removed commit came back: ${git(remote, 'log', '--format=%s', 'main')}`);
+  });
+}
+
 try {
   console.log('\n🧪 A force-pushed-away commit is not published again\n' + '='.repeat(40));
+  await refusedScenario('local-changes');
+  await refusedScenario('conflict');
   await scenario('a named remote with the default refspec (control)', () => {});
   await scenario('branch.main.remote is a URL', ({ checkout, remote }) => {
     git(checkout, 'config', 'branch.main.remote', remote);
