@@ -251,7 +251,7 @@ export function namedCommandOverrides(cwd) {
       // `-c` splits at the first '=', so such a name cannot be overridden:
       // refuse to run git at all rather than run it with the command live.
       if (match[1].includes('=')) {
-        throw new Error('A git driver or remote in this repository has a name that cannot be overridden; refusing to run git.');
+        throw new Error('A git driver in this repository has a name that cannot be overridden; refusing to run git.');
       }
       for (const override of overridesFor(match[1])) overrides.add(override);
     }
