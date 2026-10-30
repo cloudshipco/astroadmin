@@ -638,7 +638,10 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   collection's preview list and titles read and parse its file once (`listEntries`).
 - `bun tests/api-basics.test.js` — the basic HTTP surface on the real `createServer()` app:
   health, `/api/config` (no credential in it), 401s without a session, a wrong login sets
-  no session, sign-in, collection listing, sign-out ends the session (#2). <1 s.
+  no session, sign-in, collection listing, sign-out ends the session (#2). A body
+  `express.json()` refuses (a JSON primitive, malformed JSON, over the size limit) is its
+  own 400/413 with fixed text and a warning, never a 500 or the parser's message, which
+  quotes the body (#104). <1 s.
 - `bun tests/login-browser.test.js` — the sign-in pages in real Chromium (#77). ~2-3 s. Browser
   tests take their Chromium from `tests/chromium-path.js` (CHROMIUM_PATH, else a headless
   shell in Playwright's cache on macOS or Linux: the revision playwright-core's

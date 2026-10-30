@@ -32,6 +32,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SCHEMA_RELOAD_FAILED = "The content config could not be loaded; see the server log.";
 
+// body-parser's error types (its README), each a refusal of the request.
+const BODY_PARSER_ERROR_TYPES = new Set([
+  'entity.parse.failed', 'entity.too.large', 'entity.verify.failed', 'encoding.unsupported',
+  'charset.unsupported', 'request.aborted', 'request.size.invalid',
+]);
+
+function bodyRefusalMessage(status) {
+  if (status === 413) return 'The request body is too large.';
+  if (status === 415) return 'The request body\'s encoding is not supported.';
+  return 'The request body must be a JSON object or array.';
+}
+
 export async function createServer() {
   const fullConfig = await getConfig();
   const app = express();
@@ -341,6 +353,14 @@ export async function createServer() {
 
   // Error handling middleware
   app.use((err, req, res, next) => {
+    // A body express.json() refused (a JSON primitive in strict mode,
+    // malformed JSON, too large, an unsupported charset) is the request's
+    // fault (#104): its own 4xx with fixed text, and only a warning here. The
+    // parser's message quotes the body, so it goes nowhere.
+    if (BODY_PARSER_ERROR_TYPES.has(err.type) && err.status >= 400 && err.status < 500) {
+      console.warn(`Refused a request body (${err.type}) on ${req.method} ${req.path}`);
+      return res.status(err.status).json({ error: bodyRefusalMessage(err.status) });
+    }
     console.error('Server error:', err);
     res.status(500).json({
       error: 'Internal server error',

@@ -1,7 +1,9 @@
 /**
  * The admin's basic HTTP surface, in process through the real createServer()
  * app (#2): health, the frontend config, sign-in and sign-out, and the
- * collection listing. It replaces tests/api.test.js, which needed a server
+ * collection listing, and a body express.json() refuses (#104: a JSON
+ * primitive, malformed JSON or an oversized body is its own 4xx with fixed
+ * text, never a 500). It replaces tests/api.test.js, which needed a server
  * already running on localhost:3030 (and sent its logins and writes to
  * whatever was listening there).
  *
@@ -149,6 +151,56 @@ try {
     assert.equal(pages.body.collection.name, 'pages');
     assert.deepEqual([...pages.body.collection.entries].sort(), ['about', 'home']);
     assert.equal(pages.body.collection.entryCount, 2);
+  });
+
+  await check('a body express.json() refuses is a 4xx with fixed text, never a 500 or the parser\'s message (#104)', async () => {
+    const refusals = [
+      ['"text"', 400], ['42', 400], ['null', 400], ['true', 400],
+      ['{"title": oops', 400],
+      [JSON.stringify({ title: 'x'.repeat(200 * 1024) }), 413],
+    ];
+    const routes = [
+      ['PUT', '/api/images/photo.png/metadata', cookie],
+      ['PUT', '/api/content/pages/home', cookie],
+      ['POST', '/api/login', null],
+    ];
+    const homeBefore = fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf8');
+    const errors = [];
+    const warnings = [];
+    const originalError = console.error;
+    const originalWarn = console.warn;
+    console.error = (...args) => errors.push(args.join(' '));
+    console.warn = (...args) => warnings.push(args.join(' '));
+    try {
+      for (const [method, route, sessionCookie] of routes) {
+        for (const [body, expectedStatus] of refusals) {
+          const headers = { 'Content-Type': 'application/json' };
+          if (sessionCookie) headers.cookie = sessionCookie;
+          const response = await fetch(base + route, { method, headers, body });
+          const text = await response.text();
+          const label = `${method} ${route} with ${body.slice(0, 20)}`;
+          assert.equal(response.status, expectedStatus, `${label}: ${response.status} ${text}`);
+          const parsed = JSON.parse(text);
+          assert.deepEqual(Object.keys(parsed), ['error'], label);
+          assert.ok(!/oops|Unexpected|token|position|strict/i.test(text), `${label} carries the parser's text: ${text}`);
+        }
+      }
+    } finally {
+      console.error = originalError;
+      console.warn = originalWarn;
+    }
+    assert.deepEqual(errors, [], 'a refused body is not a server error');
+    assert.equal(warnings.length, routes.length * refusals.length, warnings.join('\n'));
+    assert.ok(warnings.every((line) => !line.includes('oops') && !line.includes('xxxx')), 'the warning quotes the body');
+    assert.equal(fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf8'), homeBefore);
+    // Positive control: a JSON object still reaches the route.
+    const control = await fetch(`${base}/api/content/pages/home`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ data: { title: 'Home again' }, body: 'Home.\n' }),
+    });
+    assert.equal(control.status, 200, await control.text());
+    assert.match(fs.readFileSync(path.join(projectRoot, 'src/content/pages/home.md'), 'utf8'), /title: Home again/);
   });
 
   await check('signing out ends the session: /api/session is unauthenticated and the API is 401 again', async () => {
