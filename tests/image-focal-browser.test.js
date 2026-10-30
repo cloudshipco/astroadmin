@@ -127,13 +127,11 @@ page.on('request', (request) => {
   }
 });
 
-/** What the real /api/config said last, and what `imageCrop` is forced to (null: as the server says). */
-let realConfig = null;
+/** What `imageCrop` is forced to on the real /api/config response (null: as the server says). */
 let imageCropOverride = null;
 await page.route('**/api/config', async (route) => {
   const response = await route.fetch();
   const body = await response.json();
-  realConfig = { ...body }; // a copy: the override below must not count as the server's
   if (imageCropOverride !== null) body.imageCrop = imageCropOverride;
   await route.fulfill({ response, json: body });
 });
@@ -169,9 +167,6 @@ async function dragCrop(rect) {
   await page.mouse.move(to.x, to.y, { steps: 8 });
   await page.mouse.up();
 }
-/** The real server writes a crop only once it validates one (#82's server side). */
-const serverHandlesCrop = () => realConfig !== null && Object.hasOwn(realConfig, 'imageCrop');
-
 try {
   await page.goto(`${base}/login`);
   await page.fill('#username', 'admin');
@@ -278,13 +273,9 @@ try {
     const { crop } = puts[0];
     near(crop.x, 10, 0.5, 'crop.x'); near(crop.y, 10, 0.5, 'crop.y');
     near(crop.width, 50, 0.5, 'crop.width'); near(crop.height, 60, 0.5, 'crop.height');
-    if (serverHandlesCrop()) {
-      await waitForMetadata((entry) => entry?.crop && typeof entry.crop.width === 'number', 'no crop was written');
-      const stored = photoMetadata().crop;
-      near(stored.x, 10, 0.5, 'stored crop.x'); near(stored.width, 50, 0.5, 'stored crop.width');
-    } else {
-      console.log('   (the real server has no imageCrop yet: the crop is checked on the PUT body, not the file)');
-    }
+    await waitForMetadata((entry) => entry?.crop && typeof entry.crop.width === 'number', 'no crop was written');
+    const stored = photoMetadata().crop;
+    near(stored.x, 10, 0.5, 'stored crop.x'); near(stored.width, 50, 0.5, 'stored crop.width');
     await cropRect.waitFor({ state: 'visible' });
     const drawn = await cropRect.boundingBox();
     const expected = { x: rect.x + rect.width * 0.1, y: rect.y + rect.height * 0.1, width: rect.width * 0.5, height: rect.height * 0.6 };
@@ -303,9 +294,7 @@ try {
     await waitUntil(() => metadataPuts.length > putsBefore, 'no PUT followed Clear crop');
     await page.waitForFunction(() => !document.querySelector('#imageLibraryModal [data-clear-crop]')?.offsetParent);
     assert.deepEqual(metadataPuts.slice(putsBefore), [{ crop: null }]);
-    if (serverHandlesCrop()) {
-      await waitForMetadata((entry) => !entry?.crop, 'the crop was not cleared');
-    }
+    await waitForMetadata((entry) => !entry?.crop, 'the crop was not cleared');
     assert.equal(await cropRect.isVisible(), false);
     await modal.locator('[data-cancel]').click();
   });
