@@ -3090,8 +3090,6 @@ export function createEmptyArrayItem(schema) {
     } else if (literalChoices(unwrapNullable(propSchema)) !== null) {
       // A union of literals starts on "Choose..." (literalSelect): '' or 0
       // would show as a stored value nobody chose, and be saved.
-    } else if (isNullableNumber(propSchema)) {
-      if (required.has(key)) item[key] = null;
     } else if (propSchema.type === 'object' && required.has(key)) {
       item[key] = createEmptyArrayItem(propSchema);
     } else if (propSchema.type === 'string') {
@@ -3226,9 +3224,6 @@ export function createEmptyBlock(blockType, blockSchema) {
         block[key] = schema.default;
       } else if (literalChoices(unwrapNullable(schema)) !== null) {
         // A union of literals starts on "Choose..." (see createEmptyArrayItem).
-      } else if (isNullableNumber(schema)) {
-        // A nullable number has no empty value but null: '' fails it.
-        if (required.has(key)) block[key] = null;
       } else if (schema.type === 'array') {
         block[key] = [];
       } else if (schema.type === 'object') {
