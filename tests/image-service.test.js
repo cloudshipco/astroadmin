@@ -18,17 +18,27 @@
  * - `transform` on a generated 100x50 PNG with a distinct colour in the crop
  *   region returns an image of the crop's pixel size holding only that
  *   colour, resized when a smaller width is asked for, crops a rotated
- *   (EXIF orientation 6) source against its ROTATED size, and without a crop
- *   returns the parent's bytes.
+ *   (EXIF orientation 6) source against its ROTATED size, keeps an animated
+ *   WebP animated (two frames, each cropped, delays kept: read without
+ *   `pages: -1` it came back a still), hands a 16-bit PNG to the parent at
+ *   16 bits (byte-identical to the parent's transform of a sharp-made
+ *   16-bit crop, which differs from an 8-bit one), and without a crop
+ *   returns the parent's bytes;
+ * - `components/site-files.js` imports crop.js, never image-service.js (which
+ *   loads `astro/assets` and the sharp service at module top), so CmsVideo
+ *   and a crop-free CmsImage render load no image service.
  *
  *   bun tests/image-service.test.js     (<1 s)
  */
 
 import assert from 'assert';
+import fs from 'fs';
+import path from 'path';
 import sharp from 'sharp';
 import sharpService from 'astro/assets/services/sharp';
 import { baseService, hashTransform } from 'astro/assets';
-import service, { cropPixels } from '../components/image-service.js';
+import service from '../components/image-service.js';
+import { cropPixels } from '../components/crop.js';
 
 let passed = 0;
 function check(name, fn) {
@@ -53,6 +63,15 @@ const src = { src: '/_astro/photo.abc.png', width: 100, height: 50, format: 'png
 const crop = { x: 20, y: 20, width: 50, height: 60 };
 
 console.log('image-service:');
+
+// --- the module boundary ----------------------------------------------------
+check('site-files.js does not import image-service.js (CmsVideo and a crop-free CmsImage never load the sharp service)', () => {
+  const siteFiles = fs.readFileSync(path.resolve(import.meta.dir, '../components/site-files.js'), 'utf8');
+  const imports = [...siteFiles.matchAll(/^\s*import\b[^\n]*?from\s+['"]([^'"]+)['"]/gm)].map((match) => match[1]);
+  assert.ok(imports.length > 0, 'the import list was read (positive control)');
+  assert.ok(!imports.some((specifier) => /image-service/.test(specifier)), `imports: ${imports.join(', ')}`);
+  assert.ok(imports.includes('./crop.js'), `imports crop.js: ${imports.join(', ')}`);
+});
 
 // --- URLs ----------------------------------------------------------------
 check('getURL appends crop=x,y,width,height; parseURL reads it back as numbers', () => {
@@ -194,6 +213,58 @@ await checkAsync('transform crops a rotated source against its rotated size', as
     const [r, g, b] = colour.split(',').map(Number);
     assert.ok(r < 16 && g > 240 && b < 16, `green, got ${colour}`);
   }
+});
+
+await checkAsync('transform keeps an animated WebP animated through a crop (every frame cropped)', async () => {
+  // Two 100x50 frames, red then green, joined as an animated WebP. The crop
+  // (left 20, top 10, 50x30 of each FRAME) must come back as two pages of
+  // 50x30, each its frame's colour, with the delays kept. Read without
+  // `pages: -1`, the source is its first frame only and the result a still.
+  const redFrame = await sharp({ create: { width: 100, height: 50, channels: 3, background: { r: 255, g: 0, b: 0 } } }).png().toBuffer();
+  const greenFrame = await sharp({ create: { width: 100, height: 50, channels: 3, background: { r: 0, g: 255, b: 0 } } }).png().toBuffer();
+  const animated = await sharp([redFrame, greenFrame], { join: { animated: true } }).webp({ lossless: true, delay: [100, 200] }).toBuffer();
+  const sourceMeta = await sharp(animated, { pages: -1 }).metadata();
+  assert.deepStrictEqual([sourceMeta.pages, sourceMeta.pageHeight, sourceMeta.width], [2, 50, 100], 'two 100x50 frames (control)');
+  const options = service.validateOptions({ src: '/anim.webp', width: 50, height: 30, format: 'webp', quality: 100, crop }, config);
+  const { data, format } = await service.transform(animated, options, config, logger);
+  assert.strictEqual(format, 'webp');
+  const meta = await sharp(data, { pages: -1 }).metadata();
+  assert.deepStrictEqual(
+    [meta.pages, meta.width, meta.pageHeight, meta.delay],
+    [2, 50, 30, [100, 200]],
+    `pages, width, frame height, delays: ${JSON.stringify([meta.pages, meta.width, meta.pageHeight, meta.delay])}`,
+  );
+  const frames = await Promise.all([0, 1].map(async (page) => pixels(await sharp(data, { page }).png().toBuffer())));
+  assert.deepStrictEqual(frames.map((frame) => [frame.width, frame.height]), [[50, 30], [50, 30]]);
+  const dominant = (frame) => frame.colours.map((colour) => colour.split(',').map(Number)).every(([r, g]) => (r > 200 && g < 50) || (g > 200 && r < 50));
+  assert.ok(dominant(frames[0]) && dominant(frames[1]), `each frame its own colour: ${JSON.stringify(frames.map((frame) => frame.colours))}`);
+  assert.notDeepStrictEqual(frames[0].colours, frames[1].colours, 'the two frames differ');
+});
+
+await checkAsync('transform hands a 16-bit PNG to the parent at 16 bits', async () => {
+  // A noisy 16-bit source: the parent's resize of a 16-bit crop and of the
+  // same crop reduced to 8 bits first encode to different bytes, so the
+  // intermediate's depth is visible in the output. Ours must match the
+  // 16-bit one (the parent's own pipeline on a sharp-made 16-bit crop).
+  const png16 = await sharp({
+    create: { width: 100, height: 50, channels: 3, background: { r: 30000, g: 10000, b: 50000 }, noise: { type: 'gaussian', mean: 128, sigma: 40 } },
+  })
+    .toColourspace('rgb16')
+    .png()
+    .toBuffer();
+  assert.strictEqual((await sharp(png16).metadata()).depth, 'ushort', 'a 16-bit source (control)');
+  const box = cropPixels(crop, 100, 50);
+  const crop16 = await sharp(png16, { failOn: 'none', pages: -1 }).rotate().extract(box).toColourspace('rgb16').png({ compressionLevel: 0 }).toBuffer();
+  const crop8 = await sharp(png16, { failOn: 'none', pages: -1 }).rotate().extract(box).png({ compressionLevel: 0 }).toBuffer();
+  assert.strictEqual((await sharp(crop16).metadata()).depth, 'ushort');
+  assert.strictEqual((await sharp(crop8).metadata()).depth, 'uchar');
+  const options = service.validateOptions({ src: '/deep.png', width: 25, height: 15, format: 'png', crop }, config);
+  const { crop: _crop, ...parentOptions } = options;
+  const from16 = Buffer.from((await sharpService.transform(crop16, { ...parentOptions }, config, logger)).data);
+  const from8 = Buffer.from((await sharpService.transform(crop8, { ...parentOptions }, config, logger)).data);
+  assert.ok(!from16.equals(from8), 'the parent encodes a 16-bit and an 8-bit crop differently (control)');
+  const ours = Buffer.from((await service.transform(png16, options, config, logger)).data);
+  assert.ok(ours.equals(from16), 'byte-identical to the parent on the 16-bit crop');
 });
 
 await checkAsync('transform without a crop returns the parent\'s bytes', async () => {

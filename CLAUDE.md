@@ -802,12 +802,16 @@ queue, so the old body is never written back.
   Focal point and crop from `public/images/.metadata.json` (#82): a stored point is
   `object-position: 30% 20%` on the `<img>`, merged after the site's style string or into
   its style object (replacing its own `objectPosition`); `focalPoint={false}` opts out; a
-  plain `<img>` (SVG) reads a legacy bare-filename entry; an out-of-range point and a
-  non-object entry are ignored; a stored crop without the service fails the build naming
-  the image and `astroadmin/image-service`; with the service the `<img>` is the crop's
-  600x400, the srcset widths follow it, the point is translated into the crop frame and
-  each emitted AVIF/WebP/JPEG is byte-identical to the site's sharp doing the service's
-  own steps (rotate, extract, lossless PNG, then Astro's resize and encode at q80); with
+  plain `<img>` (SVG) reads a legacy bare-filename entry, which applies to `/images/<name>`
+  only, never to the same name in a subfolder (an unrelated photo took the point); an
+  out-of-range point and a non-object entry are ignored; a stored crop without the service
+  fails the build naming the image and `astroadmin/image-service`; with the service the
+  `<img>` is the crop's 600x400, the srcset widths follow it, the point is translated into
+  the crop frame and each emitted AVIF/WebP/JPEG is byte-identical to the site's sharp
+  doing the service's own steps (rotate, extract, lossless PNG, then Astro's resize and
+  encode at q80); the same service named by a local re-export's absolute path builds the
+  same crop (CmsImage reads the LOADED service's `supportsCrop` marker through
+  `getConfiguredImageService()`, never the entrypoint string, which failed the build); with
   no metadata file the page is byte-identical to the build before the file existed; in
   `astro dev` a point written after start is in the next render, a crop rides the
   `/_image` URL as `crop=`, and where Astro's dev endpoint serves (not under
@@ -824,7 +828,13 @@ queue, so the old body is never written back.
   and never runs past the edge; `transform` on a generated 100x50 PNG returns the crop
   region at its pixel size holding only its colour, resized when a smaller width is asked,
   crops an EXIF orientation-6 JPEG against its ROTATED size (`sharp.metadata()` reports
-  the stored size), and without a crop returns the parent's bytes. <1 s.
+  the stored size), keeps an animated WebP animated through a crop (opened with `pages:
+  -1` as the parent opens it, each frame cropped, a lossless WebP intermediate; it came
+  back a still), hands a 16-bit PNG on at 16 bits (a `toColourspace('rgb16'|'grey16')`
+  before the PNG intermediate; `png()` wrote 8 bits), and without a crop returns the
+  parent's bytes. `parseCrop`/`cropPixels` live in dependency-free `components/crop.js`;
+  `site-files.js` must import that, never image-service.js (asserted by grep), or every
+  CmsVideo and crop-free CmsImage render loads the sharp service. <1 s.
 - `bun tests/image-metadata.test.js` — image details (#82) through the real routes: an entry
   is keyed by the image's SITE PATH as the listing's `url` (`/images/<name>`,
   `/assets/images/<name>`), in the folder the request's `?source=` names (the listing's

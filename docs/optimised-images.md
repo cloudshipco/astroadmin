@@ -286,7 +286,9 @@ site to opt in twice:
 Nothing is dropped quietly. A build that renders an image with a stored
 crop on a site whose service is not `astroadmin/image-service` fails,
 naming the image, and the publish check refuses the commit with that
-reason: add the service, or clear the crop in the image library.
+reason: add the service, or clear the crop in the image library. The
+component checks the service Astro loaded, so naming it another way (a
+local file re-exporting it, or an absolute path) is the same service.
 `astroadmin doctor` reports the three mismatches before a build does
 (`images.crop` without the service, the service without `images.crop`, and
 a stored crop on a site without the service); see

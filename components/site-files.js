@@ -20,7 +20,11 @@
  *   `{ focalPoint: {x, y} | null, crop: {x, y, width, height} | null }`.
  *   The file is an object keyed by site path (`/images/team/x.jpg`), with
  *   legacy entries keyed by bare filename (`x.jpg`); the entry at the site
- *   path (before any `?`/`#`) is read, else the one at the bare filename.
+ *   path (before any `?`/`#`) is read, else, ONLY for a path directly under
+ *   `/images/` (`/images/x.jpg`, no further `/`), the one at the bare
+ *   filename: the older admin keyed only those, so a legacy `x.jpg` must not
+ *   reach `/images/team/x.jpg` (an unrelated photo would take the point, or
+ *   be cropped, or fail the build).
  *   It is deployed data, so each value is validated here and anything
  *   malformed (a missing or unparsable file, a non-object entry, a point or
  *   crop out of range) is null. Read with SYNC fs (never fs/promises: see
@@ -34,7 +38,7 @@ import { root } from 'astro:config/server';
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseCrop } from './image-service.js';
+import { parseCrop } from './crop.js';
 
 export const siteRoot = fileURLToPath(root);
 export const publicDir = join(siteRoot, 'public');
@@ -76,12 +80,15 @@ function parseFocalPoint(value) {
 
 const NO_METADATA = Object.freeze({ focalPoint: null, crop: null });
 
+/** A legacy entry is keyed by bare filename; the older admin keyed only files directly under /images/. */
+const LEGACY_KEYED = /^\/images\/([^/]+)$/;
+
 /** The stored `{ focalPoint, crop }` for `sitePath` (e.g. /images/x.jpg); each null when not stored or malformed. */
 export function imageMetadata(sitePath) {
   const key = sitePath.split(/[?#]/)[0];
   const entries = metadataEntries();
-  const bareName = key.slice(key.lastIndexOf('/') + 1);
-  const entry = [key, bareName]
+  const legacyKey = key.match(LEGACY_KEYED)?.[1];
+  const entry = [key, ...(legacyKey === undefined ? [] : [legacyKey])]
     .map((candidate) => (Object.hasOwn(entries, candidate) ? entries[candidate] : undefined))
     .find((candidate) => typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate));
   if (!entry) return NO_METADATA;

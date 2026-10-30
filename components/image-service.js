@@ -21,47 +21,24 @@
  *   per crop (Astro keys generated images by this hash).
  * - `getHTMLAttributes`: the parent's result without `crop` (the parent
  *   spreads unknown options onto the <img>).
- * - `transform`: with a crop, the source is rotated (EXIF) and the crop's
- *   pixels are extracted, rounded from the percentages against the ROTATED
- *   size (`cropPixels`, which CmsImage uses for the same numbers), encoded
- *   losslessly (PNG) and handed to the parent's transform, which resizes and
- *   encodes as it does any source. sharp is the SITE's, resolved as the
- *   parent resolves it (`import('sharp')`), lazily.
+ * - `supportsCrop: true`: the marker CmsImage reads from the service Astro
+ *   loaded, so a site that names this service by another spelling (a local
+ *   re-export, an absolute path) is recognised.
+ * - `transform`: with a crop, the source is opened as the parent opens it
+ *   (every page, `pages: -1`), rotated (EXIF) and the crop's pixels are
+ *   extracted from each frame, rounded from the percentages against the
+ *   ROTATED frame size (`cropPixels`, which CmsImage uses for the same
+ *   numbers), encoded losslessly (a WebP for an animated image, which keeps
+ *   its frames and delays; else a PNG, at 16 bits for a 16-bit source) and
+ *   handed to the parent's transform, which resizes and encodes as it does
+ *   any source. sharp is the SITE's, resolved as the parent resolves it
+ *   (`import('sharp')`), lazily.
  */
 import sharpService from 'astro/assets/services/sharp';
 import { baseService } from 'astro/assets';
+import { CROP_SIDES, cropPixels, parseCrop } from './crop.js';
 
-const CROP_SIDES = ['x', 'y', 'width', 'height'];
-
-/** The crop as `{x, y, width, height}` numbers, or undefined when `value` is not one. */
-export function parseCrop(value) {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const crop = {};
-  for (const side of CROP_SIDES) {
-    const number = value[side];
-    if (typeof number !== 'number' || !Number.isFinite(number)) return undefined;
-    crop[side] = number;
-  }
-  if (crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0) return undefined;
-  if (crop.x + crop.width > 100 || crop.y + crop.height > 100) return undefined;
-  return crop;
-}
-
-/**
- * The crop in pixels of an image `width` x `height` (its displayed size):
- * each percentage rounded, the box held inside the image (a rounded left
- * plus a rounded width can run one past the edge) and at least one pixel.
- */
-export function cropPixels(crop, width, height) {
-  const left = Math.min(Math.round((crop.x / 100) * width), width - 1);
-  const top = Math.min(Math.round((crop.y / 100) * height), height - 1);
-  return {
-    left,
-    top,
-    width: Math.max(1, Math.min(Math.round((crop.width / 100) * width), width - left)),
-    height: Math.max(1, Math.min(Math.round((crop.height / 100) * height), height - top)),
-  };
-}
+export { cropPixels, parseCrop };
 
 function parseCropParam(text) {
   if (typeof text !== 'string') return undefined;
@@ -86,6 +63,13 @@ async function loadSharp() {
 
 const service = {
   ...sharpService,
+  /**
+   * The capability CmsImage checks on the LOADED service
+   * (`getConfiguredImageService()`), whatever spelling the site's
+   * `image.service.entrypoint` used: a local re-export or an absolute path
+   * is this same service, and must not fail the build as "another service".
+   */
+  supportsCrop: true,
   propertiesToHash: [...(sharpService.propertiesToHash ?? baseService.propertiesToHash), 'crop'],
 
   validateOptions(options, imageConfig, logger) {
@@ -136,18 +120,37 @@ const service = {
       throw new Error(`astroadmin/image-service: invalid crop ${JSON.stringify(transformOptions.crop)} for "${transformOptions.src}".`);
     }
     const sharpImport = await loadSharp();
-    const source = sharpImport(inputBuffer, { failOn: 'none', limitInputPixels: config.service.config.limitInputPixels });
-    const { width, height, orientation } = await source.metadata();
-    if (!width || !height) {
+    // Opened as the parent opens its input: every page of an animated image
+    // (`pages: -1`), not just the first.
+    const source = sharpImport(inputBuffer, { failOn: 'none', pages: -1, limitInputPixels: config.service.config.limitInputPixels });
+    const { width, height, pages, pageHeight, orientation, depth, space } = await source.metadata();
+    // With every page read, `height` is all the frames stacked; each frame is `pageHeight`.
+    const frameHeight = pages > 1 && pageHeight ? pageHeight : height;
+    if (!width || !frameHeight) {
       throw new Error(`astroadmin/image-service: could not read the size of "${transformOptions.src}" to crop it.`);
     }
     // `metadata()` reports the stored size; `rotate()` (no angle) applies the
     // EXIF orientation, which swaps the sides for orientations 5-8, as
     // Astro's ImageMetadata does. rotate() before extract() makes the
-    // extract region relative to the rotated image.
-    const rotatedSize = (orientation ?? 0) >= 5 ? { width: height, height: width } : { width, height };
+    // extract region relative to the rotated image (and, on an animated
+    // image, relative to each frame: sharp extracts from every page).
+    const rotatedSize = (orientation ?? 0) >= 5 ? { width: frameHeight, height: width } : { width, height: frameHeight };
     const box = cropPixels(crop, rotatedSize.width, rotatedSize.height);
-    const cropped = await source.rotate().extract(box).png({ compressionLevel: 0 }).toBuffer();
+    let pipeline = source.rotate().extract(box);
+    if (pages > 1) {
+      // The lossless intermediate of an animated image is a WebP, which keeps
+      // its frames, loop and delays (PNG has no pages). The parent then
+      // handles it as it does any animated source.
+      pipeline = pipeline.webp({ lossless: true });
+    } else {
+      // PNG, lossless; `png()` writes 8 bits unless the pipeline ends in a
+      // 16-bit interpretation, so a 16-bit source (rgb16 or grey16) is kept
+      // at 16 for the parent's resize. The values survive rotate/extract
+      // exactly (measured: every sample equal, not 8-bit scaled).
+      if (depth === 'ushort') pipeline = pipeline.toColourspace(space === 'grey16' ? 'grey16' : 'rgb16');
+      pipeline = pipeline.png({ compressionLevel: 0 });
+    }
+    const cropped = await pipeline.toBuffer();
     const { crop: _crop, ...rest } = transformOptions;
     return sharpService.transform(cropped, rest, config, logger);
   },

@@ -37,13 +37,18 @@
  *   site's style string (`width: 100%; object-position: ...`) or into its
  *   style object (replacing the object's own objectPosition);
  *   `focalPoint={false}` opts out; a plain <img> (SVG) reads a legacy
- *   bare-filename entry; an out-of-range point and a non-object entry are
- *   ignored; a stored crop without `astroadmin/image-service` fails the
- *   build naming the image and the setting; with the service the <img> is
- *   the crop's 600x400, the srcset widths follow it, the point is
- *   translated into the crop frame, and each emitted AVIF, WebP and JPEG is
- *   byte-identical to the site's sharp doing the service's own steps (rotate,
- *   extract, lossless PNG, then Astro's resize and encode at q80); with no
+ *   bare-filename entry, which applies to `/images/<name>` only and never
+ *   to the same name in a subfolder (`/images/team/<name>` got it); an
+ *   out-of-range point and a non-object entry are ignored; a stored crop
+ *   without `astroadmin/image-service` fails the build naming the image and
+ *   the setting; with the service the <img> is the crop's 600x400, the
+ *   srcset widths follow it, the point is translated into the crop frame,
+ *   and each emitted AVIF, WebP and JPEG is byte-identical to the site's
+ *   sharp doing the service's own steps (rotate, extract, lossless PNG,
+ *   then Astro's resize and encode at q80); the same service configured
+ *   through a local re-export named by absolute path builds the same crop
+ *   (CmsImage reads the loaded service's `supportsCrop` marker, not the
+ *   entrypoint string, which failed the build); with no
  *   metadata file the page is byte-identical to the build before the file
  *   existed; in `astro dev` a point written after start is in the next
  *   render and a later change in the one after, a crop rides the /_image URL
@@ -150,6 +155,11 @@ try {
   writeSiteFile('public/images/.hidden.png', flatPng);
   writeSiteFile('public/images/wide.jpg', wideJpg);
   writeSiteFile('public/images/gallery/Shot.JPG', shotJpg);
+  // One name at two depths, for the legacy bare-filename metadata key (#82).
+  const legacyPng = await photo(500, 400, 'png', [170, 120, 30]);
+  const teamLegacyPng = await photo(500, 400, 'png', [30, 120, 170]);
+  writeSiteFile('public/images/legacy.png', legacyPng);
+  writeSiteFile('public/images/team/legacy.png', teamLegacyPng);
   writeSiteFile(
     'public/images/logo.svg',
     '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',
@@ -409,6 +419,8 @@ try {
       '<CmsImage src="/images/logo.svg" alt="Logo" sizes="40px" />',
       '<CmsImage src="/images/gallery/Shot.JPG" alt="Shot" sizes="100vw" />',
       '<CmsImage src="/images/flat.png" alt="Flat" sizes="100vw" />',
+      '<CmsImage src="/images/legacy.png" alt="Legacy" sizes="100vw" />',
+      '<CmsImage src="/images/team/legacy.png" alt="Team legacy" sizes="100vw" />',
     ].join('\n'),
   );
   writeSiteFile('src/pages/focal.astro', focalPage);
@@ -436,6 +448,7 @@ try {
     'logo.svg': { focalPoint: { x: 70, y: 10 } }, // a legacy entry, by bare filename
     '/images/gallery/Shot.JPG': { focalPoint: { x: 150, y: 20 } }, // out of range: ignored
     '/images/flat.png': 'junk', // not an entry: ignored
+    'legacy.png': { focalPoint: { x: 10, y: 90 } }, // legacy: an older admin keyed only /images/<name>
   };
   writeSiteFile(METADATA_FILE, JSON.stringify(focalMetadata, null, 2));
   const withPoints = buildSite();
@@ -462,6 +475,12 @@ try {
   check('an out-of-range point and a malformed entry are ignored', () => {
     assert.strictEqual(styleOf(imgOf(focalHtml, 'Shot')), undefined, imgOf(focalHtml, 'Shot'));
     assert.strictEqual(styleOf(imgOf(focalHtml, 'Flat')), undefined, imgOf(focalHtml, 'Flat'));
+  });
+  check('a legacy bare-filename entry applies to /images/<name> only, never to the same name in a subfolder', () => {
+    const img = imgOf(focalHtml, 'Legacy');
+    assert.strictEqual(styleOf(img), 'object-position: 10% 90%', img);
+    const nested = imgOf(focalHtml, 'Team legacy');
+    assert.strictEqual(styleOf(nested), undefined, `an unrelated photo got the point: ${nested}`);
   });
 
   // A crop: 25%/12.5% in, half the width and height of the 1200x800 photo,
@@ -510,6 +529,37 @@ try {
   check('the cropped fallback is 600x400', () => {
     assert.deepStrictEqual([croppedFallbackSize.width, croppedFallbackSize.height], [600, 400]);
   });
+
+  // The same service by another spelling: Astro takes a string or URL for
+  // the entrypoint, so a site may name a local file that re-exports it, by
+  // absolute path. CmsImage must recognise the LOADED service (its own
+  // marker), not the string `astroadmin/image-service`.
+  writeSiteFile('image-service.mjs', "export { default } from 'astroadmin/image-service';\n");
+  writeSiteFile(
+    'astro.config.mjs',
+    "import { defineConfig } from 'astro/config';\n" +
+      "import { fileURLToPath } from 'node:url';\n" +
+      "export default defineConfig({ image: { service: { entrypoint: fileURLToPath(new URL('./image-service.mjs', import.meta.url)) } } });\n",
+  );
+  const croppedLocal = buildSite();
+  check('the service configured through a local re-export (an absolute path) builds the crop', () => {
+    assert.strictEqual(croppedLocal.status, 0, croppedLocal.output);
+  });
+  const localHtml = fs.readFileSync(path.join(siteDir, 'dist', 'focal', 'index.html'), 'utf8');
+  const localPicture = (localHtml.match(/<picture>.*?<\/picture>/gs) || []).find((picture) => picture.includes('alt="Photo"'));
+  assert.ok(localPicture, localHtml);
+  const localQualities = [
+    await encodedAt(variantAt(localPicture, 'avif', 400), croppedPng, { width: 400, height: 267 }, 'avif', [50, 80]),
+    await encodedAt(variantAt(localPicture, 'webp', 400), croppedPng, { width: 400, height: 267 }, 'webp', [50, 80]),
+    await encodedAt(fallbackOf(localPicture), croppedPng, { width: 600, height: 400 }, 'jpeg', [50, 80]),
+  ];
+  check('...and each emitted file is the same crop, byte-identical to sharp rotate -> extract -> resize -> encode at q80', () => {
+    assert.deepStrictEqual(localQualities, [80, 80, 80]);
+    const img = imgOf(localPicture, 'Photo');
+    assert.ok(img.includes('width="600"') && img.includes('height="400"'), img);
+    assert.strictEqual(styleOf(img), 'width: 100%; object-position: 70% 15%', img);
+  });
+  fs.rmSync(path.join(siteDir, 'image-service.mjs'));
 
   fs.rmSync(path.join(siteDir, METADATA_FILE));
   writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");

@@ -49,20 +49,25 @@
  * - Crop (#82): a stored crop is passed to <Picture> as `crop`, which the
  *   `astroadmin/image-service` applies (rotate, extract, then the usual
  *   resize); `widths`, `width` and `height` are computed from the cropped
- *   pixel size (`cropPixels`, the service's own rounding), and the focal
- *   point is translated into the crop frame (clamped). A BUILD with a crop
- *   stored and another image service configured fails with an error naming
- *   the image and the setting (an ignored crop would ship the uncropped
- *   photo without a word); in dev the crop is skipped instead, the point
- *   staying in the original's frame, so the preview still renders. A plain
- *   <img> (SVG, GIF, the dev original) cannot crop: the point only.
+ *   pixel size (`cropPixels`, shared through crop.js), and the focal
+ *   point is translated into the crop frame (clamped). Whether the site's
+ *   service can crop is read from the service Astro LOADED
+ *   (`getConfiguredImageService()` from astro:assets, its `supportsCrop`
+ *   marker), never from the `image.service.entrypoint` string: Astro
+ *   accepts a string or URL there, and a local re-export or an absolute
+ *   path of the module is the same service. A BUILD with a crop stored and
+ *   a service without the marker fails with an error naming the image and
+ *   the setting (an ignored crop would ship the uncropped photo without a
+ *   word); in dev the crop is skipped instead, the point staying in the
+ *   original's frame, so the preview still renders. A plain <img> (SVG,
+ *   GIF, the dev original) cannot crop: the point only.
  * Every other attribute (data-aa-field, loading, fetchpriority, priority,
  * class...) is forwarded to the <img> in every branch.
  */
-import { Picture, imageConfig } from 'astro:assets';
+import { Picture, getConfiguredImageService, imageConfig } from 'astro:assets';
 import type { ImageMetadata } from 'astro';
 import { existsInPublic, imageMetadata, withBase } from './site-files.js';
-import { cropPixels } from './image-service.js';
+import { cropPixels } from './crop.js';
 
 interface Props {
   src?: string;
@@ -164,7 +169,13 @@ let focalPoint = applyFocalPoint ? stored.focalPoint : null;
 let crop = image ? stored.crop : null; // a plain <img> cannot crop
 let cropBox: { left: number; top: number; width: number; height: number } | undefined;
 if (image && crop) {
-  if (imageConfig.service.entrypoint !== CROP_SERVICE) {
+  // The LOADED service's own marker, not the entrypoint string: Astro takes
+  // a string or URL there, so a site may name this service by a local
+  // re-export or an absolute path. (getConfiguredImageService is what
+  // <Picture> itself calls, in build and dev; it is only awaited here when
+  // there is a crop to apply.)
+  const service = (await getConfiguredImageService()) as { supportsCrop?: boolean };
+  if (service.supportsCrop !== true) {
     if (!IS_ASTRO_DEV) {
       throw new Error(
         `CmsImage: "${src}" has a crop stored in public/images/.metadata.json, but the site's image ` +
