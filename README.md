@@ -75,7 +75,10 @@ with weak auth settings. Secure cookies need the app to know the connection
 is HTTPS: a TLS proxy on the same machine (nginx on `127.0.0.1`) is trusted
 by default, and one on another machine or container must be named in
 `TRUST_PROXY`, or sign-in fails (see
-[trusted proxies](docs/configuration.md#trusted-proxies)).
+[trusted proxies](docs/configuration.md#trusted-proxies)). Over plain HTTP
+a production server refuses a correct password with a message saying
+sign-in needs HTTPS, so test without `NODE_ENV=production` on your own
+machine.
 
 ## Requirements
 

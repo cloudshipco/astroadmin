@@ -25,7 +25,7 @@ import { requireSameOrigin } from './utils/same-origin.js';
 import { apiRateLimiters } from './utils/rate-limit.js';
 import { sessionFingerprint } from './utils/session-fingerprint.js';
 import { authFailedLine } from './utils/auth-log.js';
-import { isUntrustedProxyRequest, untrustedProxyWarning, UNTRUSTED_PROXY_LOGIN_ERROR } from './utils/untrusted-proxy.js';
+import { loginCookieRefusal, untrustedProxyWarning } from './utils/untrusted-proxy.js';
 import { mediaKindOf } from '../ui/media-kinds.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -140,11 +140,12 @@ export async function createServer() {
       return res.status(500).json({ success: false, error: 'Authentication error' });
     }
 
-    if (ok && isUntrustedProxyRequest(req, cookieSecure)) {
+    const cookieRefusal = ok ? loginCookieRefusal(req, cookieSecure) : null;
+    if (cookieRefusal !== null) {
       // The session cookie would be dropped silently and the editor sent
       // back here; tell them why instead (after the password check, so a
       // wrong password still gets its 401 and auth.failed line).
-      return res.status(500).json({ success: false, error: UNTRUSTED_PROXY_LOGIN_ERROR });
+      return res.status(500).json({ success: false, error: cookieRefusal });
     }
 
     if (ok) {

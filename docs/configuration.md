@@ -154,6 +154,11 @@ production session cookies are HTTPS-only, so behind a TLS proxy on another
 machine or container, sign-in fails until that proxy is listed in
 `TRUST_PROXY`. AstroAdmin then answers a correct password with a message
 saying so, and logs a warning naming `TRUST_PROXY` (at most once an hour).
+Any other request that does not count as HTTPS (a production server reached
+directly over plain HTTP, or a trusted proxy that forwards
+`X-Forwarded-Proto: http`) gets a correct password answered with a message
+saying sign-in needs HTTPS, instead of a sign-in whose cookie the browser
+never receives. A wrong password is a 401 either way.
 
 Set `TRUST_PROXY` (or `trustProxy` in `astroadmin.config.js`; the
 environment wins) when the proxy is elsewhere. It takes Express's

@@ -202,6 +202,82 @@ await check('the same proxy named in TRUST_PROXY signs in with a cookie and no w
   }
 });
 
+/** Serve `serverApp` on loopback with the real peer address (127.0.0.1). */
+async function listenOnLoopback(serverApp) {
+  const loopbackServer = serverApp.listen(0, '127.0.0.1');
+  await new Promise((resolve) => loopbackServer.once('listening', resolve));
+  return { loopbackServer, loopbackBase: `http://127.0.0.1:${loopbackServer.address().port}` };
+}
+
+const loginWithHeaders = (base, password, headers) => fetch(`${base}/api/login`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin', ...headers },
+  body: JSON.stringify({ username: 'admin', password }),
+});
+
+// Production's session cookie is HTTPS-only. A correct login over plain HTTP
+// (no proxy at all, or a trusted proxy that says the connection was http)
+// used to answer 200 with no Set-Cookie, so the editor looped back to the
+// login page with no explanation.
+for (const [label, headers] of [
+  ['a direct plain-HTTP request with no forwarded headers', {}],
+  ['a trusted loopback proxy that forwards X-Forwarded-Proto: http', { 'X-Forwarded-For': CLIENT, 'X-Forwarded-Proto': 'http' }],
+]) {
+  await check(`a correct login over plain HTTP is refused with a sentence saying sign-in needs HTTPS (${label})`, async () => {
+    const fresh = (await createServer()).app;
+    const { loopbackServer, loopbackBase } = await listenOnLoopback(fresh);
+    try {
+      let response;
+      let body;
+      const lines = await captureLog(async () => {
+        response = await loginWithHeaders(loopbackBase, 'admin', headers);
+        body = await response.json();
+      });
+      assert.equal(response.headers.get('set-cookie'), null, 'no session cookie');
+      assert.notEqual(response.status, 200, `status ${response.status}: ${JSON.stringify(body)}`);
+      assert.equal(body.success, false);
+      assert.match(body.error, /^Sign-in needs HTTPS/, body.error);
+      assert.ok(!body.error.includes('TRUST_PROXY'), 'not the untrusted-proxy sentence: no proxy is involved');
+      assert.ok(!lines.some((line) => line.startsWith('[Login] Success')), 'no session was made');
+    } finally {
+      loopbackServer.close();
+    }
+  });
+}
+
+await check('a wrong password over plain HTTP is still a 401 with its auth.failed line', async () => {
+  const fresh = (await createServer()).app;
+  const { loopbackServer, loopbackBase } = await listenOnLoopback(fresh);
+  try {
+    let response;
+    const lines = await captureLog(async () => {
+      response = await loginWithHeaders(loopbackBase, 'wrong', {});
+      await response.arrayBuffer();
+    });
+    assert.equal(response.status, 401);
+    assert.ok(lines.some((line) => line.includes('auth.failed ip=')), lines.join('\n'));
+  } finally {
+    loopbackServer.close();
+  }
+});
+
+await check('a loopback TLS proxy (nginx with X-Forwarded-Proto: https, as on the hosted box) signs in with a secure cookie (control)', async () => {
+  const fresh = (await createServer()).app;
+  const { loopbackServer, loopbackBase } = await listenOnLoopback(fresh);
+  try {
+    let response;
+    const lines = await captureLog(async () => {
+      response = await loginWithHeaders(loopbackBase, 'admin', { 'X-Forwarded-For': CLIENT, 'X-Forwarded-Proto': 'https' });
+      await response.arrayBuffer();
+    });
+    assert.equal(response.status, 200);
+    assert.ok((response.headers.get('set-cookie') || '').includes('Secure'), `a secure cookie: ${response.headers.get('set-cookie')}`);
+    assert.ok(lines.some((line) => line.startsWith('[Login] Success')), lines.join('\n'));
+  } finally {
+    loopbackServer.close();
+  }
+});
+
 await check('the warning repeats once the interval has passed, not before', async () => {
   const { untrustedProxyWarning, WARNING_INTERVAL_MS } = await import('../server/utils/untrusted-proxy.js');
   let time = 1_000_000;

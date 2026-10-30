@@ -358,7 +358,11 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   (server/utils/untrusted-proxy.js): a correct login through it gets a fixed sentence
   naming TRUST_PROXY, no address and no session cookie (it used to be a 200 with no cookie,
   so the editor looped); a wrong password is still a 401 with `auth.failed`; one fixed log
-  warning, at most hourly. Controls: no forwarded headers, and the peer in TRUST_PROXY. <1 s.
+  warning, at most hourly. Controls: no forwarded headers, and the peer in TRUST_PROXY.
+  Any other request that is not HTTPS while the cookie is HTTPS-only (direct plain HTTP,
+  a trusted proxy forwarding `X-Forwarded-Proto: http`) gets "Sign-in needs HTTPS"
+  (`loginCookieRefusal`), and a wrong one a 401; control: loopback nginx with
+  `X-Forwarded-Proto: https` (the hosted box) signs in with a Secure cookie. <1 s.
 - `bun tests/trust-proxy-config.test.js` — `trustProxy` in astroadmin.config.js goes
   through `trustProxySetting` like TRUST_PROXY (`'1'` is a hop count, `'true'`/`'false'`/
   `'loopback,,'` start the server, blank means the default; the environment wins). ~2 s.
