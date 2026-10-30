@@ -21,6 +21,7 @@ import os from 'os';
 import path from 'path';
 import { deploy, validateDeployConfig } from '../server/utils/deploy.js';
 
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
 let passed = 0;
 async function check(name, fn) {
   try {
@@ -167,6 +168,72 @@ await check('validate: an ordinary remote destination is accepted (positive cont
   }
 });
 
+// A remote path reaches the remote shell: rsync before 3.2.4 and macOS's
+// openrsync send it unescaped, and even rsync 3.4.4 leaves `*` unescaped,
+// so `$HOME`, backticks, `$(...)`, `;cmd` and globs were expanded there
+// (`w*` synced into the first match, with --delete). Only a plain spelling
+// is accepted, whatever the rsync version, and the override does not lift it.
+const REMOTE_PATH_REFUSAL = 'rsync.path for a remote host may hold only letters, digits and the characters . _ ~ / + @ , = - (the remote shell would expand anything else), and must not start with "-"';
+const SHELL_EXPANDED_REMOTE = ['$HOME', '$HOME/www', '${HOME}/www', '`id`', '$(id)', 'www;touch /tmp/x', 'www && id',
+  'w*', 'ww?', 'w[w]w', '{www,other}', 'www dir', "it's", 'a|b', 'www\nother', 'www\\x', '!x', '-rf', '--delete'];
+for (const destination of SHELL_EXPANDED_REMOTE) {
+  await check(`validate: a remote destination the remote shell would expand is refused (${JSON.stringify(destination)})`, () => {
+    for (const extra of [{}, { allowDestructivePath: true }]) {
+      const result = validateDeployConfig({ adapter: 'rsync', rsync: { host: 'h', user: 'u', path: destination, ...extra } }, guardContext);
+      assert.equal(result.valid, false, JSON.stringify(extra));
+      assert.ok(result.errors.includes(REMOTE_PATH_REFUSAL), result.errors.join('\n'));
+      assert.ok(result.errors.every((error) => !error.includes(destination)), 'our sentence, not the value');
+    }
+  });
+}
+
+await check('validate: plain remote spellings are accepted (positive control)', () => {
+  for (const destination of ['/var/www/site-a', 'www', '~/www', '~deploy/www', '/srv/~deploy', 'site+a/v=1,b@2', 'a-b_c.d/']) {
+    assert.deepEqual(validateDeployConfig({ adapter: 'rsync', rsync: { host: 'h', user: 'u', path: destination } }, guardContext), { valid: true, errors: [] }, destination);
+  }
+  // A local path is never handed to a shell: the same characters are fine.
+  assert.deepEqual(validateLocal(path.join(guardRoot, 'w*')), { valid: true, errors: [] });
+});
+
+/**
+ * A fake `ssh` that does what a real one does with rsync's command: runs it
+ * through `sh -c` (the remote login shell) in a stand-in home directory, so
+ * the local rsync becomes the "remote" end and any expansion happens.
+ */
+for (const destination of ['w*', '$TARGET_DIR']) {
+  await check(`deploy: a remote path the shell would expand never reaches ssh (${destination})`, async () => {
+    const bin = fs.mkdtempSync(path.join(guardRoot, 'bin-'));
+    const remoteHome = fs.mkdtempSync(path.join(guardRoot, 'remote-home-'));
+    fs.mkdirSync(path.join(remoteHome, 'www'));
+    fs.writeFileSync(path.join(remoteHome, 'www', 'keep.txt'), 'keep\n');
+    const record = path.join(bin, 'ran.txt');
+    fs.writeFileSync(path.join(bin, 'ssh'), `#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in -p|-i|-o|-l) shift 2;; -*) shift;; *) break;; esac
+done
+shift
+printf '%s\\n' "$*" >> '${record}'
+cd '${remoteHome}' && HOME='${remoteHome}' TARGET_DIR=www exec /bin/sh -c "$*"
+`, { mode: 0o755 });
+    fs.writeFileSync(path.join(guardProject, 'dist', 'index.html'), '<h1>hi</h1>');
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${bin}:${originalPath}`;
+    process.stderr.write = () => true;
+    try {
+      await assert.rejects(
+        () => deploy({ adapter: 'rsync', rsync: { host: 'example.com', user: 'deploy', path: destination } }, guardProject, { log: () => {} }),
+        /refused/,
+      );
+    } finally {
+      process.env.PATH = originalPath;
+      process.stderr.write = originalStderrWrite;
+    }
+    assert.equal(fs.existsSync(record), false, `ssh ran: ${fs.existsSync(record) ? fs.readFileSync(record, 'utf8') : ''}`);
+    assert.equal(fs.readFileSync(path.join(remoteHome, 'www', 'keep.txt'), 'utf8'), 'keep\n', 'the expanded match was synced over with --delete');
+    assert.equal(fs.existsSync(path.join(remoteHome, 'www', 'index.html')), false);
+  });
+}
+
 await check('deploy: refuses a destructive destination without calling rsync', async () => {
   fs.writeFileSync(path.join(guardProject, 'keep.txt'), 'keep\n');
   await assert.rejects(
@@ -195,7 +262,6 @@ async function sshArgumentsFor(rsyncConfig) {
   return fs.readFileSync(record, 'utf8').split('\n').slice(0, -1);
 }
 
-const originalStderrWrite = process.stderr.write.bind(process.stderr);
 for (const keyPath of [path.join(guardRoot, 'my keys/deploy key'), path.join(guardRoot, "it's/key"), path.join(guardRoot, 'plain/key')]) {
   await check(`deploy: the ssh key path reaches ssh as one argument (${path.basename(path.dirname(keyPath))}/${path.basename(keyPath)})`, async () => {
     process.stderr.write = () => true; // rsync's complaint about the fake ssh

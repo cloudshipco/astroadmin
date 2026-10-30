@@ -83,7 +83,9 @@ function localDestinationProblem(destination, { projectRoot, distDir }) {
 /**
  * Why a REMOTE destination must not be synced with --delete, or null. Only
  * its spelling can be judged here: the filesystem root, a home directory and
- * anything above it. A relative path is relative to the remote user's home;
+ * anything above it. A home directory spelled as an absolute path
+ * (`/home/deploy`, `/root`) is not detected: nothing here knows where the
+ * remote user's home is. A relative path is relative to the remote user's home;
  * a leading `~` or `~name` (rsync sends it unescaped and the remote shell
  * expands it) is the remote user's or that user's home, so what follows it
  * is judged as home-relative too.
@@ -147,6 +149,19 @@ function isRemoteHost(host) {
 }
 
 /**
+ * A remote path as the remote shell cannot change it: letters, digits and
+ * `. _ ~ / + @ , = -`, not starting with `-`. rsync sends the path to the
+ * remote end through its login shell; rsync before 3.2.4 and macOS's
+ * openrsync send it unescaped (so `$HOME`, `${HOME}`, backticks, `$(...)`,
+ * `;cmd` and spaces were the shell's), and even rsync 3.4.4 leaves `*`
+ * unescaped, so `w*` synced into the first match with --delete. Judged by
+ * spelling, whatever the local rsync version. `~` stays: a leading `~` or
+ * `~name` is a home directory, which remoteDestinationProblem judges.
+ */
+const REMOTE_PATH = /^[A-Za-z0-9._~/+@,=][A-Za-z0-9._~/+@,=-]*$/;
+const REMOTE_PATH_REFUSAL = 'rsync.path for a remote host may hold only letters, digits and the characters . _ ~ / + @ , = - (the remote shell would expand anything else), and must not start with "-"';
+
+/**
  * rsync's own rule: a destination with a `:` before its first `/` is remote
  * (`host:dir`, `user@host:dir`, `host::module`, `rsync://host/...`).
  */
@@ -191,6 +206,10 @@ function validate(config, context = {}) {
     // wrong reason) and regardless of allowDestructivePath: rsync would sync
     // over ssh to a user and host nobody checked.
     errors.push('rsync.path looks like a remote destination (host:path); put the server in rsync.host, the user in rsync.user and only the directory in rsync.path');
+  } else if (config?.path && config.host && !REMOTE_PATH.test(String(config.path))) {
+    // Regardless of allowDestructivePath: what the shell expands it to is
+    // not the destination anyone checked.
+    errors.push(REMOTE_PATH_REFUSAL);
   } else if (config?.path) {
     const problem = destinationProblem(config, { distDir: 'dist', ...context });
     if (problem) errors.push(problem);

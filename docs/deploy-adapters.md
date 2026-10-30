@@ -48,6 +48,14 @@ in their own fields, not in `path`: without `host`, a `path` such as
 `deploy@server.example.com:/var/www` (a `:` before the first `/`) is
 refused.
 
+A remote `path` may hold only letters, digits and `. _ ~ / + @ , = -`, and
+must not start with `-`. rsync hands the path to the remote end through its
+login shell: rsync before 3.2.4 and the macOS `openrsync` send it unescaped,
+so `$HOME`, backticks, `$(...)`, `;` and spaces are the shell's, and even
+rsync 3.4 leaves `*` unescaped (`w*` syncs into the first match, with
+`--delete`). Anything else is refused whatever the rsync version, and
+`allowDestructivePath` does not lift this.
+
 Publish refuses a destination where `--delete` would destroy something, and
 says why, before it commits or builds anything:
 
@@ -60,7 +68,9 @@ says why, before it commits or builds anything:
   any other user's home (`~deploy`, `~root/`: the remote shell expands
   them) and anything above one (`..`). A relative remote path is relative
   to the remote user's home; `~deploy/www` is a folder inside that home and
-  is accepted.
+  is accepted. A home directory written as an absolute path (`/home/deploy`,
+  `/root`) is not detected, since AstroAdmin cannot know where the remote
+  user's home is: check that one yourself.
 
 If the destination really is one of these, set `allowDestructivePath: true`
 (the boolean) to skip the check.
