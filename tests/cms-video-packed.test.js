@@ -114,6 +114,9 @@ try {
   writeSiteFile('astro.config.mjs', "import { defineConfig } from 'astro/config';\nexport default defineConfig({});\n");
   writeSiteFile('public/images/hero.mp4', fs.readFileSync(path.join(fixtures, 'clip.mp4')));
   writeSiteFile('public/images/loop.webm', fs.readFileSync(path.join(fixtures, 'clip.webm')));
+  // A link out of the site (to a file a build must not publish): refused.
+  fs.writeFileSync(path.join(workDir, 'outside.mp4'), fs.readFileSync(path.join(fixtures, 'clip.mp4')));
+  fs.symlinkSync(path.join(workDir, 'outside.mp4'), path.join(siteDir, 'public/images/linked-out.mp4'));
   // In public/images but on no page: the glob bundled these too (#90).
   writeSiteFile('public/images/unused/spare.webm', fs.readFileSync(path.join(fixtures, 'clip.webm')));
   writeSiteFile('public/images/spare.png', await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 0, g: 0, b: 0 } } }).png().toBuffer());
@@ -365,6 +368,9 @@ import CmsVideo from 'astroadmin/components/CmsVideo.astro';
   for (const [what, body, value] of [
     ['video', '<CmsVideo src="/images/gone.mp4" />', '/images/gone.mp4'],
     ['video (case differs)', '<CmsVideo src="/images/Hero.mp4" />', '/images/Hero.mp4'],
+    ['video (folder case differs)', '<CmsVideo src="/images/Unused/spare.webm" />', '/images/Unused/spare.webm'],
+    ['video with a fragment', '<CmsVideo src="/images/gone.mp4#t=5" />', '/images/gone.mp4#t=5'],
+    ['video (a symlink out of the site)', '<CmsVideo src="/images/linked-out.mp4" />', '/images/linked-out.mp4'],
     ['poster', '<CmsVideo src="/images/hero.mp4" poster="/images/gone.png" />', '/images/gone.png'],
     ['typed bare name', '<CmsVideo src="hero.mp4" />', 'hero.mp4'],
     ['YouTube page', '<CmsVideo src="https://www.youtube.com/watch?v=abc" />', 'https://www.youtube.com/watch?v=abc'],
@@ -376,6 +382,16 @@ import CmsVideo from 'astroadmin/components/CmsVideo.astro';
       assert.ok(failed.output.includes(`"${value}"`), failed.output);
     });
   }
+  writeSiteFile('src/pages/index.astro', goodPage);
+
+  await check('a local video with a ?query or #fragment is found (the file is the path before it) and keeps it', () => {
+    writeSiteFile('src/pages/index.astro', page('<CmsVideo src="/images/hero.mp4#t=5" id="a" />\n<CmsVideo src="/images/loop.webm?v=2" id="b" />'));
+    const built = buildSite();
+    assert.strictEqual(built.status, 0, built.output);
+    const builtHtml = fs.readFileSync(path.join(siteDir, 'dist', 'index.html'), 'utf8');
+    assert.match(builtHtml, /<source src="\/images\/hero\.mp4#t=5" type="video\/mp4"/);
+    assert.match(builtHtml, /<source src="\/images\/loop\.webm\?v=2" type="video\/webm"/);
+  });
   writeSiteFile('src/pages/index.astro', goodPage);
 
   await check("with a `base`, local video and poster paths are served under it", () => {

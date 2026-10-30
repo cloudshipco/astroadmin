@@ -11,14 +11,15 @@
  *   uploads into `public/images`, so the lookup here must name the same
  *   folder as those, whatever the site sets.
  * - `publicFile(sitePath)`: the file a `/images/...` value names under
- *   public/, or undefined when it is not one (missing, a folder, outside
- *   public/, a malformed %-escape).
+ *   public/ (a `?query` or `#fragment` is not part of the file), or
+ *   undefined when it is not one (missing, a folder, outside public/,
+ *   a symlink resolving outside public/, a malformed %-escape).
  *
  * In a build `siteRoot` is the directory the build ran in; nothing here is
  * meant to read files from a deployed server.
  */
 import { root } from 'astro:config/server';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,13 +30,17 @@ export const publicDir = join(siteRoot, 'public');
 export function publicFile(sitePath) {
   let decoded;
   try {
-    decoded = decodeURIComponent(sitePath);
+    decoded = decodeURIComponent(sitePath.split(/[?#]/)[0]);
   } catch {
     return undefined; // a malformed escape (URIError): treat as missing
   }
   const file = normalize(join(publicDir, decoded));
   if (!file.startsWith(publicDir + sep)) return undefined;
-  return existsSync(file) && statSync(file).isFile() ? file : undefined;
+  if (!existsSync(file) || !statSync(file).isFile()) return undefined;
+  // A symlink out of public/ is refused, as the admin's image picker refuses
+  // one: the build would copy whatever it points at into the site.
+  const realPublicDir = realpathSync(publicDir);
+  return realpathSync(file).startsWith(realPublicDir + sep) ? file : undefined;
 }
 
 /**

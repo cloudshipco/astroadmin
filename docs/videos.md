@@ -85,8 +85,11 @@ it from a small script:
 - **The poster** is shown before the video plays. A `/images/...` raster
   poster is resized to `posterWidth` (default 1920) and encoded as WebP.
 - **Missing files fail the build**, naming the content value, as
-  `CmsImage` does. In `astro dev` a file uploaded after the server started is
-  used as it is.
+  `CmsImage` does. A file counts only with the exact case of every folder and
+  file name (as a case-sensitive server serves it), and a symlink resolving
+  outside `public/` counts as missing. A `?query` or `#t=5` after a local path
+  is kept on the `<source>` and is not part of the file name. In `astro dev` a
+  file uploaded after the server started is used as it is.
 - A local path is served under the site's `base`: `/images/loop.mp4` is
   requested as `/blog/images/loop.mp4` with `base: '/blog'`.
 - `class`, `id` and other attributes go on the `<video>`; `wrapperClass` goes
