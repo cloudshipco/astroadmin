@@ -252,18 +252,28 @@ A crop an editor sets in the image library (stored in
 and the library shows the crop control only with `images: { crop: true }` in
 `astroadmin.config.js`. The check reads both files and warns when:
 
-- `images.crop` is true but the Astro config's `image.service.entrypoint` is
-  not `'astroadmin/image-service'` (not set, or another service). Editors
-  can set crops that are stored and never applied, and a build that renders
-  a cropped image fails, so the publish check refuses it. Set the service, or
-  remove `images.crop`.
+- `images.crop` is true but the Astro config sets no
+  `image.service.entrypoint` (Astro's default service, which cannot crop).
+  Editors can set crops that are stored and never applied, and a build that
+  renders a cropped image fails, so the publish check refuses it. Set the
+  service to `'astroadmin/image-service'`, or remove `images.crop`.
+- `images.crop` is true and the entrypoint is a literal other than
+  `'astroadmin/image-service'` (a local path, say). The doctor reads the
+  config's text and cannot tell whether that module applies crops, so it
+  says it could not confirm the service, naming the expected value, and
+  never that the build fails: the build checks the LOADED service, so a
+  local re-export of `astroadmin/image-service` builds. Check that the
+  service is, or re-exports, `astroadmin/image-service`.
 - the service is set but `images.crop` is not true: the library hides the
   crop control, so editors cannot crop. Set `images: { crop: true }`.
 - `.metadata.json` already holds a crop for an image on a site without the
-  service (one that turned cropping off, say). The images are listed by the
-  key the file stores them under, the image's site path
-  (`/images/team/photo.jpg`), or for an entry from an earlier version its
-  bare file name. Set the service, or clear each crop in the image library.
+  service (one that turned cropping off, say), with the same two wordings:
+  "fails" with no service set, "could not confirm" with another literal. The
+  images are listed by the key the file stores them under, the image's site
+  path (`/images/team/photo.jpg`), or for an entry from an earlier version
+  its bare file name. Only a crop the build would apply counts: one with a
+  missing side, out of range, or not an object is ignored by the build and
+  by this check. Set the service, or clear each crop in the image library.
 
 It also warns when the service cannot be read statically (`image.service` is
 a call such as `sharpImageService()`, or the config is not readable) and a

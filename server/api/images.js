@@ -11,6 +11,8 @@ import fs from 'fs/promises';
 import { config } from '../config.js';
 import { loadSchemas } from '../utils/collections.js';
 import { withCheckoutWrite } from '../utils/checkout-lock.js';
+import { isPlainObject } from '../utils/plain-object.js';
+import { CROP_SIDES, parseCrop } from '../../components/crop.js';
 import {
   assertContainedPath,
   assertDeclaredCollection,
@@ -37,11 +39,6 @@ const router = express.Router();
 
 // Metadata file path
 const METADATA_FILENAME = '.metadata.json';
-
-/** Whether a value is a plain object (not null, not an array). */
-function isPlainObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /**
  * Load image metadata from .metadata.json. The file is a plain object of
@@ -74,17 +71,22 @@ let metadataQueue = Promise.resolve();
  * inside a checkout hold, so neither another update nor a publish's rebase
  * can land between the read and the write and be overwritten by a stale copy.
  * The file is written only when the change changed it (a delete of an image
- * with no details does not create one). Whatever else the change does to the
- * checkout (unlinking the image) is inside the same hold.
+ * with no details does not create one). `afterWrite` runs inside the same
+ * hold once the metadata is on disk (written, or unchanged), and not at all
+ * when the write fails: DELETE unlinks the image there, so a failed write
+ * leaves both the file and its entry as they were and the 500 is true. The
+ * hold is released when this step ends, never tied to a request's lifetime.
  * @param {(metadata: object) => void | Promise<void>} change mutates the metadata in place
+ * @param {() => void | Promise<void>} [afterWrite]
  * @returns {Promise<object>} the metadata as written
  */
-function updateMetadata(change) {
+function updateMetadata(change, afterWrite = null) {
   const run = metadataQueue.then(() => withCheckoutWrite(async () => {
     const metadata = await loadMetadata();
     const before = JSON.stringify(metadata);
     await change(metadata);
     if (JSON.stringify(metadata) !== before) await saveMetadata(metadata);
+    if (afterWrite) await afterWrite();
     return metadata;
   }));
   metadataQueue = run.catch(() => {});
@@ -97,16 +99,33 @@ function entryAt(metadata, key) {
 }
 
 /**
+ * The bare-filename key an older admin may have written for this image, or
+ * null. That admin keyed only files served at `/images/<name>` (src/assets
+ * and public uploads), and the site (components/site-files.js) reads the
+ * bare key only for such a path, so the image() folder's `/assets/images/<name>`
+ * never reads, folds in or deletes it: a same-named upload would lose its
+ * details.
+ * @param {string} url - the image's site path
+ * @param {string} filename
+ * @returns {string|null}
+ */
+function legacyKeyFor(url, filename) {
+  return url === `/images/${filename}` ? filename : null;
+}
+
+/**
  * The details of one image: the entry at its site path (the listing's `url`),
- * else the one an older admin wrote under its bare filename. Own keys only,
- * so a name such as `constructor` never reads an inherited value (the
- * filename validator refuses such names anyway, and a site path has a `/`).
+ * else, for a `/images/<name>` path, the one an older admin wrote under its
+ * bare filename. Own keys only, so a name such as `constructor` never reads an
+ * inherited value (the filename validator refuses such names anyway, and a
+ * site path has a `/`).
  * @param {object} metadata
  * @param {string} url - the image's site path
  * @param {string} filename
  */
 function getImageMetadata(metadata, url, filename) {
-  return entryAt(metadata, url) || entryAt(metadata, filename) || {};
+  const legacyKey = legacyKeyFor(url, filename);
+  return entryAt(metadata, url) || (legacyKey === null ? null : entryAt(metadata, legacyKey)) || {};
 }
 
 const METADATA_KEYS = ['alt', 'focalPoint', 'crop'];
@@ -118,16 +137,15 @@ const METADATA_REFUSALS = {
   crop: 'crop must be {x, y, width, height} percentages inside the image (width and height above 0), or null',
 };
 
-/** Whether `value` is an object with exactly these keys, each a finite number. */
-function isNumberRecord(value, keys) {
+/** Whether `value` is a plain object with exactly these keys (any values). */
+function hasExactKeys(value, keys) {
   if (!isPlainObject(value)) return false;
   const present = Object.keys(value);
-  return present.length === keys.length
-    && keys.every((key) => present.includes(key) && Number.isFinite(value[key]));
+  return present.length === keys.length && keys.every((key) => present.includes(key));
 }
 
 function isPercentage(value) {
-  return value >= 0 && value <= 100;
+  return Number.isFinite(value) && value >= 0 && value <= 100;
 }
 
 /**
@@ -135,10 +153,11 @@ function isPercentage(value) {
  * why it is refused: a plain object whose keys are among alt, focalPoint and
  * crop (so `__proto__` and `constructor`, own keys after JSON.parse, are
  * refused with every other name); alt text; focalPoint `{x, y}` as finite
- * percentages 0..100; crop `{x, y, width, height}` as finite percentages with
- * x, y >= 0, width, height > 0, x + width <= 100, y + height <= 100; each of
- * the last two may be null, which deletes it from the entry. The message is
- * fixed text naming the field, never the value sent.
+ * percentages 0..100; crop `{x, y, width, height}` as the build's `parseCrop`
+ * accepts it (finite percentages, x, y >= 0, width, height > 0, x + width <=
+ * 100, y + height <= 100: one rule, in components/crop.js), with no other
+ * key; each of the last two may be null, which deletes it from the entry.
+ * The message is fixed text naming the field, never the value sent.
  * @param {unknown} body
  * @returns {{patch: object, error?: undefined} | {error: string, patch?: undefined}}
  */
@@ -154,7 +173,7 @@ export function validateMetadataPatch(body) {
   if (keys.includes('focalPoint')) {
     const { focalPoint } = body;
     if (focalPoint !== null) {
-      if (!isNumberRecord(focalPoint, ['x', 'y']) || !isPercentage(focalPoint.x) || !isPercentage(focalPoint.y)) {
+      if (!hasExactKeys(focalPoint, ['x', 'y']) || !isPercentage(focalPoint.x) || !isPercentage(focalPoint.y)) {
         return { error: METADATA_REFUSALS.focalPoint };
       }
       patch.focalPoint = { x: focalPoint.x, y: focalPoint.y };
@@ -165,12 +184,9 @@ export function validateMetadataPatch(body) {
   if (keys.includes('crop')) {
     const { crop } = body;
     if (crop !== null) {
-      if (!isNumberRecord(crop, ['x', 'y', 'width', 'height'])
-        || crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0
-        || crop.x + crop.width > 100 || crop.y + crop.height > 100) {
-        return { error: METADATA_REFUSALS.crop };
-      }
-      patch.crop = { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
+      const parsed = hasExactKeys(crop, CROP_SIDES) ? parseCrop(crop) : undefined;
+      if (parsed === undefined) return { error: METADATA_REFUSALS.crop };
+      patch.crop = parsed;
     } else {
       patch.crop = null;
     }
@@ -179,34 +195,48 @@ export function validateMetadataPatch(body) {
 }
 
 /**
- * Apply a validated patch to the entry for an image, in place: the entry
- * moves to the site-path key (an entry under the bare filename, from an
- * older admin, contributes the fields the site-path entry lacks and is
- * deleted), then each patched key is set, or deleted when the patch says
- * null. An entry left with no keys is removed rather than stored as `{}`,
- * so a null patch on an image with no details changes nothing (and
- * updateMetadata then writes nothing: no file is created or dirtied).
- * Returns the entry as written.
+ * Apply a validated patch to the entry for an image, in place. An entry
+ * already at the site-path key is changed where it stands (each patched key
+ * set, or deleted when the patch says null), so a patch that changes nothing
+ * leaves the metadata identical and updateMetadata writes nothing. For a
+ * `/images/<name>` path, an entry under the bare filename (from an older
+ * admin) contributes the fields the site-path entry lacks and is deleted. An
+ * entry left with no keys is removed rather than stored as `{}`, so a null
+ * patch on an image with no details changes nothing either (no file is
+ * created or dirtied). Returns the entry as written.
  * @param {object} metadata
  * @param {string} url - the image's site path
  * @param {string} filename
  * @param {object} patch - from validateMetadataPatch
  */
 function applyMetadataPatch(metadata, url, filename, patch) {
-  const entry = { ...(entryAt(metadata, filename) || {}), ...(entryAt(metadata, url) || {}) };
+  const stored = entryAt(metadata, url);
+  const entry = stored || {};
+  const legacyKey = legacyKeyFor(url, filename);
+  const legacy = legacyKey === null ? null : entryAt(metadata, legacyKey);
+  if (legacy) {
+    for (const key of Object.keys(legacy)) {
+      if (!Object.hasOwn(entry, key)) entry[key] = legacy[key];
+    }
+  }
   for (const key of METADATA_KEYS) {
     if (!Object.hasOwn(patch, key)) continue;
     if (patch[key] === null) delete entry[key];
     else entry[key] = patch[key];
   }
-  removeMetadataEntry(metadata, url, filename);
-  if (Object.keys(entry).length > 0) metadata[url] = entry;
+  if (legacyKey !== null && Object.hasOwn(metadata, legacyKey)) delete metadata[legacyKey];
+  if (Object.keys(entry).length === 0) delete metadata[url];
+  else if (!stored) metadata[url] = entry;
   return entry;
 }
 
-/** Remove an image's details, under its site-path key and its bare-filename key. */
+/**
+ * Remove an image's details under its site-path key and, for a
+ * `/images/<name>` path, its bare-filename key.
+ */
 function removeMetadataEntry(metadata, url, filename) {
-  for (const key of [url, filename]) {
+  const legacyKey = legacyKeyFor(url, filename);
+  for (const key of legacyKey === null ? [url] : [url, legacyKey]) {
     if (Object.hasOwn(metadata, key)) delete metadata[key];
   }
 }
@@ -822,9 +852,10 @@ router.post('/:filename/entry-value', express.json(), async (req, res) => {
 /**
  * GET /api/images/:filename/metadata?source=<source|uploads|assets>
  * Get metadata for a specific image: the entry at its site path (in the
- * folder `source` names, else the first folder holding the file), else the
- * one under its bare filename. An image in no folder has only the latter;
- * with a source named, an image not in that folder is a 404.
+ * folder `source` names, else the first folder holding the file), else, for
+ * a `/images/<name>` path, the one under its bare filename. An image in no
+ * folder is read as `/images/<name>` (an upload that is gone); with a source
+ * named, an image not in that folder is a 404.
  */
 router.get('/:filename/metadata', async (req, res) => {
   try {
@@ -836,7 +867,7 @@ router.get('/:filename/metadata', async (req, res) => {
     if (source !== null && !location) {
       return res.status(404).json({ success: false, error: 'Image not found' });
     }
-    const imageMeta = getImageMetadata(metadata, location ? location.url : sanitizedFilename, sanitizedFilename);
+    const imageMeta = getImageMetadata(metadata, location ? location.url : `/images/${sanitizedFilename}`, sanitizedFilename);
 
     res.json({
       success: true,
@@ -944,12 +975,15 @@ router.delete('/:filename', async (req, res) => {
 
     // The file and its details go in one step (one hold, one metadata
     // update), so a file that comes back under the same name (a new upload,
-    // a pull) does not inherit the old alt text or focal point. The site path
-    // is the upload's: a src/assets image of this name was refused above.
-    await updateMetadata(async (current) => {
-      await fs.unlink(filePath);
-      removeMetadataEntry(current, `/images/${sanitizedFilename}`, sanitizedFilename);
-    });
+    // a pull) does not inherit the old alt text or focal point. The entry is
+    // removed and WRITTEN first and the file unlinked after, inside the same
+    // hold: a metadata write that fails leaves the image and its entry as
+    // they were, so the 500 below is true. The site path is the upload's: a
+    // src/assets image of this name was refused above.
+    await updateMetadata(
+      (current) => removeMetadataEntry(current, `/images/${sanitizedFilename}`, sanitizedFilename),
+      () => fs.unlink(filePath),
+    );
 
     console.log(`Image deleted: ${sanitizedFilename}`);
 

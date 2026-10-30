@@ -15,6 +15,8 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { bunExecutable } from '../utils/astro-bin.js';
 import { runGit } from '../utils/git-exec.js';
+import { isPlainObject } from '../utils/plain-object.js';
+import { parseCrop } from '../../components/crop.js';
 
 const ASTRO_CONFIG_NAMES = ['astro.config.mjs', 'astro.config.js', 'astro.config.ts', 'astro.config.mts', 'astro.config.cjs'];
 const INTEGRATION_MODULE = 'astroadmin/integration';
@@ -327,10 +329,13 @@ export async function readAdminConfigFacts(projectRoot) {
 }
 
 /**
- * The images whose editor metadata holds a crop, by the key the metadata
- * file stores them under (the image's site path, `/images/x.jpg`, or for an
- * entry written before 1.12.0 its bare file name). Content an editor set,
- * never a server path. A crop of null (cleared) is no crop.
+ * The images whose editor metadata holds a crop the build would apply, by the
+ * key the metadata file stores them under (the image's site path,
+ * `/images/x.jpg`, or for an entry written before 1.12.0 its bare file name).
+ * Content an editor set, never a server path. A crop is one `parseCrop`
+ * (components/crop.js, what CmsImage and the image service read it with)
+ * accepts: null (cleared), `{}`, a missing side or one out of range is no
+ * crop to the build, so it is none here.
  * @param {string} projectRoot
  * @returns {{present: boolean, parseError: string|null, keys: string[]}}
  */
@@ -347,10 +352,10 @@ export function findStoredCrops(projectRoot) {
   } catch (error) {
     return { present: true, parseError: error.message, keys: [] };
   }
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return { present: true, parseError: 'not a JSON object', keys: [] };
+  if (!isPlainObject(metadata)) return { present: true, parseError: 'not a JSON object', keys: [] };
   const keys = Object.keys(metadata).filter((key) => {
     const entry = metadata[key];
-    return entry && typeof entry === 'object' && entry.crop && typeof entry.crop === 'object';
+    return isPlainObject(entry) && parseCrop(entry.crop) !== undefined;
   });
   return { present: true, parseError: null, keys };
 }

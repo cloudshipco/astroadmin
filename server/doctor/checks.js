@@ -360,25 +360,41 @@ export const CHECKS = [
       if (admin.loadError) problems.push(`astroadmin.config.js could not be loaded to read images.crop: ${admin.loadError}`);
       if (crops.parseError) problems.push(`${IMAGE_METADATA_FILE} (the editor's alt text, focal points and crops) could not be read as JSON, so its crops could not be checked: ${crops.parseError}`);
 
-      let serviceSet;
-      if (facts.imageService.state === 'literal') serviceSet = facts.imageService.value === CROP_SERVICE_ENTRYPOINT;
-      else if (facts.imageService.state === 'unset') serviceSet = false;
-      else serviceSet = null;
+      // What the doctor can say of the service from the config's text. The
+      // build (CmsImage) checks the LOADED service's own supportsCrop marker,
+      // so a literal other than the string (a local re-export, an absolute
+      // path) may well crop: 'unconfirmed', never "fails". No service at all
+      // is Astro's default, which cannot crop: 'absent'.
+      let service;
+      if (facts.imageService.state === 'literal') service = facts.imageService.value === CROP_SERVICE_ENTRYPOINT ? 'confirmed' : 'unconfirmed';
+      else if (facts.imageService.state === 'unset') service = 'absent';
+      else service = 'unknown';
+      const serviceSet = service === 'confirmed';
+      const cropsHeld = `${IMAGE_METADATA_FILE} holds a crop for ${crops.keys.length} ${crops.keys.length === 1 ? 'image' : 'images'}`;
+      const loadedServiceNote = `the build checks the loaded service, not the name, and refuses a cropped image only when that service does not apply crops; '${CROP_SERVICE_ENTRYPOINT}' is the expected value`;
 
       const docs = `See ${OPTIMISED_IMAGES_DOCS}#crop.`;
-      if (serviceSet === null) {
+      if (service === 'unknown') {
         if (admin.cropEnabled || cropsStored) {
           const why = facts.imageService.state === 'unknown' ? 'its value is not a plain literal' : 'a spread or computed key may set it, or the config is not readable statically';
-          problems.push(`could not verify image.service.entrypoint in ${configFile} (${why}); check by hand that it is '${CROP_SERVICE_ENTRYPOINT}', which ${admin.cropEnabled ? 'images.crop in astroadmin.config.js' : 'the stored crops'} need, or a build that renders a cropped image fails and the publish check refuses it`);
+          problems.push(`could not verify image.service.entrypoint in ${configFile} (${why}); check by hand that it is '${CROP_SERVICE_ENTRYPOINT}' (or a service that re-exports it: the build checks the loaded service), which ${admin.cropEnabled ? 'images.crop in astroadmin.config.js' : 'the stored crops'} need, or a build that renders a cropped image fails and the publish check refuses it`);
           if (cropsStored) details.push(...listSome(crops.keys));
         }
-      } else if (!serviceSet) {
-        const serviceIs = facts.imageService.state === 'literal' ? `is '${facts.imageService.value}'` : 'is not set';
+      } else if (service === 'unconfirmed') {
+        const serviceIs = `image.service.entrypoint in ${configFile} is '${facts.imageService.value}', so the doctor could not confirm that the configured service applies crops`;
         if (admin.cropEnabled) {
-          problems.push(`images.crop is true in astroadmin.config.js, so editors can crop images, but image.service.entrypoint in ${configFile} ${serviceIs}, not '${CROP_SERVICE_ENTRYPOINT}': a crop is stored and never applied, and a build that renders a cropped image fails, so the publish check refuses it. Set image: { service: { entrypoint: '${CROP_SERVICE_ENTRYPOINT}' } } in ${configFile}, or remove images.crop`);
+          problems.push(`images.crop is true in astroadmin.config.js, so editors can crop images, but ${serviceIs} (${loadedServiceNote}). Check that the service is, or re-exports, '${CROP_SERVICE_ENTRYPOINT}', or remove images.crop`);
         }
         if (cropsStored) {
-          problems.push(`${IMAGE_METADATA_FILE} holds a crop for ${crops.keys.length} ${crops.keys.length === 1 ? 'image' : 'images'}, but image.service.entrypoint in ${configFile} ${serviceIs}, not '${CROP_SERVICE_ENTRYPOINT}', so a build that renders ${crops.keys.length === 1 ? 'it' : 'one of them'} fails and the publish check refuses it. Set the service, or clear the crop in the image library`);
+          problems.push(`${cropsHeld}, but ${serviceIs} (${loadedServiceNote}). Check that the service is, or re-exports, '${CROP_SERVICE_ENTRYPOINT}', or clear the crop in the image library`);
+          details.push(...listSome(crops.keys));
+        }
+      } else if (service === 'absent') {
+        if (admin.cropEnabled) {
+          problems.push(`images.crop is true in astroadmin.config.js, so editors can crop images, but image.service.entrypoint in ${configFile} is not set, not '${CROP_SERVICE_ENTRYPOINT}': a crop is stored and never applied, and a build that renders a cropped image fails, so the publish check refuses it. Set image: { service: { entrypoint: '${CROP_SERVICE_ENTRYPOINT}' } } in ${configFile}, or remove images.crop`);
+        }
+        if (cropsStored) {
+          problems.push(`${cropsHeld}, but image.service.entrypoint in ${configFile} is not set, not '${CROP_SERVICE_ENTRYPOINT}', so a build that renders ${crops.keys.length === 1 ? 'it' : 'one of them'} fails and the publish check refuses it. Set the service, or clear the crop in the image library`);
           details.push(...listSome(crops.keys));
         }
       } else if (!admin.cropEnabled) {

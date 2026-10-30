@@ -16,7 +16,13 @@
  *   image.service.entrypoint 'astroadmin/image-service' in the Astro config,
  *   the service without images.crop, and a crop stored in
  *   public/images/.metadata.json on a site without the service (named by its
- *   site-path key) each warn; both opt-ins pass; neither is a skip.
+ *   site-path key) each warn; both opt-ins pass; neither is a skip. With no
+ *   service at all the warning says the build fails; with a literal other
+ *   than the string (a local re-export, which builds: CmsImage checks the
+ *   LOADED service's supportsCrop marker) it says only that the doctor could
+ *   not confirm the service applies crops, never "fails". A stored crop is
+ *   counted only when the build's parseCrop accepts it (`{x, y}` alone, `{}`,
+ *   `[]`, out of range: none).
  *
  * Each is shown red on a mutated copy of a healthy fixture.
  *
@@ -381,10 +387,44 @@ await check('crop MUTATION: images.crop true without the service warns, naming b
   assert.ok(result.message.includes('optimised-images.md#crop'), result.message);
 });
 
-await check('crop MUTATION: another entrypoint with images.crop true warns, naming it', async () => {
-  const result = await cropResult(makeCropSite({ config: configWithImage("image: { service: { entrypoint: './src/my-service.js' } },") }));
-  assert.equal(result.severity, 'warn', JSON.stringify(result));
-  assert.ok(result.message.includes("'./src/my-service.js'") && result.message.includes('astroadmin/image-service'), result.message);
+await check('crop MUTATION: another entrypoint with images.crop true warns that the service could not be confirmed, never that the build fails', async () => {
+  // CmsImage checks the LOADED service's supportsCrop marker, so a local
+  // re-export or an absolute path of astroadmin/image-service builds; the
+  // doctor can only say it could not confirm it from the literal.
+  const localPath = configWithImage("image: { service: { entrypoint: './src/my-service.js' } },");
+  for (const options of [{ config: localPath }, { config: localPath, adminConfig: null, metadata: METADATA_WITH_CROPS }]) {
+    const result = await cropResult(makeCropSite(options));
+    assert.equal(result.severity, 'warn', JSON.stringify(result));
+    assert.ok(result.message.includes("'./src/my-service.js'") && result.message.includes('astroadmin/image-service'), result.message);
+    assert.ok(/could not confirm/.test(result.message), `says it could not confirm: ${result.message}`);
+    assert.ok(/loaded service/.test(result.message), `says the build checks the loaded service: ${result.message}`);
+    assert.ok(!/fail/i.test(result.message), `never says the build fails: ${result.message}`);
+  }
+  // No service at all cannot crop: that one still says the build fails.
+  for (const options of [{ config: CONFIG_WITH_CSS_TARGET }, { config: CONFIG_WITH_CSS_TARGET, adminConfig: null, metadata: METADATA_WITH_CROPS }]) {
+    const result = await cropResult(makeCropSite(options));
+    assert.equal(result.severity, 'warn', JSON.stringify(result));
+    assert.ok(/fails/.test(result.message) && !/could not confirm/.test(result.message), `unset: ${result.message}`);
+  }
+});
+
+await check('crop: a stored crop the build ignores (parseCrop refuses it) is not counted; a valid one is', async () => {
+  const invalid = JSON.stringify({
+    '/images/half.jpg': { alt: 'Half', crop: { x: 10, y: 10 } },
+    '/images/empty.jpg': { crop: {} },
+    '/images/list.jpg': { crop: [] },
+    '/images/over.jpg': { crop: { x: 60, y: 0, width: 50, height: 10 } },
+    '/images/zero.jpg': { crop: { x: 0, y: 0, width: 0, height: 10 } },
+    '/images/text.jpg': { crop: { x: '10', y: 10, width: 10, height: 10 } },
+  });
+  const ignored = await cropResult(makeCropSite({ config: CONFIG_WITH_CSS_TARGET, adminConfig: null, metadata: invalid }));
+  assert.equal(ignored.severity, 'skip', `no crop the build applies: ${JSON.stringify(ignored)}`);
+  const valid = JSON.stringify({ '/images/half.jpg': { alt: 'Half', crop: { x: 10, y: 10 } }, '/images/whole.jpg': { crop: { x: 10, y: 10, width: 10, height: 10 } } });
+  const counted = await cropResult(makeCropSite({ config: CONFIG_WITH_CSS_TARGET, adminConfig: null, metadata: valid }));
+  assert.equal(counted.severity, 'warn', JSON.stringify(counted));
+  assert.ok(counted.message.includes('1 image'), counted.message);
+  const details = counted.details.join('\n');
+  assert.ok(details.includes('/images/whole.jpg') && !details.includes('half.jpg'), details);
 });
 
 await check('crop MUTATION: the service set but images.crop not true warns that editors cannot crop', async () => {

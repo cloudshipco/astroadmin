@@ -21,6 +21,7 @@
  */
 
 import { generateForm, isImageField, isVideoField } from '../../ui/form-generator.js';
+import { isPlainObject } from '../utils/plain-object.js';
 import { comparableText, comparableWords } from './html-scan.js';
 
 // How much of a value's start is looked for in the page (in comparable
@@ -65,8 +66,7 @@ function resolveSchema(schemaNode, value) {
   if (!schemaNode || typeof schemaNode !== 'object') return null;
   const options = schemaNode.anyOf || schemaNode.oneOf;
   if (!Array.isArray(options)) return schemaNode;
-  const isObject = value !== null && typeof value === 'object' && !Array.isArray(value);
-  if (isObject) {
+  if (isPlainObject(value)) {
     const matching = options.find((option) => option?.properties && Object.entries(option.properties)
       .every(([key, property]) => property?.const === undefined || property.const === value[key]));
     if (matching) return resolveSchema(matching, value);

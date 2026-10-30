@@ -854,11 +854,17 @@ queue, so the old body is never written back.
   focalPoint, crop; `{x, y}` and `{x, y, width, height}` finite percentages inside the
   image, or null to delete; a prototype key, an unknown key, `[]`, a wrong type or
   `x: 150` is a 400 with fixed text naming the field, never the value, and writes
-  nothing); the response is the entry as written; DELETE removes both keys in the
-  unlink's own `updateMetadata` step, so a file back under the same name has no alt (seen
-  red with the removal mutated out); the listing dedupes by url (the image() folder's
-  same-named file is listed beside the src/assets one) and carries `crop`; `/api/config`
-  reports `imageCrop` from `images.crop`. ~1 s.
+  nothing; a crop is accepted exactly when the build's `parseCrop` accepts it, plus the
+  refusal of an extra key); the response is the entry as written; DELETE removes both
+  keys and writes the file BEFORE the unlink (`updateMetadata`'s `afterWrite`, one hold),
+  so a write that fails (mode 444) is a 500 with the image and its entry still there, and
+  a file back under the same name has no alt (seen red with the removal mutated out); the
+  legacy bare-filename key belongs to `/images/<name>` ONLY (`legacyKeyFor`): the image()
+  folder's same-named file starts with no details and its PUT leaves the legacy entry to
+  the upload; an entry at its site-path key is patched in place, so an unchanged patch
+  leaves the file byte-identical (mtime too) and a change keeps the key order; the listing
+  dedupes by url (the image() folder's same-named file is listed beside the src/assets
+  one) and carries `crop`; `/api/config` reports `imageCrop` from `images.crop`. ~1 s.
 - `bun tests/image-focal-browser.test.js` — the library's focal point and crop panel in
   real Chromium (#82): selecting a public upload shows `[data-focal-panel]`, whose box is
   the rendered image (src/assets and videos show none; the alt field stays); a click 30%
@@ -975,7 +981,12 @@ the Astro config, the service without `images.crop`, and a crop stored in
 `public/images/.metadata.json` on a site without the service (listed by its site-path key,
 legacy bare names included; `crop: null` and focal-point-only entries never) each warn; a
 service the doctor cannot read statically warns to check by hand only when a crop is in
-play; both opt-ins pass and neither is a skip. The Astro config's `image.service.entrypoint`
+play; both opt-ins pass and neither is a skip. With no service set the warning says the
+build fails; with a literal other than the string (a local re-export builds: CmsImage
+checks the LOADED service's `supportsCrop`) it says only that the doctor could not confirm
+the service applies crops, naming the expected value, never "fails". A stored crop counts
+only when `parseCrop` (components/crop.js, what the build reads it with) accepts it. The
+Astro config's `image.service.entrypoint`
 is an `imageService` fact of `readAstroConfigFacts`; `astroadmin.config.js` is loaded per
 site by `readAdminConfigFacts` (never `getConfig()`, bound to one process root); each
 branch seen red by disabling it. Run each with `bun tests/doctor-<name>.test.js`.

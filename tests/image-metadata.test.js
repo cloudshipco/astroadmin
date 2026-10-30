@@ -7,16 +7,23 @@
  * `/assets/images/<name>` for the image() folder), in the folder the
  * request's `?source=` names (the listing's `source` field; absent: the
  * first folder in imageDirectories() order holding the file, for an older
- * editor; anything else a fixed 400); a read (GET, the listing) falls back
- * to the bare-filename key an older admin wrote, and a PUT moves such an
- * entry's remaining fields under the new key and deletes the old one. An
- * entry left with no keys is removed, and a null patch on an image with no
- * details creates no file. The PUT body goes through
+ * editor; anything else a fixed 400); for a `/images/<name>` path ONLY, a
+ * read (GET, the listing) falls back to the bare-filename key an older admin
+ * wrote, and a PUT moves such an entry's remaining fields under the new key
+ * and deletes the old one (the image() folder's same-named file starts with
+ * no details and its PUT leaves the legacy entry to the upload). An entry at
+ * its site-path key is changed in place, so a patch that changes nothing
+ * leaves the file byte-identical (mtime too) and a change keeps the key
+ * order. An entry left with no keys is removed, and a null patch on an image
+ * with no details creates no file. The PUT body goes through
  * `validateMetadataPatch`: only alt, focalPoint and crop, each of its shape or
  * null (null deletes the key), anything else a 400 with fixed text that
- * names the field and never the sent value. DELETE removes the entry (both
- * keys) in the step that unlinks the file, so a file that comes back under
- * the same name starts without the old alt. The listing dedupes by url, so
+ * names the field and never the sent value; a crop is accepted exactly when
+ * the build's `parseCrop` accepts it (plus the refusal of an extra key).
+ * DELETE removes the entry (both keys) and writes the file BEFORE unlinking
+ * the image, in one hold, so a write that fails (read-only file) is a 500
+ * that leaves the image and its entry in place, and a file that comes back
+ * under the same name starts without the old alt. The listing dedupes by url, so
  * the image() folder's same-named file is listed beside the upload, and
  * carries `crop` beside `focalPoint`. `/api/config` reports `imageCrop` from
  * `images.crop` (default false).
@@ -125,10 +132,15 @@ write('src/content/assets/images/asset-only.png', png(6, 6, 6));
 write('public/images/gone-soon.png', png(5, 5, 5));
 write('public/images/lonely.png', png(4, 4, 4));
 write('public/images/bare.png', png(3, 3, 3));
+write('public/images/twin.png', png(2, 2, 2));
+write('src/content/assets/images/twin.png', png(1, 1, 1));
+write('public/images/steady.png', png(0, 0, 1));
+write('public/images/doomed.png', png(0, 0, 2));
 writeMetadata({
   'legacy.png': { alt: 'Legacy alt', focalPoint: { x: 10, y: 20 } },
   'read-legacy.png': { alt: 'Read me' },
   'gone-soon.png': { alt: 'Old alt (bare key)' },
+  'twin.png': { alt: 'Twin alt', focalPoint: { x: 10, y: 20 } },
 });
 
 let passed = 0;
@@ -258,6 +270,46 @@ try {
     assert.deepEqual(unchanged.body.metadata, { alt: '' });
   });
 
+  await check('the server refuses exactly the crops the build ignores: validateMetadataPatch agrees with parseCrop', async () => {
+    // One rule, in components/crop.js: a crop the server stores is one
+    // CmsImage and the image service apply. The server adds only the refusal
+    // of a key beside the four sides (parseCrop ignores extra keys).
+    const { validateMetadataPatch } = await import('../server/api/images.js');
+    const { parseCrop } = await import('../components/crop.js');
+    const crops = [
+      { x: 0, y: 0, width: 100, height: 100 },
+      { x: 60, y: 0, width: 50, height: 10 },
+      { x: 0, y: 60, width: 10, height: 50 },
+      { x: 50, y: 50, width: 50, height: 50 },
+      { x: 50, y: 50, width: 50.0001, height: 50 },
+      { x: 0, y: 0, width: 0, height: 10 },
+      { x: 0, y: 0, width: 10, height: -5 },
+      { x: -1, y: 0, width: 10, height: 10 },
+      { x: 0, y: 0, width: 10 },
+      { x: 0, y: 0, width: Infinity, height: 10 },
+      { x: 0, y: 0, width: NaN, height: 10 },
+      { x: 0, y: 0, width: '10', height: 10 },
+      {},
+      [],
+      true,
+      'x',
+    ];
+    for (const crop of crops) {
+      const result = validateMetadataPatch({ crop });
+      const accepted = parseCrop(crop) !== undefined;
+      assert.equal(result.error === undefined, accepted, `${JSON.stringify(crop)}: server ${result.error === undefined ? 'accepts' : 'refuses'}, parseCrop ${accepted ? 'accepts' : 'refuses'}`);
+      if (accepted) assert.deepEqual(result.patch.crop, parseCrop(crop));
+    }
+    // The server's own addition: a key beside the sides.
+    const extra = { x: 0, y: 0, width: 10, height: 10, unit: 'px' };
+    assert.ok(parseCrop(extra) !== undefined, 'control: parseCrop ignores the extra key');
+    assert.equal(validateMetadataPatch({ crop: extra }).error, validateMetadataPatch({ crop: true }).error);
+    // Over HTTP: a crop parseCrop refuses is a 400 (x + width > 100).
+    const refused = await putMetadata('photo.png', { crop: { x: 60, y: 0, width: 50, height: 10 } });
+    assert.equal(refused.status, 400, refused.text);
+    assert.ok(refused.body.error.includes('crop'), refused.body.error);
+  });
+
   await check('the exact crop and focal point bounds are accepted', async () => {
     for (const body of [
       { focalPoint: { x: 0, y: 0 } },
@@ -359,6 +411,97 @@ try {
     assert.equal((await getMetadata('asset-only.png', 'source')).status, 404);
     assert.equal((await putMetadata('photo.png', { alt: 'Photo (uploads)' }, 'uploads')).status, 200);
     assert.deepEqual(readMetadata()['/images/photo.png'], { alt: 'Photo (uploads)' });
+  });
+
+  await check('a legacy bare-filename entry belongs to /images/<name> only: the image() folder\'s same-named file starts with no details, and its PUT leaves the legacy entry alone', async () => {
+    // An older admin wrote `twin.png` for public/images/twin.png (served at
+    // /images/twin.png, the only key site-files.js reads it for). The image()
+    // folder's twin.png is another file at another url.
+    const before = await listImages();
+    const publicItem = before.find((image) => image.url === '/images/twin.png');
+    const assetItem = before.find((image) => image.url === '/assets/images/twin.png');
+    assert.equal(publicItem.alt, 'Twin alt', 'control: the legacy entry shows on the upload');
+    assert.deepEqual(publicItem.focalPoint, { x: 10, y: 20 });
+    assert.equal(assetItem.alt, '', 'the image() folder item has no alt');
+    assert.equal(assetItem.focalPoint, null, 'the image() folder item has no focal point');
+    assert.deepEqual((await getMetadata('twin.png', 'assets')).body.metadata, {});
+    assert.deepEqual((await getMetadata('twin.png', 'uploads')).body.metadata, { alt: 'Twin alt', focalPoint: { x: 10, y: 20 } });
+
+    const set = await putMetadata('twin.png', { alt: 'Asset twin' }, 'assets');
+    assert.equal(set.status, 200, set.text);
+    assert.deepEqual(set.body.metadata, { alt: 'Asset twin' }, 'the legacy fields are not folded in');
+    const stored = readMetadata();
+    assert.deepEqual(stored['twin.png'], { alt: 'Twin alt', focalPoint: { x: 10, y: 20 } }, 'the legacy entry is still there for the upload');
+    assert.deepEqual(stored['/assets/images/twin.png'], { alt: 'Asset twin' });
+    assert.ok(!Object.hasOwn(stored, '/images/twin.png'), 'nothing written for the upload');
+    const after = await listImages();
+    assert.equal(after.find((image) => image.url === '/images/twin.png').alt, 'Twin alt');
+    assert.deepEqual(after.find((image) => image.url === '/images/twin.png').focalPoint, { x: 10, y: 20 });
+    assert.equal(after.find((image) => image.url === '/assets/images/twin.png').alt, 'Asset twin');
+    assert.equal(after.find((image) => image.url === '/assets/images/twin.png').focalPoint, null);
+    // The upload's own PUT still folds the legacy entry in and removes it.
+    assert.deepEqual((await putMetadata('twin.png', { alt: 'Public twin' }, 'uploads')).body.metadata, { alt: 'Public twin', focalPoint: { x: 10, y: 20 } });
+    const moved = readMetadata();
+    assert.ok(!Object.hasOwn(moved, 'twin.png'), 'the legacy key is folded into /images/twin.png');
+    assert.deepEqual(moved['/images/twin.png'], { alt: 'Public twin', focalPoint: { x: 10, y: 20 } });
+    assert.deepEqual(moved['/assets/images/twin.png'], { alt: 'Asset twin' }, 'the image() folder entry is untouched');
+  });
+
+  await check('a PUT that changes nothing leaves .metadata.json byte-identical and in place; a change writes it, keeping the key order', async () => {
+    writeMetadata({
+      ...readMetadata(),
+      '/images/steady.png': { alt: 'Steady', focalPoint: { x: 10, y: 20 }, crop: { x: 0, y: 0, width: 50, height: 50 } },
+      '/images/after-steady.png': { alt: 'After' },
+    });
+    const bytes = fs.readFileSync(metadataPath);
+    const { mtimeMs } = fs.statSync(metadataPath);
+    const keysBefore = Object.keys(readMetadata());
+    for (const body of [
+      { alt: 'Steady' },
+      { focalPoint: { x: 10, y: 20 } },
+      { crop: { x: 0, y: 0, width: 50, height: 50 } },
+      { alt: 'Steady', focalPoint: { x: 10, y: 20 }, crop: { x: 0, y: 0, width: 50, height: 50 } },
+      {},
+    ]) {
+      const response = await putMetadata('steady.png', body);
+      assert.equal(response.status, 200, `${JSON.stringify(body)}: ${response.text}`);
+      assert.deepEqual(response.body.metadata, { alt: 'Steady', focalPoint: { x: 10, y: 20 }, crop: { x: 0, y: 0, width: 50, height: 50 } });
+      assert.ok(fs.readFileSync(metadataPath).equals(bytes), `${JSON.stringify(body)}: the file was rewritten`);
+      assert.equal(fs.statSync(metadataPath).mtimeMs, mtimeMs, `${JSON.stringify(body)}: the mtime moved`);
+    }
+    // Positive control: a changed alt writes, and the entry keeps its place.
+    const changed = await putMetadata('steady.png', { alt: 'Steady 2' });
+    assert.equal(changed.status, 200, changed.text);
+    assert.ok(!fs.readFileSync(metadataPath).equals(bytes), 'control: a change writes the file');
+    assert.deepEqual(Object.keys(readMetadata()), keysBefore, 'the key order is kept');
+    assert.deepEqual(readMetadata()['/images/steady.png'], { alt: 'Steady 2', focalPoint: { x: 10, y: 20 }, crop: { x: 0, y: 0, width: 50, height: 50 } });
+  });
+
+  await check('DELETE whose metadata write fails leaves the file in place and listed (a true 500); writable, it removes both', async () => {
+    assert.equal((await putMetadata('doomed.png', { alt: 'Doomed' })).status, 200);
+    const imagePath = path.join(projectRoot, 'public/images/doomed.png');
+    const bytes = fs.readFileSync(metadataPath);
+    fs.chmodSync(metadataPath, 0o444);
+    try {
+      const refused = await request('/api/images/doomed.png', { method: 'DELETE' });
+      assert.equal(refused.status, 500, refused.text);
+      assert.equal(refused.body?.success, false);
+      assertNoServerPath(refused.text, 'delete 500');
+      assert.ok(fs.existsSync(imagePath), 'the image file is still there');
+      assert.ok(fs.readFileSync(metadataPath).equals(bytes), 'the metadata file is as it was');
+      const listed = (await listImages()).find((image) => image.url === '/images/doomed.png');
+      assert.ok(listed, 'still listed');
+      assert.equal(listed.alt, 'Doomed');
+      assert.equal((await getMetadata('doomed.png')).body.metadata.alt, 'Doomed');
+    } finally {
+      fs.chmodSync(metadataPath, 0o644);
+    }
+    // Control: with the file writable the image and its entry both go.
+    const deleted = await request('/api/images/doomed.png', { method: 'DELETE' });
+    assert.equal(deleted.status, 200, deleted.text);
+    assert.ok(!fs.existsSync(imagePath), 'the image file is gone');
+    assert.ok(!Object.hasOwn(readMetadata(), '/images/doomed.png'), 'the entry is gone');
+    assert.ok(!(await listImages()).some((image) => image.url === '/images/doomed.png'), 'not listed');
   });
 
   await check('an unknown ?source= is a 400 with fixed text that writes nothing', async () => {
