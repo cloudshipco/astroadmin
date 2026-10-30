@@ -92,7 +92,7 @@ process.env.ADMIN_USERNAME = 'admin';
 process.env.ADMIN_PASSWORD = 'admin';
 delete process.env.ADMIN_PASSWORD_HASH;
 delete process.env.ASTROADMIN_CONTENT_STORE;
-const { commitInCheckout, createGitClient, pushIfAstroAccepts } = await import('../server/api/publish.js');
+const { commitConfiguredPaths, commitInCheckout, createGitClient, pushIfAstroAccepts } = await import('../server/api/publish.js');
 
 /** A config for the functions, as getConfig() would give it. */
 const configFor = (projectRoot, git = {}) => ({
@@ -341,6 +341,55 @@ export const collections = {
   } finally {
     server.close();
   }
+
+  // --- 3. An untracked repository inside the git paths ----------------------
+  // `git add -A -- src/content/` turns it into a gitlink; committed, every
+  // later publish is refused for a submodule. Staging is checked and the
+  // commit refused, with the gitlink unstaged.
+  const nestedSite = newRepo('nested-site');
+  writeFile(nestedSite, 'src/content/a.md', 'a\n');
+  git(nestedSite, 'add', '-A');
+  git(nestedSite, 'commit', '-qm', 'initial');
+  const nestedRemote = path.join(tempRoot, 'nested-site-remote.git');
+  git(tempRoot, 'init', '-q', '--bare', '-b', 'main', nestedRemote);
+  git(nestedSite, 'remote', 'add', 'origin', nestedRemote);
+  git(nestedSite, 'push', '-q', '-u', 'origin', 'main');
+  const inner = path.join(nestedSite, 'src/content/nested');
+  fs.mkdirSync(inner, { recursive: true });
+  git(inner, 'init', '-q', '-b', 'main');
+  identity(inner, 'Inner');
+  writeFile(inner, 'f.txt', 'f\n');
+  git(inner, 'add', '-A');
+  git(inner, 'commit', '-qm', 'inner');
+  const nestedConfig = configFor(nestedSite, { paths: ['src/content/'], allowLocalRemote: true });
+  const gitlinksStaged = () => git(nestedSite, 'ls-files', '--stage').split('\n').filter((line) => line.startsWith('160000'));
+  const commitPaths = (client) => async () => (await commitConfiguredPaths(nestedConfig, client, 'Nested')).result;
+
+  for (const route of ['publish', 'the commit route']) {
+    await check(`${route}: a repository nested in the git paths is not committed as a submodule`, async () => {
+      writeFile(nestedSite, 'src/content/a.md', `a (${route})\n`);
+      const head = git(nestedSite, 'rev-parse', 'HEAD');
+      const client = createGitClient(nestedConfig);
+      const outcome = route === 'publish'
+        ? await pushIfAstroAccepts(nestedConfig, client, { commit: commitPaths(client) })
+        : await commitInCheckout(client, commitPaths(client));
+      assert.equal(outcome.blocked, true, JSON.stringify(outcome));
+      assert.equal(outcome.blockedReason, 'submodules');
+      assert.equal(outcome.commitResult, null);
+      assert.equal(git(nestedSite, 'rev-parse', 'HEAD'), head, 'nothing committed');
+      assert.deepEqual(gitlinksStaged(), [], 'the gitlink is unstaged');
+      assert.equal(git(nestedRemote, 'rev-parse', 'main'), head, 'nothing pushed');
+    });
+  }
+
+  await check('with the nested repository gone, the next publish goes through (the site is not stuck)', async () => {
+    fs.rmSync(inner, { recursive: true, force: true });
+    const client = createGitClient(nestedConfig);
+    const outcome = await pushIfAstroAccepts(nestedConfig, client, { commit: commitPaths(client) });
+    assert.equal(outcome.pushed, true, JSON.stringify(outcome));
+    assert.equal(git(nestedRemote, 'show', 'main:src/content/a.md'), 'a (the commit route)');
+    assert.equal(git(nestedSite, 'ls-tree', '-r', 'HEAD').includes('160000'), false);
+  });
 
   console.log(`\n📊 ${passed} passed, ${failed} failed.`);
 } catch (error) {

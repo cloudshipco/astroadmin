@@ -225,7 +225,17 @@ export function commitInCheckout(git, commit, { rebase = () => false } = {}) {
     // The branch before the editor's commit: no known upstream value may
     // reach past it (lastKnownBase).
     const headBeforeCommit = await headCommit(git);
-    if (commit) prepared.commitResult = await commit();
+    if (commit) {
+      try {
+        prepared.commitResult = await commit();
+      } catch (error) {
+        if (!(error instanceof GitlinkStagedError)) throw error;
+        console.error(`Publish refused: ${error.message} (unstaged; nothing committed)`);
+        prepared.blocked = true;
+        prepared.blockedReason = 'submodules';
+        return prepared;
+      }
+    }
     if (!rebase(prepared.commitResult)) return prepared;
     prepared.upstream = await findUpstream(git);
     const synced = prepared.upstream ? await rebaseOntoUpstream(git, prepared.upstream, headBeforeCommit) : 'synced';
@@ -270,6 +280,19 @@ async function inLinkedWorktreeView(git, task) {
     if (added) await git.raw(['worktree', 'remove', '--force', worktreeDir]).catch(() => {});
     fs.rmSync(tempDir, { recursive: true, force: true });
     if (added) await git.raw(['worktree', 'prune']).catch(() => {});
+  }
+}
+
+/**
+ * Thrown by commitConfiguredPaths when staging made a gitlink (a repository
+ * nested inside the git paths); commitInCheckout turns it into the
+ * submodules refusal.
+ */
+export class GitlinkStagedError extends Error {
+  constructor(paths) {
+    super(`Staging made git submodule entries for nested repositories: ${paths.join(', ')}`);
+    this.name = 'GitlinkStagedError';
+    this.paths = paths;
   }
 }
 
@@ -747,6 +770,18 @@ export async function commitConfiguredPaths(fullConfig, git, commitMessage, { in
   }
 
   commitPaths.push(...await stageGitPaths(git, getAllowedGitPaths(fullConfig)));
+
+  // `git add -A` turns an untracked repository inside the paths (a folder
+  // with its own .git) into a gitlink. Committed, it would make every later
+  // publish refuse the checkout for its submodule, so it is unstaged and
+  // this commit refused. (commitInCheckout already refused a gitlink that
+  // was in the index before staging, so any now is new.)
+  const newGitlinks = await gitlinksInIndex(git);
+  if (newGitlinks.length > 0) {
+    if (await headCommit(git)) await git.raw(['reset', '--quiet', '--', ...newGitlinks]);
+    else await git.raw(['rm', '--cached', '--quiet', '--', ...newGitlinks]);
+    throw new GitlinkStagedError(newGitlinks);
+  }
 
   const stagedFiles = await getStagedFilesForPaths(git, commitPaths);
   if (stagedFiles.length === 0) return { result: null, stagedFiles };
