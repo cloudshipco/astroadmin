@@ -532,7 +532,7 @@ export function blockedBody(reason = null) {
       pushed: false,
       commit: null,
       error: 'This site cannot be published from the editor',
-      message: 'Nothing was published: this site stores some files through a git filter (such as Git LFS), '
+      message: "Nothing was published: the site's repository uses a git filter (such as Git LFS) for some of its files, "
         + 'which publishing from the editor does not support. Your changes are saved. Contact your site administrator.',
     };
   }
