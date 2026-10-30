@@ -272,7 +272,7 @@ await check('images: metadata only for an image that exists', async () => {
   assert.equal(response.status, 404);
   const ok = await request('/api/images/photo.png/metadata', { method: 'PUT', body: JSON.stringify({ alt: 'Edited alt' }) });
   assert.equal(ok.status, 200, 'control: an existing image takes metadata');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(projectRoot, 'public/images/.metadata.json'), 'utf8'))['photo.png'].alt, 'Edited alt');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(projectRoot, 'public/images/.metadata.json'), 'utf8'))['/images/photo.png'].alt, 'Edited alt');
 });
 
 await check('images: the metadata file and non-image files cannot be deleted', async () => {

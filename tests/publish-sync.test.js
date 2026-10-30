@@ -584,7 +584,7 @@ try {
       assert.equal(published.status, 200, JSON.stringify(published.body));
       const metadata = JSON.parse(readSite('public/images/.metadata.json'));
       assert.equal(metadata['b.png']?.alt, 'B (developer)', "the developer's details survive");
-      assert.equal(metadata['a.png']?.alt, 'A (editor)', "the editor's details are saved");
+      assert.equal(metadata['/images/a.png']?.alt, 'A (editor)', "the editor's details are saved (keyed by site path)");
     } finally {
       barrier.remove();
       resetSite();

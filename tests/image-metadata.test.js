@@ -1,0 +1,390 @@
+/**
+ * Image details (`public/images/.metadata.json`) through the real routes
+ * (server/api/images.js), for the focal point and crop (#82).
+ *
+ * The rules it pins: an entry is keyed by the image's SITE PATH as the
+ * listing returns it (`/images/<name>` for src/assets and public uploads,
+ * `/assets/images/<name>` for the image() folder), found in imageDirectories()
+ * order; a read (GET, the listing) falls back to the bare-filename key an
+ * older admin wrote, and a PUT moves such an entry's remaining fields under
+ * the new key and deletes the old one. The PUT body goes through
+ * `validateMetadataPatch`: only alt, focalPoint and crop, each of its shape or
+ * null (null deletes the key), anything else a 400 with fixed text that
+ * names the field and never the sent value. DELETE removes the entry (both
+ * keys) in the step that unlinks the file, so a file that comes back under
+ * the same name starts without the old alt. The listing dedupes by url, so
+ * the image() folder's same-named file is listed beside the upload, and
+ * carries `crop` beside `focalPoint`. `/api/config` reports `imageCrop` from
+ * `images.crop` (default false).
+ *
+ *   bun tests/image-metadata.test.js     (~1 s)
+ */
+
+import assert from 'assert';
+import { spawnSync } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import zlib from 'zlib';
+
+const repoRoot = path.resolve(import.meta.dir, '..');
+const selfPath = path.join(import.meta.dir, 'image-metadata.test.js');
+
+function makeProject(prefix, configSource) {
+  const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const write = (relativePath, content) => {
+    const fullPath = path.join(projectRoot, relativePath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, content);
+  };
+  fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(projectRoot, 'node_modules'), 'dir');
+  write('package.json', JSON.stringify({ type: 'module' }));
+  if (configSource !== null) write('astroadmin.config.js', configSource);
+  write('src/content.config.ts', `import { defineCollection, z } from 'astro:content';
+import { glob } from 'astro/loaders';
+export const collections = {
+  pages: defineCollection({ loader: glob({ pattern: '**/*.md', base: './src/content/pages' }), schema: z.object({ title: z.string() }) }),
+};
+`);
+  write('src/content/pages/home.md', '---\ntitle: Home\n---\n');
+  return { projectRoot, write };
+}
+
+async function startServer() {
+  const { createServer } = await import('../server/index.js');
+  const { app } = await createServer();
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  return { server, base: `http://127.0.0.1:${server.address().port}` };
+}
+
+// A child process, for a site whose astroadmin.config.js sets no images.crop
+// (the user config is loaded once per process).
+if (process.argv[2] === '--child') {
+  const { projectRoot } = makeProject('aa-image-metadata-child-', process.argv[3] === 'none' ? null : process.argv[3]);
+  Object.assign(process.env, { ASTROADMIN_PROJECT_ROOT: projectRoot, GIT_ENABLED: 'false', ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'admin' });
+  delete process.env.ADMIN_PASSWORD_HASH;
+  delete process.env.ASTROADMIN_CONTENT_STORE;
+  const { server, base } = await startServer();
+  try {
+    const response = await fetch(`${base}/api/config`);
+    process.stdout.write(JSON.stringify({ status: response.status, body: await response.json() }));
+  } finally {
+    server.close();
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+  process.exit(0);
+}
+
+const { projectRoot, write } = makeProject('aa-image-metadata-', "export default { images: { crop: true } };\n");
+process.env.ASTROADMIN_PROJECT_ROOT = projectRoot;
+process.env.GIT_ENABLED = 'false';
+process.env.ADMIN_USERNAME = 'admin';
+process.env.ADMIN_PASSWORD = 'admin';
+delete process.env.ADMIN_PASSWORD_HASH;
+delete process.env.ASTROADMIN_CONTENT_STORE;
+
+/** A valid 1x1 PNG of one colour, so each image is a distinct file. */
+function png(red, green, blue) {
+  const chunk = (type, data) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(body) >>> 0);
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = 2;
+  return Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    chunk('IHDR', header),
+    chunk('IDAT', zlib.deflateSync(Buffer.from([0, red, green, blue]))),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+const metadataPath = path.join(projectRoot, 'public/images/.metadata.json');
+const readMetadata = () => JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+const writeMetadata = (metadata) => fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+
+write('public/images/photo.png', png(255, 0, 0));
+write('public/images/legacy.png', png(0, 255, 0));
+write('public/images/read-legacy.png', png(0, 0, 255));
+write('public/images/shared.png', png(9, 9, 9));
+write('src/assets/images/shared.png', png(8, 8, 8));
+write('src/content/assets/images/shared.png', png(7, 7, 7));
+write('src/content/assets/images/asset-only.png', png(6, 6, 6));
+write('public/images/gone-soon.png', png(5, 5, 5));
+writeMetadata({
+  'legacy.png': { alt: 'Legacy alt', focalPoint: { x: 10, y: 20 } },
+  'read-legacy.png': { alt: 'Read me' },
+  'gone-soon.png': { alt: 'Old alt (bare key)' },
+});
+
+let passed = 0;
+async function check(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`✅ ${name}`);
+  } catch (error) {
+    console.error(`❌ ${name}\n   ${error.stack || error.message}`);
+    process.exitCode = 1;
+  }
+}
+
+const { server, base } = await startServer();
+const login = await fetch(`${base}/api/login`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'admin' }),
+});
+assert.equal(login.status, 200, 'login');
+const cookie = login.headers.get('set-cookie').split(';')[0];
+
+/** A JSON request; `text` is the raw body, for the no-path and no-echo checks. */
+async function request(route, options = {}) {
+  const response = await fetch(base + route, {
+    ...options,
+    headers: { cookie, 'Content-Type': 'application/json', ...(options.headers || {}) },
+  });
+  const text = await response.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // not JSON
+  }
+  return { status: response.status, body, text };
+}
+const putMetadata = (filename, body) => request(`/api/images/${encodeURIComponent(filename)}/metadata`, { method: 'PUT', body: typeof body === 'string' ? body : JSON.stringify(body) });
+const getMetadata = (filename) => request(`/api/images/${encodeURIComponent(filename)}/metadata`);
+const listImages = async () => {
+  const { status, body } = await request('/api/images');
+  assert.equal(status, 200, 'the listing');
+  return body.images;
+};
+
+async function upload(bytes, filename) {
+  const form = new FormData();
+  form.append('image', new Blob([bytes]), filename);
+  const response = await fetch(`${base}/api/images`, { method: 'POST', headers: { cookie }, body: form });
+  return { status: response.status, body: await response.json() };
+}
+
+function assertNoServerPath(text, label) {
+  for (const needle of [projectRoot, os.tmpdir(), repoRoot]) {
+    assert.ok(!text.includes(needle), `${label}: the body names ${needle}: ${text}`);
+  }
+}
+
+console.log('\n🧪 image details: keys, validation, delete, listing\n' + '='.repeat(40));
+
+try {
+  await check('a PUT body that is not an object, holds an unknown or prototype key, or a wrong-typed field is a 400 with fixed text', async () => {
+    const before = fs.readFileSync(metadataPath, 'utf8');
+    const refusals = [
+      // (A JSON primitive such as `"text"` never reaches the route: the app's
+      // own body parser refuses it in strict mode.)
+      ['[]', 'object', ['[]']],
+      [JSON.stringify({ caption: 'A caption' }), 'alt, focalPoint and crop', ['caption', 'A caption']],
+      ['{"__proto__": {"alt": "polluted"}}', 'alt, focalPoint and crop', ['polluted']],
+      ['{"constructor": {"prototype": {"alt": "polluted"}}}', 'alt, focalPoint and crop', ['polluted']],
+      ['{"alt": "x", "focalPoint": {"x": 1, "y": 2}, "extra": true}', 'alt, focalPoint and crop', ['extra']],
+      [JSON.stringify({ alt: 5 }), 'alt', ['5']],
+      [JSON.stringify({ alt: ['a'] }), 'alt', []],
+      [JSON.stringify({ focalPoint: { x: 150, y: 10 } }), 'focalPoint', ['150']],
+      [JSON.stringify({ focalPoint: { x: 10 } }), 'focalPoint', []],
+      [JSON.stringify({ focalPoint: { x: -1, y: 10 } }), 'focalPoint', ['-1']],
+      [JSON.stringify({ focalPoint: { x: '10', y: 10 } }), 'focalPoint', []],
+      [JSON.stringify({ focalPoint: { x: 10, y: 10, z: 3 } }), 'focalPoint', []],
+      [JSON.stringify({ focalPoint: [10, 10] }), 'focalPoint', []],
+      [JSON.stringify({ focalPoint: 'centre' }), 'focalPoint', ['centre']],
+      [JSON.stringify({ crop: { x: 60, y: 0, width: 50, height: 10 } }), 'crop', ['60']],
+      [JSON.stringify({ crop: { x: 0, y: 60, width: 10, height: 50 } }), 'crop', []],
+      [JSON.stringify({ crop: { x: 0, y: 0, width: 0, height: 10 } }), 'crop', []],
+      [JSON.stringify({ crop: { x: 0, y: 0, width: 10, height: -5 } }), 'crop', []],
+      [JSON.stringify({ crop: { x: -1, y: 0, width: 10, height: 10 } }), 'crop', []],
+      [JSON.stringify({ crop: { x: 0, y: 0, width: 10 } }), 'crop', []],
+      [JSON.stringify({ crop: { x: 0, y: 0, width: 10, height: 10, unit: 'px' } }), 'crop', ['px']],
+      [JSON.stringify({ crop: { x: 0, y: 0, width: '10', height: 10 } }), 'crop', []],
+      [JSON.stringify({ crop: true }), 'crop', []],
+    ];
+    for (const [body, field, echoes] of refusals) {
+      const response = await putMetadata('photo.png', body);
+      assert.equal(response.status, 400, `${body}: ${response.status} ${response.text}`);
+      assert.equal(response.body?.success, false, body);
+      assert.equal(typeof response.body?.error, 'string', body);
+      assert.ok(response.body.error.includes(field), `${body}: "${response.body.error}" does not name ${field}`);
+      for (const echo of echoes) assert.ok(!response.body.error.includes(echo), `${body}: the message echoes ${echo}: ${response.body.error}`);
+      assertNoServerPath(response.text, body);
+    }
+    assert.equal(fs.readFileSync(metadataPath, 'utf8'), before, 'a refused PUT writes nothing');
+  });
+
+  await check('a PUT writes under the site-path key and reports the entry as written; null deletes a key', async () => {
+    const set = await putMetadata('photo.png', { alt: 'A photo', focalPoint: { x: 30, y: 40 }, crop: { x: 0, y: 10, width: 50, height: 90 } });
+    assert.equal(set.status, 200, set.text);
+    assert.deepEqual(set.body, {
+      success: true,
+      filename: 'photo.png',
+      metadata: { alt: 'A photo', focalPoint: { x: 30, y: 40 }, crop: { x: 0, y: 10, width: 50, height: 90 } },
+    });
+    const stored = readMetadata();
+    assert.ok(Object.hasOwn(stored, '/images/photo.png'), `keyed by site path: ${Object.keys(stored)}`);
+    assert.ok(!Object.hasOwn(stored, 'photo.png'), 'no bare-filename key');
+    assert.deepEqual(stored['/images/photo.png'], set.body.metadata);
+
+    const cleared = await putMetadata('photo.png', { focalPoint: null });
+    assert.equal(cleared.status, 200, cleared.text);
+    assert.deepEqual(cleared.body.metadata, { alt: 'A photo', crop: { x: 0, y: 10, width: 50, height: 90 } });
+    assert.deepEqual(Object.keys(readMetadata()['/images/photo.png']), ['alt', 'crop']);
+    const emptied = await putMetadata('photo.png', { crop: null, alt: '' });
+    assert.equal(emptied.status, 200, emptied.text);
+    assert.deepEqual(emptied.body.metadata, { alt: '' });
+    assert.deepEqual(readMetadata()['/images/photo.png'], { alt: '' });
+    const unchanged = await putMetadata('photo.png', {});
+    assert.equal(unchanged.status, 200, unchanged.text);
+    assert.deepEqual(unchanged.body.metadata, { alt: '' });
+  });
+
+  await check('the exact crop and focal point bounds are accepted', async () => {
+    for (const body of [
+      { focalPoint: { x: 0, y: 0 } },
+      { focalPoint: { x: 100, y: 100 } },
+      { focalPoint: { x: 33.3333, y: 66.6667 } },
+      { crop: { x: 0, y: 0, width: 100, height: 100 } },
+      { crop: { x: 50, y: 50, width: 50, height: 50 } },
+      { crop: { x: 12.5, y: 0, width: 0.5, height: 0.25 } },
+    ]) {
+      const response = await putMetadata('photo.png', body);
+      assert.equal(response.status, 200, `${JSON.stringify(body)}: ${response.text}`);
+      for (const [key, value] of Object.entries(body)) assert.deepEqual(response.body.metadata[key], value);
+    }
+    await putMetadata('photo.png', { focalPoint: null, crop: null });
+  });
+
+  await check('a PUT moves a legacy bare-filename entry under the site-path key, keeping its other fields', async () => {
+    const response = await putMetadata('legacy.png', { alt: 'New alt' });
+    assert.equal(response.status, 200, response.text);
+    assert.deepEqual(response.body.metadata, { alt: 'New alt', focalPoint: { x: 10, y: 20 } });
+    const stored = readMetadata();
+    assert.deepEqual(Object.keys(stored).filter((key) => key === 'legacy.png' || key === '/images/legacy.png'), ['/images/legacy.png']);
+    assert.deepEqual(stored['/images/legacy.png'], { alt: 'New alt', focalPoint: { x: 10, y: 20 } });
+    // Still there: the entries this PUT did not touch.
+    assert.deepEqual(stored['read-legacy.png'], { alt: 'Read me' });
+  });
+
+  await check('GET and the listing read a legacy bare-filename entry', async () => {
+    const response = await getMetadata('read-legacy.png');
+    assert.equal(response.status, 200, response.text);
+    assert.deepEqual(response.body, { success: true, filename: 'read-legacy.png', metadata: { alt: 'Read me' } });
+    const listed = (await listImages()).find((image) => image.url === '/images/read-legacy.png');
+    assert.ok(listed, 'listed');
+    assert.equal(listed.alt, 'Read me');
+    assert.equal(listed.focalPoint, null);
+    assert.equal(listed.crop, null);
+    // A site-path key wins over a legacy one.
+    writeMetadata({ ...readMetadata(), '/images/read-legacy.png': { alt: 'Site path' } });
+    assert.deepEqual((await getMetadata('read-legacy.png')).body.metadata, { alt: 'Site path' });
+    assert.equal((await listImages()).find((image) => image.url === '/images/read-legacy.png').alt, 'Site path');
+  });
+
+  await check('an image() folder image is keyed by /assets/images/<name>', async () => {
+    const response = await putMetadata('asset-only.png', { alt: 'An asset', focalPoint: { x: 1, y: 2 } });
+    assert.equal(response.status, 200, response.text);
+    const stored = readMetadata();
+    assert.deepEqual(stored['/assets/images/asset-only.png'], { alt: 'An asset', focalPoint: { x: 1, y: 2 } });
+    assert.ok(!Object.hasOwn(stored, '/images/asset-only.png'));
+    assert.ok(!Object.hasOwn(stored, 'asset-only.png'));
+    assert.deepEqual((await getMetadata('asset-only.png')).body.metadata, stored['/assets/images/asset-only.png']);
+    const listed = (await listImages()).find((image) => image.url === '/assets/images/asset-only.png');
+    assert.equal(listed.alt, 'An asset');
+    assert.deepEqual(listed.focalPoint, { x: 1, y: 2 });
+    assert.equal(listed.source, 'assets');
+  });
+
+  await check('the listing dedupes by url: a same-named image() folder image is listed beside the upload, and every item carries crop', async () => {
+    const images = await listImages();
+    const shared = images.filter((image) => image.filename === 'shared.png');
+    assert.deepEqual(
+      shared.map((image) => [image.url, image.source]).sort(),
+      [['/assets/images/shared.png', 'assets'], ['/images/shared.png', 'source']],
+    );
+    for (const image of images) {
+      assert.ok(Object.hasOwn(image, 'crop'), `${image.url} has crop`);
+      assert.ok(Object.hasOwn(image, 'focalPoint'), `${image.url} has focalPoint`);
+    }
+    assert.equal(new Set(images.map((image) => image.url)).size, images.length, 'no url twice');
+    // The /images url of shared.png is the src/assets one (the admin serves
+    // src/assets first), and its details are read under that key.
+    await putMetadata('shared.png', { alt: 'Shared' });
+    assert.deepEqual(readMetadata()['/images/shared.png'], { alt: 'Shared' });
+    const after = await listImages();
+    assert.equal(after.find((image) => image.url === '/images/shared.png').alt, 'Shared');
+    assert.equal(after.find((image) => image.url === '/assets/images/shared.png').alt, '');
+  });
+
+  await check('DELETE removes the entry under both keys, so a file back under the same name has no alt', async () => {
+    const uploaded = await upload(png(1, 2, 3), 'fresh.png');
+    assert.equal(uploaded.status, 200, JSON.stringify(uploaded.body));
+    const { filename } = uploaded.body.image;
+    assert.ok(filename.startsWith('fresh-') && filename.endsWith('.png'), filename);
+    assert.equal((await putMetadata(filename, { alt: 'Fresh alt' })).status, 200);
+    // An older admin's entry for the same file, beside the new one.
+    writeMetadata({ ...readMetadata(), [filename]: { alt: 'Fresh alt (bare key)' } });
+    assert.equal((await getMetadata(filename)).body.metadata.alt, 'Fresh alt', 'control: the alt shows before the delete');
+
+    const deleted = await request(`/api/images/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    assert.equal(deleted.status, 200, deleted.text);
+    assert.ok(!fs.existsSync(path.join(projectRoot, 'public/images', filename)), 'the file is gone');
+    const stored = readMetadata();
+    assert.ok(!Object.hasOwn(stored, `/images/${filename}`), 'the site-path entry is gone');
+    assert.ok(!Object.hasOwn(stored, filename), 'the bare-filename entry is gone');
+
+    // The same name again (a second upload of the file, a pull, a copy).
+    write(`public/images/${filename}`, png(1, 2, 3));
+    assert.deepEqual((await getMetadata(filename)).body.metadata, {});
+    assert.equal((await listImages()).find((image) => image.filename === filename).alt, '');
+
+    // A legacy-only entry is removed too.
+    assert.equal((await getMetadata('gone-soon.png')).body.metadata.alt, 'Old alt (bare key)', 'control');
+    assert.equal((await request('/api/images/gone-soon.png', { method: 'DELETE' })).status, 200);
+    assert.ok(!Object.hasOwn(readMetadata(), 'gone-soon.png'));
+    write('public/images/gone-soon.png', png(5, 5, 5));
+    assert.deepEqual((await getMetadata('gone-soon.png')).body.metadata, {});
+  });
+
+  await check('a PUT for an image that is not there is a 404; a refused name is a 400', async () => {
+    const missing = await putMetadata('not-there.png', { alt: 'x' });
+    assert.equal(missing.status, 404, missing.text);
+    assertNoServerPath(missing.text, 'missing');
+    for (const name of ['__proto__', 'constructor', '.metadata.json', '..%2Fx.png']) {
+      const response = await request(`/api/images/${name}/metadata`, { method: 'PUT', body: JSON.stringify({ alt: 'x' }) });
+      assert.equal(response.status, 400, `${name}: ${response.status}`);
+    }
+    assert.ok(!Object.hasOwn(readMetadata(), '__proto__'), 'nothing stored under __proto__');
+    assert.equal(Object.prototype.alt, undefined);
+  });
+
+  await check('/api/config reports imageCrop from images.crop (true here, false by default)', async () => {
+    const { status, body } = await request('/api/config');
+    assert.equal(status, 200);
+    assert.strictEqual(body.imageCrop, true);
+    for (const configSource of ['none', 'export default {};\n', "export default { images: { crop: 'yes' } };\n"]) {
+      const child = spawnSync(process.execPath, [selfPath, '--child', configSource], { encoding: 'utf8', env: process.env });
+      assert.equal(child.status, 0, child.stderr);
+      const result = JSON.parse(child.stdout.trim().split('\n').pop());
+      assert.equal(result.status, 200);
+      assert.strictEqual(result.body.imageCrop, false, configSource);
+    }
+  });
+} finally {
+  server.close();
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+}
+
+console.log('='.repeat(40));
+console.log(`\n📊 ${passed} checks passed.\n`);

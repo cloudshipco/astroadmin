@@ -131,6 +131,15 @@ const defaultConfig = {
   // (useful with build-on-push hosts where a deploy takes a short while).
   publicUrl: process.env.PUBLIC_URL || null,
 
+  // Image details the editor can set in the image library. `crop` shows the
+  // non-destructive crop control; it is off unless the site renders crops
+  // (image.service.entrypoint: 'astroadmin/image-service' in astro.config),
+  // since a crop stored for a site that cannot apply it would never show.
+  // A focal point needs no opt-in (CmsImage applies it as object-position).
+  images: {
+    crop: false,
+  },
+
   // Build commands (/bin/sh command lines run in the site's directory). Null
   // means the site's OWN installed astro (node_modules/astro, in the site's
   // directory or above it in the repo), run under Bun with auto-install off:

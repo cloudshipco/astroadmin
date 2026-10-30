@@ -38,14 +38,22 @@ const router = express.Router();
 // Metadata file path
 const METADATA_FILENAME = '.metadata.json';
 
+/** Whether a value is a plain object (not null, not an array). */
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
- * Load image metadata from .metadata.json
+ * Load image metadata from .metadata.json. The file is a plain object of
+ * entries keyed by site path (`/images/x.jpg`, `/assets/images/x.jpg`); an
+ * older admin keyed them by bare filename (`x.jpg`), and those are still read.
  */
 async function loadMetadata() {
   const metadataPath = path.join(config.paths.images, METADATA_FILENAME);
   try {
     const data = await fs.readFile(metadataPath, 'utf-8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    return isPlainObject(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -65,26 +73,139 @@ let metadataQueue = Promise.resolve();
  * Read, change and write the metadata file as one step: one update at a time,
  * inside a checkout hold, so neither another update nor a publish's rebase
  * can land between the read and the write and be overwritten by a stale copy.
- * @param {(metadata: object) => void} change mutates the metadata in place
+ * The file is written only when the change changed it (a delete of an image
+ * with no details does not create one). Whatever else the change does to the
+ * checkout (unlinking the image) is inside the same hold.
+ * @param {(metadata: object) => void | Promise<void>} change mutates the metadata in place
  * @returns {Promise<object>} the metadata as written
  */
 function updateMetadata(change) {
   const run = metadataQueue.then(() => withCheckoutWrite(async () => {
     const metadata = await loadMetadata();
-    change(metadata);
-    await saveMetadata(metadata);
+    const before = JSON.stringify(metadata);
+    await change(metadata);
+    if (JSON.stringify(metadata) !== before) await saveMetadata(metadata);
     return metadata;
   }));
   metadataQueue = run.catch(() => {});
   return run;
 }
 
+/** The entry stored at `key`, if it is an object (own keys only). */
+function entryAt(metadata, key) {
+  return Object.hasOwn(metadata, key) && isPlainObject(metadata[key]) ? metadata[key] : null;
+}
+
 /**
- * Get metadata for a specific image (own keys only, so a filename such as
- * `constructor` never reads an inherited value).
+ * The details of one image: the entry at its site path (the listing's `url`),
+ * else the one an older admin wrote under its bare filename. Own keys only,
+ * so a name such as `constructor` never reads an inherited value (the
+ * filename validator refuses such names anyway, and a site path has a `/`).
+ * @param {object} metadata
+ * @param {string} url - the image's site path
+ * @param {string} filename
  */
-function getImageMetadata(metadata, filename) {
-  return Object.hasOwn(metadata, filename) ? metadata[filename] : {};
+function getImageMetadata(metadata, url, filename) {
+  return entryAt(metadata, url) || entryAt(metadata, filename) || {};
+}
+
+const METADATA_KEYS = ['alt', 'focalPoint', 'crop'];
+const METADATA_REFUSALS = {
+  body: 'The image details must be an object',
+  keys: 'Only alt, focalPoint and crop can be set',
+  alt: 'alt must be text',
+  focalPoint: 'focalPoint must be {x, y} percentages from 0 to 100, or null',
+  crop: 'crop must be {x, y, width, height} percentages inside the image (width and height above 0), or null',
+};
+
+/** Whether `value` is an object with exactly these keys, each a finite number. */
+function isNumberRecord(value, keys) {
+  if (!isPlainObject(value)) return false;
+  const present = Object.keys(value);
+  return present.length === keys.length
+    && keys.every((key) => present.includes(key) && Number.isFinite(value[key]));
+}
+
+function isPercentage(value) {
+  return value >= 0 && value <= 100;
+}
+
+/**
+ * The body of a PUT /api/images/:filename/metadata as the patch to apply, or
+ * why it is refused: a plain object whose keys are among alt, focalPoint and
+ * crop (so `__proto__` and `constructor`, own keys after JSON.parse, are
+ * refused with every other name); alt text; focalPoint `{x, y}` as finite
+ * percentages 0..100; crop `{x, y, width, height}` as finite percentages with
+ * x, y >= 0, width, height > 0, x + width <= 100, y + height <= 100; each of
+ * the last two may be null, which deletes it from the entry. The message is
+ * fixed text naming the field, never the value sent.
+ * @param {unknown} body
+ * @returns {{patch: object, error?: undefined} | {error: string, patch?: undefined}}
+ */
+export function validateMetadataPatch(body) {
+  if (!isPlainObject(body)) return { error: METADATA_REFUSALS.body };
+  const keys = Object.keys(body);
+  if (keys.some((key) => !METADATA_KEYS.includes(key))) return { error: METADATA_REFUSALS.keys };
+  const patch = {};
+  if (keys.includes('alt')) {
+    if (typeof body.alt !== 'string') return { error: METADATA_REFUSALS.alt };
+    patch.alt = body.alt;
+  }
+  if (keys.includes('focalPoint')) {
+    const { focalPoint } = body;
+    if (focalPoint !== null) {
+      if (!isNumberRecord(focalPoint, ['x', 'y']) || !isPercentage(focalPoint.x) || !isPercentage(focalPoint.y)) {
+        return { error: METADATA_REFUSALS.focalPoint };
+      }
+      patch.focalPoint = { x: focalPoint.x, y: focalPoint.y };
+    } else {
+      patch.focalPoint = null;
+    }
+  }
+  if (keys.includes('crop')) {
+    const { crop } = body;
+    if (crop !== null) {
+      if (!isNumberRecord(crop, ['x', 'y', 'width', 'height'])
+        || crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0
+        || crop.x + crop.width > 100 || crop.y + crop.height > 100) {
+        return { error: METADATA_REFUSALS.crop };
+      }
+      patch.crop = { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
+    } else {
+      patch.crop = null;
+    }
+  }
+  return { patch };
+}
+
+/**
+ * Apply a validated patch to the entry for an image, in place: the entry
+ * moves to the site-path key (an entry under the bare filename, from an
+ * older admin, contributes the fields the site-path entry lacks and is
+ * deleted), then each patched key is set, or deleted when the patch says
+ * null. Returns the entry as written.
+ * @param {object} metadata
+ * @param {string} url - the image's site path
+ * @param {string} filename
+ * @param {object} patch - from validateMetadataPatch
+ */
+function applyMetadataPatch(metadata, url, filename, patch) {
+  const entry = { ...(entryAt(metadata, filename) || {}), ...(entryAt(metadata, url) || {}) };
+  if (Object.hasOwn(metadata, filename)) delete metadata[filename];
+  for (const key of METADATA_KEYS) {
+    if (!Object.hasOwn(patch, key)) continue;
+    if (patch[key] === null) delete entry[key];
+    else entry[key] = patch[key];
+  }
+  metadata[url] = entry;
+  return entry;
+}
+
+/** Remove an image's details, under its site-path key and its bare-filename key. */
+function removeMetadataEntry(metadata, url, filename) {
+  for (const key of [url, filename]) {
+    if (Object.hasOwn(metadata, key)) delete metadata[key];
+  }
 }
 
 /**
@@ -212,18 +333,22 @@ function invalidFilename(res) {
 }
 
 /**
- * Whether this name is an image the library lists (a file, by stat as the
- * listing does) in either image directory.
+ * Where the library lists this name: the first image folder (in listing
+ * order) holding it as a file, by stat as the listing does, with the site
+ * path the listing gives it (its metadata key); or null.
+ * @returns {Promise<{source: string, directory: string, url: string}|null>}
  */
-async function imageExists(filename) {
-  for (const { directory } of imageDirectories()) {
+async function imageLocation(filename) {
+  for (const { source, directory, urlBase } of imageDirectories()) {
     try {
-      if ((await fs.stat(path.join(directory, filename))).isFile()) return true;
+      if ((await fs.stat(path.join(directory, filename))).isFile()) {
+        return { source, directory, url: `${urlBase}/${filename}` };
+      }
     } catch {
       // not in this directory
     }
   }
-  return false;
+  return null;
 }
 
 /**
@@ -345,7 +470,11 @@ async function refuseUpload(file) {
 router.get('/', async (req, res) => {
   try {
     const allImages = [];
-    const seenFilenames = new Set();
+    // One item per site path: src/assets/images and public/images share
+    // /images (the admin and the site serve src/assets first), so a public
+    // upload a src/assets image shadows is left out; the image() folder's
+    // /assets/images/<name> is listed beside it.
+    const seenUrls = new Set();
     const metadata = await loadMetadata();
 
     // Helper to get images from a directory
@@ -360,18 +489,19 @@ router.get('/', async (req, res) => {
 
           const ext = path.extname(file).toLowerCase();
           if (!ALLOWED_EXTENSIONS.includes(ext)) continue;
-          if (seenFilenames.has(file)) continue; // Skip duplicates
+          const url = `${urlBase}/${file}`;
+          if (seenUrls.has(url)) continue; // Skip duplicates
 
           const filePath = path.join(dirPath, file);
           try {
             const stats = await fs.stat(filePath);
             if (!stats.isFile()) continue;
 
-            const imageMeta = getImageMetadata(metadata, file);
-            seenFilenames.add(file);
+            const imageMeta = getImageMetadata(metadata, url, file);
+            seenUrls.add(url);
             allImages.push({
               filename: file,
-              url: `${urlBase}/${file}`,
+              url,
               size: stats.size,
               sizeFormatted: formatFileSize(stats.size),
               modified: stats.mtime.toISOString(),
@@ -380,6 +510,7 @@ router.get('/', async (req, res) => {
               source, // 'source': src/assets/images, 'uploads': public/images, 'assets': image() files
               alt: imageMeta.alt || '',
               focalPoint: imageMeta.focalPoint || null,
+              crop: imageMeta.crop || null,
             });
           } catch (err) {
             // Skip files we can't stat
@@ -663,14 +794,15 @@ router.post('/:filename/entry-value', express.json(), async (req, res) => {
 
 /**
  * GET /api/images/:filename/metadata
- * Get metadata for a specific image
+ * Get metadata for a specific image: the entry at its site path, else the
+ * one under its bare filename. An image in no folder has only the latter.
  */
 router.get('/:filename/metadata', async (req, res) => {
   try {
     const sanitizedFilename = imageFilenameFromParam(req.params.filename);
     if (!sanitizedFilename) return invalidFilename(res);
-    const metadata = await loadMetadata();
-    const imageMeta = getImageMetadata(metadata, sanitizedFilename);
+    const [metadata, location] = await Promise.all([loadMetadata(), imageLocation(sanitizedFilename)]);
+    const imageMeta = getImageMetadata(metadata, location ? location.url : sanitizedFilename, sanitizedFilename);
 
     res.json({
       success: true,
@@ -689,29 +821,24 @@ router.get('/:filename/metadata', async (req, res) => {
 
 /**
  * PUT /api/images/:filename/metadata
- * Update metadata for a specific image
+ * Body: any of { alt, focalPoint, crop } (validateMetadataPatch); null
+ * deletes a key. Written under the image's site-path key; a legacy
+ * bare-filename entry is moved in. Responds with the entry as written.
  */
 router.put('/:filename/metadata', express.json(), async (req, res) => {
   try {
     const sanitizedFilename = imageFilenameFromParam(req.params.filename);
     if (!sanitizedFilename) return invalidFilename(res);
-    if (!(await imageExists(sanitizedFilename))) {
+    const { patch, error } = validateMetadataPatch(req.body);
+    if (error) return res.status(400).json({ success: false, error });
+    const location = await imageLocation(sanitizedFilename);
+    if (!location) {
       return res.status(404).json({ success: false, error: 'Image not found' });
     }
-    const { alt, focalPoint } = req.body;
 
-    const metadata = await updateMetadata((current) => {
-      // Initialize metadata for this file if it doesn't exist
-      if (!Object.hasOwn(current, sanitizedFilename) || !current[sanitizedFilename]) {
-        current[sanitizedFilename] = {};
-      }
-      // Update fields that were provided
-      if (alt !== undefined) {
-        current[sanitizedFilename].alt = alt;
-      }
-      if (focalPoint !== undefined) {
-        current[sanitizedFilename].focalPoint = focalPoint;
-      }
+    let entry;
+    await updateMetadata((current) => {
+      entry = applyMetadataPatch(current, location.url, sanitizedFilename, patch);
     });
 
     console.log(`Metadata updated for: ${sanitizedFilename}`);
@@ -719,7 +846,7 @@ router.put('/:filename/metadata', express.json(), async (req, res) => {
     res.json({
       success: true,
       filename: sanitizedFilename,
-      metadata: metadata[sanitizedFilename],
+      metadata: entry,
     });
   } catch (error) {
     console.error('Error updating image metadata:', error);
@@ -777,7 +904,14 @@ router.delete('/:filename', async (req, res) => {
       });
     }
 
-    await withCheckoutWrite(() => fs.unlink(filePath));
+    // The file and its details go in one step (one hold, one metadata
+    // update), so a file that comes back under the same name (a new upload,
+    // a pull) does not inherit the old alt text or focal point. The site path
+    // is the upload's: a src/assets image of this name was refused above.
+    await updateMetadata(async (current) => {
+      await fs.unlink(filePath);
+      removeMetadataEntry(current, `/images/${sanitizedFilename}`, sanitizedFilename);
+    });
 
     console.log(`Image deleted: ${sanitizedFilename}`);
 

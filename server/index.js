@@ -120,6 +120,8 @@ export async function createServer() {
       publicUrl: fullConfig.publicUrl || null,
       gitEnabled: fullConfig.git.enabled,
       collectionOrder: fullConfig.collectionOrder || [],
+      // Whether the image library offers the crop control (images.crop).
+      imageCrop: fullConfig.images?.crop === true,
     });
   });
 
