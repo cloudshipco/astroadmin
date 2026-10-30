@@ -816,7 +816,9 @@ queue, so the old body is never written back.
   `astro dev` a point written after start is in the next render, a crop rides the
   `/_image` URL as `crop=`, and where Astro's dev endpoint serves (not under
   `NODE_ENV=production`: `endpoint/dev.js` refuses when DEV is false) the served fallback
-  is the crop. Seen red on the old CmsImage and by one mutant per later check.
+  is the crop; on a site WITHOUT the service a stored crop is skipped in dev, the `<img>`
+  marked `data-cms-image="crop-skipped"` and the log warned (a fourth dev run). Seen red
+  on the old CmsImage and by one mutant per later check.
 - `bun tests/image-service.test.js` — `components/image-service.js` (`astroadmin/image-service`),
   Astro's sharp service with a `crop` (#82), no site build: `getURL` appends
   `crop=x,y,width,height` and `parseURL` reads it back as numbers (a malformed or
@@ -834,7 +836,9 @@ queue, so the old body is never written back.
   before the PNG intermediate; `png()` wrote 8 bits), and without a crop returns the
   parent's bytes. `parseCrop`/`cropPixels` live in dependency-free `components/crop.js`;
   `site-files.js` must import that, never image-service.js (asserted by grep), or every
-  CmsVideo and crop-free CmsImage render loads the sharp service. <1 s.
+  CmsVideo and crop-free CmsImage render loads the sharp service. With `format: 'svg'` the
+  crop is ignored (the parent serves an SVG's own bytes; a rasterised crop was served as
+  SVG). <1 s.
 - `bun tests/image-metadata.test.js` — image details (#82) through the real routes: an entry
   is keyed by the image's SITE PATH as the listing's `url` (`/images/<name>`,
   `/assets/images/<name>`), in the folder the request's `?source=` names (the listing's
