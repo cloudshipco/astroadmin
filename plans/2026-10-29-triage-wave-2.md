@@ -208,3 +208,31 @@ overrides become defence in depth instead of the boundary.
 
 Round-2 fix lanes A (git), B (editor), C (server/docs), D (doctor/tests/CLAUDE.md)
 running.
+
+### Review 2 fixes (merged 2026-10-30)
+
+All four lanes merged; gate passed (`npm test` 87/87, every slow, browser,
+packed and doctor test by name). A (git): `log.showSignature`/`gpg.*.program`,
+`core.alternateRefsCommand`, `push.gpgSign` neutralised; worktrees added
+`--no-checkout` and checked out inside the worktree; filter refusal also sees
+a linked worktree's config; no submodule recursion (fetch, status, diff) and a
+gitlink refuses before any git work; local-path remotes refused unless
+`git.allowLocalRemote: true`; transitive pnpm `.astro` deps mirrored;
+`--fork-point` replaced by our own upstream record (`refs/astroadmin/upstream/*`),
+so all four force-push layouts hold. B (editor): legacy alt in the item modal;
+nullable numbers null/absent in new blocks and cards; real deploy/build failure
+shapes reported accurately; unions of literals as typed selects; form key
+order; a hidden dotted key was being lost (fixed). C (server): untrusted-proxy
+login gets a fixed TRUST_PROXY message and an hourly warning; rsync remote
+path allowlist; `trustProxy` config normalised; UTF-8 build output. D: doctor
+interrupt messages and a kept fallback folder; CmsVideo `?`/`#` suffixes and
+symlinks out of public/; publicDir wording; every browser test via
+`launchChromium`.
+
+Release-note items: a site whose remote is a local path needs
+`git.allowLocalRemote: true`; a repo with a submodule or a git filter is
+refused; HTTPS pushes need `GIT_ASKPASS`; behind a non-loopback proxy set
+`TRUST_PROXY`.
+
+Flake seen once by two lanes under load: video-upload exits 1 after all its
+checks pass (~1 in 16); an EFAULT on an upload temp dir. Not yet investigated.

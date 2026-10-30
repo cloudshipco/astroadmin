@@ -207,7 +207,8 @@ Publish runs these steps, in order:
    version. A commit someone
    force-pushed away upstream is not brought back. A repository where any
    file, anywhere, goes through a git filter (Git LFS or another) is
-   refused, even outside the site's folder. The refusal comes before
+   refused, even outside the site's folder (for example a Git LFS folder
+   elsewhere in a monorepo). The refusal comes before
    anything is committed: AstroAdmin runs git with every filter switched
    off, so it would commit those files' raw bytes;
 3. build the resulting commit with the site's Astro (the pre-push check,
@@ -225,6 +226,11 @@ export default {
   },
 };
 ```
+
+`git.allowLocalRemote` (default false) allows fetching from and pushing to a
+remote that is a local path or a `file://` URL. It is off because git runs such
+a repository's own hooks on this host; turn it on only for a remote you
+control. A repository whose index holds a submodule is refused.
 
 `git.paths` defaults to the three paths shown. Changes outside them are never
 committed by AstroAdmin, so a content collection kept elsewhere needs its

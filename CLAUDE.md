@@ -232,7 +232,20 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   card starts an optional number empty. <1 s.
 - `bun tests/legacy-alt.test.js` — alt text stored under the picker's old `<image>Alt` key
   moves to the declared alt (#88 follow-up): shown in the declared box, saved there by a
-  title-only edit (top level, item modal, block); a declared alt with text is left alone. <1 s.
+  title-only edit (top level, item modal, block); a declared alt with text is left alone. The
+  item modal drops the key a control was carried over from (`data-original-path`), so
+  untouched Done, edit and clear behave as in the main form. <1 s.
+- `bun tests/new-block-values.test.js` — what a NEW block, card or entry saves when only one
+  field is filled, each parsed by its zod schema: a nullable number is null where required
+  and absent where optional (`cleanEmptyValues` turns a `""` at a nullable-number key into
+  null or removes it: no number accepts `""`); a required object's required numbers start
+  at 0; a new object's keys follow the form's order (`orderLikeForm`); a hidden schema field
+  is read under its own key (`data-literal-key`: a hidden `a.b` used to be lost). <1 s.
+- `bun tests/literal-fields.test.js` — a union of literals, or an enum holding a non-string,
+  is a select whose option values are JSON, read back typed (`data-value-type="json"`),
+  with "Not set" for null, a stored non-choice shown as its own option, and "Choose..."
+  (left out) with no value; a list of one literal is fixed text; untouched values
+  round-trip byte-identically; a string enum is the plain select. <1 s.
 - `bun tests/unique-ids.test.js` — no id repeats in the document: nested blocks, after a
   delete and adds, and with the item modal open. <1 s.
 - `bun tests/nested-array-indexes.test.js` — lists inside list items (#56): Add counts the
@@ -312,7 +325,7 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   modified file the remote also changes, or an untracked file where the remote adds one, is
   a fixed path-free 409 (`localChangesBody`) leaving the branch, the local commit and the
   file as they were. Red with `reset --hard` in place of `--keep`. A commit the upstream
-  force-pushed away is not brought back (`--fork-point`), and a file staged as one version
+  force-pushed away is not brought back (the rebase base, below), and a file staged as one version
   and changed since refuses rather than lose its staged version. ~17 s, in test:unit.
 - `bun tests/publish-filters.test.js` — a site whose files go through a git filter (an
   attribute naming `lfs`, configured or not, or a driver with a clean/smudge/process command
@@ -320,7 +333,16 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   and the commit route with a fixed 409 before anything is staged; an attribute naming an
   unconfigured driver, or a configured driver nothing uses (git-lfs's global config),
   publishes. `ls-files` attr magic does not descend into untracked directories, so new files
-  go through `check-attr`. ~3 s.
+  go through `check-attr`. A filter configured only for a linked worktree (an `includeIf` on
+  the git directory) is caught through a no-checkout worktree view. ~3 s.
+- `bun tests/git-nested-repos.test.js` — other repositories: a local-path or `file://`
+  remote is refused unless the site sets `git.allowLocalRemote: true` (and then the
+  remote's own hooks DO run: the opt-in is not protection); no fetch, status or diff
+  recurses into a submodule; a checkout whose index holds a gitlink is refused (409) before
+  any other git work. ~10 s.
+- `bun tests/publish-force-push.test.js` — a commit force-pushed away upstream is not
+  brought back by the next publish, in four layouts (named remote, URL remote, a fetch
+  refspec that does not map the branch, no reflog). ~5-15 s.
 - `bun tests/git-environment.test.js` — git's environment (#64), through a real publish:
   `GIT_AUTHOR_*`/`GIT_COMMITTER_*` set the commit identity over the repo's user.name,
   `GIT_SSH_COMMAND` carries the push (an ssh:// remote whose "ssh" is a script), and an
@@ -328,9 +350,18 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
 - `bun tests/git-hardening.test.js` — no code a site repo plants in its git config or hooks
   runs (#67): seven hooks, fsmonitor, a smudge/clean filter, textconv, diff.external, gpg
   signing, an ext:: push URL, a merge driver, upload-pack/receive-pack, core.sshCommand,
-  a credential helper, askpass and core.gitProxy each write a marker; the control shows each
-  fires under plain git; save, status, diff, show, revert, publish (including both
-  worktrees) and the commit route leave none. ~14 s.
+  a credential helper, askpass, core.gitProxy, `log.showSignature` + `gpg.program` (on a
+  signed commit: log, file-history, show) and alternates + `core.alternateRefsCommand`
+  each write a marker; the control shows each fires under plain git; save, status, diff,
+  show, revert, publish (including both worktrees) and the commit route leave none. ~16 s.
+- `bun tests/untrusted-proxy.test.js` — a TLS proxy that `trust proxy` does not trust
+  (server/utils/untrusted-proxy.js): a correct login through it gets a fixed sentence
+  naming TRUST_PROXY, no address and no session cookie (it used to be a 200 with no cookie,
+  so the editor looped); a wrong password is still a 401 with `auth.failed`; one fixed log
+  warning, at most hourly. Controls: no forwarded headers, and the peer in TRUST_PROXY. <1 s.
+- `bun tests/trust-proxy-config.test.js` — `trustProxy` in astroadmin.config.js goes
+  through `trustProxySetting` like TRUST_PROXY (`'1'` is a hop count, `'true'`/`'false'`/
+  `'loopback,,'` start the server, blank means the default; the environment wins). ~2 s.
 - `bun tests/check-linked-styles.test.js` — the publish check builds a site whose packages
   ship `.astro` components with a `<style>` and a `<script>` (the real CmsVideo, and one a
   directory down, and a pnpm-style link into `.pnpm`), with the site and the check's TMPDIR
@@ -371,13 +402,16 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   store's loader reads), killed with its process group at `build.productionTimeoutMs`;
   `runCommand` kills the group when the shell exits as well (a descendant that left the
   group is waited for 2 s at most) and keeps the first and last halves of output past the
-  10 MB cap. ~4 s.
+  10 MB cap; UTF-8 split across writes is decoded whole and the cap never splits a surrogate
+  pair. ~4 s.
 - `bun tests/deploy.test.js` — rsync destinations `--delete` must not touch are refused
   (root, home and above, project and above, inside the project, dist and inside; remote `/`,
   `~`, `~name`, `..`), `allowDestructivePath: true` overrides; the key path and port reach a
   fake ssh as single arguments through real rsync (#10); `user`/`host` are validated (rsync
   hands `user@host` to ssh as one argument even after `--`), and a `host:path` in `path`
-  with no host is refused.
+  with no host is refused; a remote path may hold only `[A-Za-z0-9._~/+@,=-]` and must not
+  start with `-`, whatever `allowDestructivePath` says (on openrsync and rsync < 3.2.4 the
+  remote shell expanded `$VAR`, `$(...)` and `*`, and rsync 3.4.4 still expands `*`).
 - `bun tests/astro-bin.test.js` — the default build commands run the site's OWN installed
   astro (`server/utils/astro-bin.js`), never a package runner: with no astro installed the
   publish check and the production build refuse and a fake `bunx`/`npx` first on PATH is
@@ -433,8 +467,11 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   changes were sent but could not be confirmed live, never a success tick. With nothing to
   poll (no publicUrl, or no page for the entry) a push is the same warning, never
   "Published!" (`showPublishOutcome`); a commit with no remote is not green either; a
-  dry-run deploy is "nothing was uploaded" (info), a failed deploy an error, a skipped
-  deploy no deploy.
+  dry-run deploy is "nothing was uploaded" (info), a skipped deploy no deploy. A build or
+  deploy that fails after the git step (a 200 with `success:false`, captured from the real
+  server) goes through `showPublishResult` and says whether the changes reached the
+  repository, that the build/deploy failed and nothing is live, as an error toast that
+  stays 30 s; never "Failed to publish".
 - `bun tests/error-paths.test.js` — API errors send a fixed, route-specific message, over
   HTTP: an image() preview whose file vanishes after its stat() (sendFile's callback, not the
   error middleware), an unreadable `/images` file (the app error middleware), upload, delete,
@@ -852,13 +889,24 @@ git-exec's settings; its private `gitClientAt` opens another worktree of the rep
 simple-git refuses `-C`); anything else uses git-exec's `runGit`/`runGitSync`; never
 `execFile('git')`. Both apply
 `HARDENING_CONFIG` (`core.hooksPath=/dev/null`, `core.fsmonitor=false`,
-`commit.gpgSign=false`, `protocol.ext.allow=never`, `core.sshCommand=ssh`,
-`credential.helper=`, `core.askPass=`) and `namedCommandOverrides` (every configured
-`filter.<name>` set to empty commands with `required=false`, every `merge.<name>.driver` set
-to `git merge-file`), because the site's code runs on the host and can write `.git/hooks`
+`commit.gpgSign=false`, `push.gpgSign=false`, `log.showSignature=false`, `gpg.program`,
+`gpg.openpgp.program`, `gpg.x509.program`, `gpg.ssh.program` all `false`,
+`core.alternateRefsCommand=true`, `protocol.ext.allow=never`, `protocol.file.allow=never`
+(`always` only with `git.allowLocalRemote: true`, when the remote's own hooks run),
+`submodule.recurse=false`, `fetch.recurseSubmodules=false`, `diff.ignoreSubmodules=all`,
+`core.sshCommand=ssh`, `credential.helper=`, `core.askPass=`) and `namedCommandOverrides`
+(every configured `filter.<name>` set to empty commands with `required=false`, every
+`merge.<name>.driver` set to `git merge-file`, read in the directory the command runs in),
+because the site's code runs on the host and can write `.git/hooks`
 and `.git/config`. A filter or merge driver whose name contains `=` cannot be overridden
-(`-c` splits at the first `=`), so git-exec refuses to run git at all in that repository. Every fetch and push passes `--upload-pack`/`--receive-pack` (a `-c`
-cannot override those: git keeps the first value it reads), `GIT_PROXY_COMMAND` is empty by
+(`-c` splits at the first `=`), so git-exec refuses to run git at all in that repository.
+Every fetch passes `--upload-pack=git-upload-pack --no-recurse-submodules` and every push
+`--receive-pack=git-receive-pack` (a `-c` cannot override those: git keeps the first value
+it reads); every status passes `--ignore-submodules=all` (a repo's
+`submodule.<name>.ignore=none` outranks the config default). Worktrees (the check's, the
+rebase's) are added `--no-checkout` and checked out by `reset --hard` run IN the worktree,
+since an `includeIf` on the git directory can configure a linked worktree differently.
+Commit and publish refuse, before any other git work, an index holding a gitlink (409). `GIT_PROXY_COMMAND` is empty by
 default and `GIT_TERMINAL_PROMPT=0`. The operator's `GIT_SSH_COMMAND` and `GIT_ASKPASS` are
 the only ways to supply ssh and HTTPS credentials (no credential helper, osxkeychain
 included). A site whose files go through a filter (LFS or any clean/smudge driver an
@@ -882,10 +930,11 @@ Two layers, deliberately unequal:
    else the site's own installed astro (`server/utils/astro-bin.js`), runs in a throwaway `git worktree` at HEAD, after the commit
    and after the commit is rebased onto the upstream (in that order: before the commit the
    saves are unstaged, #57). The rebase runs in a throwaway detached worktree
-   (`--no-autostash --no-update-refs`, and `--fork-point` against the branch's
-   remote-tracking ref when the branch's remote-tracking ref points at the fetched commit,
-   as `pull --rebase` did, so a commit
-   force-pushed away upstream is not replayed) and the live checkout is moved to its result with
+   (`--no-autostash --no-update-refs`, `--onto <fetched> <base>`, where the base is the
+   newest upstream value the local branch contains among the remote-tracking ref and our
+   own record `refs/astroadmin/upstream/<hash>`, updated after each fetch and push; the
+   merge-base only when nothing is known. So a commit force-pushed away upstream is not
+   replayed, whatever the remote layout or reflog) and the live checkout is moved to its result with
    `git reset --keep`, so uncommitted changes elsewhere in the repository do not block it
    (#83); `--keep` refuses, changing nothing, when an incoming change touches a locally
    modified file or an untracked file is in the way (409, `localChangesBody`); a file
