@@ -15,6 +15,10 @@
  *     adds the literal;
  *   - an untouched value round-trips byte-identically in a bound form,
  *     including one that is not among the choices;
+ *   - a NEW block or card starts its literal unions on "Choose..." (zod 4's
+ *     anyOf of consts used to be seeded '', zod 3's number enum 0, which the
+ *     select showed as chosen and the save wrote), and "Choose..." is read
+ *     as nothing chosen: absent, for a required key too, never "";
  *   - a string enum is still the plain select (control).
  *
  *   bun tests/literal-fields.test.js
@@ -181,6 +185,143 @@ await check('a string enum is still the plain select (control)', () => {
   assert.equal(select.dataset.valueType, undefined);
   type(form, 'e', 'x');
   assert.strictEqual(fg.extractFormData(form, schema).e, 'x');
+});
+
+// --- New blocks and cards: a literal union starts on "Choose..." ------------
+//
+// createEmptyBlock / createEmptyArrayItem used to seed a union of literals
+// with '' (zod 4's anyOf of consts) or 0 (zod 3's {type: 'number', enum}),
+// which literalSelect then showed as a stored value: "Choose..." never
+// appeared and the unchosen value was saved, which zod refuses.
+
+const waitFor = async (selector) => {
+  for (let i = 0; i < 200 && !document.querySelector(selector); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  return document.querySelector(selector);
+};
+const selectedValues = (select) => [...select.options].filter((option) => option.selected).map((option) => option.value);
+function fixSelected(root) {
+  for (const select of root.querySelectorAll('select')) {
+    const marked = [...select.options].findIndex((option) => option.hasAttribute('selected'));
+    if (marked >= 0) select.selectedIndex = marked;
+  }
+}
+
+const literalBlockZod = z.object({
+  type: z.literal('s'),
+  label: z.string(),
+  size: z.union([z.literal(1), z.literal(2)]),
+  sizeOpt: z.union([z.literal(1), z.literal(2)]).optional(),
+  lvl: z.union([z.literal('a'), z.literal('b')]),
+});
+const literalBlock = toSchema(literalBlockZod);
+const literalBlockPage = {
+  type: 'object',
+  properties: { title: { type: 'string' }, blocks: { type: 'array', blockTypes: { s: literalBlock }, items: { anyOf: [literalBlock] } } },
+  required: ['title', 'blocks'],
+};
+// zod 3's converter gives a union of number literals as {type: 'number', enum}.
+const zod3Block = { type: 'object', properties: { type: { type: 'string', const: 't' }, label: { type: 'string' }, n: { type: 'number', enum: [1, 2] } }, required: ['type', 'label', 'n'] };
+const zod3BlockPage = {
+  type: 'object',
+  properties: { title: { type: 'string' }, blocks: { type: 'array', blockTypes: { t: zod3Block }, items: { anyOf: [zod3Block] } } },
+  required: ['title', 'blocks'],
+};
+
+function addBlock(form, blockType) {
+  form.querySelector('.add-block-type').value = blockType;
+  form.querySelector('.add-block-btn').click();
+  fixSelected(form);
+}
+
+await check('a new block (zod 4): its literal unions start on Choose... and are not saved until chosen', () => {
+  const form = render(literalBlockPage, { title: 'T', blocks: [] });
+  addBlock(form, 's');
+  for (const name of ['size', 'sizeOpt', 'lvl']) {
+    const select = form.querySelector(`select[name="blocks[0].${name}"]`);
+    assert.deepEqual(selectedValues(select), [''], `${name} starts on Choose...: ${select.outerHTML}`);
+  }
+  type(form, 'blocks[0].label', 'x');
+  assert.deepStrictEqual(fg.extractFormData(form, literalBlockPage).blocks[0], { type: 's', label: 'x' });
+  type(form, 'blocks[0].size', '2');
+  type(form, 'blocks[0].lvl', '"b"');
+  const chosen = fg.extractFormData(form, literalBlockPage).blocks[0];
+  assert.deepStrictEqual(chosen, { type: 's', label: 'x', size: 2, lvl: 'b' }, 'positive control: choices are saved');
+  assert.ok(literalBlockZod.safeParse(chosen).success, JSON.stringify(chosen));
+});
+
+await check("a new block (zod 3's number enum): starts on Choose..., not 0", () => {
+  const form = render(zod3BlockPage, { title: 'T', blocks: [] });
+  addBlock(form, 't');
+  assert.deepEqual(selectedValues(form.querySelector('select[name="blocks[0].n"]')), ['']);
+  type(form, 'blocks[0].label', 'x');
+  assert.deepStrictEqual(fg.extractFormData(form, zod3BlockPage).blocks[0], { type: 't', label: 'x' });
+});
+
+await check('a new card: literal unions (zod 3 shape and zod 4) start on Choose... and are not saved', async () => {
+  const card = { type: 'object', properties: { label: { type: 'string' }, n: { type: 'number', enum: [1, 2] }, m: literalBlock.properties.size }, required: ['label', 'n', 'm'] };
+  const cardPage = { type: 'object', properties: { title: { type: 'string' }, stats: { type: 'array', items: card } }, required: ['title', 'stats'] };
+  const form = render(cardPage, { title: 'T', stats: [] });
+  form.querySelector('[data-add-array-card]').click();
+  const overlay = await waitFor('.array-item-edit-overlay');
+  fixSelected(overlay);
+  for (const name of ['n', 'm']) {
+    assert.deepEqual(selectedValues(overlay.querySelector(`select[name="${name}"]`)), [''], `${name} starts on Choose...`);
+  }
+  type(overlay, 'label', 'New');
+  overlay.querySelector('[data-save]').click();
+  assert.deepStrictEqual(fg.extractFormData(form, cardPage).stats[0], { label: 'New' });
+});
+
+await check('createEmptyBlock / createEmptyArrayItem leave a literal union absent; a default still wins', () => {
+  const schema = toSchema(z.object({
+    type: z.literal('s'),
+    a: z.union([z.literal(1), z.literal(2)]),
+    b: z.union([z.literal(1), z.literal(2)]).nullable(),
+    c: z.union([z.literal(1), z.literal(2)]).default(2),
+    n: z.number(),
+  }));
+  assert.deepStrictEqual(fg.createEmptyBlock('s', schema), { type: 's', c: 2, n: 0 });
+  const { type: _type, ...cardProps } = schema.properties;
+  const cardSchema = { type: 'object', properties: { ...cardProps, z3: { type: 'number', enum: [1, 2] } }, required: ['a', 'b', 'n', 'z3'] };
+  assert.deepStrictEqual(fg.createEmptyArrayItem(cardSchema), { c: 2, n: 0 });
+});
+
+// --- "Choose..." is read as nothing chosen (readFields) ---------------------
+//
+// A literal option's value is its JSON (`""` for an empty-string literal), so
+// the placeholder's '' is never a value: it is left out wherever it is, a
+// required key at the top level and an optional one inside a block alike.
+
+await check('a REQUIRED literal union left on Choose... is absent, not ""', () => {
+  const schema = toSchema(z.object({ title: z.string(), f: z.union([z.literal(1), z.literal(2)]) }));
+  const form = render(schema, {}, { bind: false });
+  assert.equal(form.querySelector('select[name="f"]').value, '');
+  type(form, 'title', 'X');
+  assert.deepStrictEqual(fg.extractFormData(form, schema), { title: 'X' });
+});
+
+await check('an optional literal union chosen and put back on Choose... in a stored block stays absent', () => {
+  // Back at its baseline the control counts as untouched, so binding gives
+  // it its stored absence; the read branch itself is pinned by the new block
+  // (an optional union, unbound, inside a block) and new entry checks.
+  const stored = { title: 'T', blocks: [{ type: 's', label: 'a', size: 1, lvl: 'a' }] };
+  const form = render(literalBlockPage, stored);
+  assert.equal(form.querySelector('select[name="blocks[0].sizeOpt"]').value, '');
+  type(form, 'blocks[0].sizeOpt', '2');
+  assert.strictEqual(fg.extractFormData(form, literalBlockPage).blocks[0].sizeOpt, 2, 'positive control: the choice is saved');
+  type(form, 'blocks[0].sizeOpt', '');
+  type(form, 'blocks[0].label', 'b');
+  assert.deepStrictEqual(fg.extractFormData(form, literalBlockPage).blocks[0], { ...stored.blocks[0], label: 'b' });
+});
+
+await check('an empty-string literal is a choice of its own (""), distinct from Choose...', () => {
+  const schema = toSchema(z.object({ title: z.string(), e: z.union([z.literal(''), z.literal(1)]) }));
+  const form = render(schema, {}, { bind: false });
+  assert.deepEqual(optionValues(form.querySelector('select[name="e"]')), ['', '""', '1']);
+  type(form, 'title', 'X');
+  assert.deepStrictEqual(fg.extractFormData(form, schema), { title: 'X' });
+  type(form, 'e', '""');
+  assert.deepStrictEqual(fg.extractFormData(form, schema), { title: 'X', e: '' }, 'the "" literal is saved when chosen');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
