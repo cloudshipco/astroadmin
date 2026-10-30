@@ -1,7 +1,7 @@
 # Image focal point and non-destructive crop (#82)
 
-Status: BUILT on main (2026-10-30), awaiting a review pass and release as
-1.12.0. Commits 8f7cc57 (server), a3e2dc2 (doctor and docs), 0efe52a (image
+Status: BUILT and reviewed on main (2026-10-30), three review rounds; ready to
+release as 1.12.0. Commits 8f7cc57 (server), a3e2dc2 (doctor and docs), 0efe52a (image
 library), a8ad6a8 (CmsImage, site-files, image service), 681e66c (a stored
 crop stays visible and clearable with `images.crop` off). Every check was
 seen red first or by a mutant (the lanes' notes are in
@@ -36,6 +36,20 @@ the server's crop rule is `parseCrop`, `isPlainObject` is one helper.
 `data-cms-image="crop-skipped"` and warns; the service ignores a crop with
 `format: 'svg'`. After the fixes: fast suite 92/92, cms-image-packed 53,
 cms-video-packed 26, check-linked-styles 6, video-picker-browser 11.
+
+Cropped previews (James, after seeing the editor): the image field's preview,
+the library grid and gallery thumbnails show a stored crop through one CSS
+crop view (`ui/crop-view.js`, a clipping window with the crop's aspect and
+a "Cropped" caption; no focal point, which has no visible effect in a
+contain-fitted preview), with the image's details memoised per page
+(`ui/image-details.js`) and seeded from the library's listing. 8dcedd5, then
+review round 3 (nine findings on that commit, all fixed in f7e24f4: the
+current record wins over a stale page-load answer, a switched image clears
+the old geometry first, the server hands out only crops `parseCrop` accepts,
+the listing refreshes the cache, gallery thumbnails, a 500 is not cached,
+an encoded value is decoded, one identity for the window). The browser
+test's fixed sleep after the last Select was then made a wait for the saved
+value (it missed under parallel builds; test only). Fast suite 93/93 with it.
 
 ## The request
 

@@ -138,8 +138,8 @@ const isCropLike = (crop) => Boolean(crop) && typeof crop.width === 'number';
 const near = (actual, expected, tolerance, what) => assert.ok(Math.abs(actual - expected) <= tolerance, `${what}: ${actual} is not within ${tolerance} of ${expected}`);
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** `what` may be a function, read when the wait fails (so it can show the last reading). */
-async function waitUntil(predicate, what) {
-  const deadline = Date.now() + 5000;
+async function waitUntil(predicate, what, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
     await settle(50);
@@ -570,8 +570,13 @@ try {
   });
 
   await check('the entry was never rewritten by a preview change; each Select saved its field only', async () => {
-    await settle(1500); // longer than the autosave debounce
-    assert.equal(homeText(), HOME_TEXT.replace('thirdImage: /images/photo.png', 'thirdImage: /images/never.png'));
+    // The last Select's autosave is debounced (1 s) and then written by a
+    // server that may be slow on a loaded machine: wait for THAT write (it
+    // landed 15 s late once, under parallel builds), then pin the whole text.
+    const expected = HOME_TEXT.replace('thirdImage: /images/photo.png', 'thirdImage: /images/never.png');
+    await waitUntil(() => homeText().includes('thirdImage: /images/never.png'), () => `the Select of never.png was not saved; the entry reads:\n${homeText()}`, 15000);
+    await settle(1200); // past one more debounce: a preview change must queue no further save
+    assert.equal(homeText(), expected);
   });
 
   console.log('\n🧪 a second page load, with metadata GETs held or failed\n' + '='.repeat(40));
