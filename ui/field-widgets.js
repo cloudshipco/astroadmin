@@ -16,8 +16,8 @@ import { escapeHtml } from './escape-html.js';
 import { readJson } from './api-response.js';
 import { mediaKindOf } from './media-kinds.js';
 import { pushModal, removeModal } from './modal-stack.js';
-import { showCropView } from './crop-view.js';
-import { loadImageDetails, rememberImageDetails, IMAGE_DETAILS_EVENT } from './image-details.js';
+import { showStoredCrop, showThumbnailCrop } from './crop-view.js';
+import { uploadFilename, IMAGE_DETAILS_EVENT } from './image-details.js';
 
 /**
  * Reference fields need to navigate the dashboard to open the entry they point at,
@@ -61,11 +61,8 @@ export function registerEntryContext(getEntry) {
  */
 export async function applyPickedImage(picker, url, image = null) {
   if (!picker.hasAttribute('data-astro-image')) {
-    // The library's entry (or the upload's response) carries the file's
-    // details as they are now, so the preview's crop needs no request.
-    if (image?.source === 'uploads' && typeof image.filename === 'string') {
-      rememberImageDetails(image.filename, 'uploads', { alt: image.alt, focalPoint: image.focalPoint, crop: image.crop });
-    }
+    // The preview's crop comes from the page's record of the file, which
+    // the library's listing has just refreshed (rememberImageListing)
     updateImagePicker(picker, url);
     return true;
   }
@@ -178,12 +175,13 @@ function setupImagePickers(container, onChange) {
     }
   });
 
-  // A stored crop is shown on the preview (the field keeps the value as
-  // stored; only the <img> is clipped), now and whenever the library changes
-  // a file's details.
+  // A stored crop is shown on the previews (the field keeps the value as
+  // stored; only the <img> is clipped), now and whenever a file's details
+  // change: the image picker's preview and the gallery field's thumbnails.
   container.querySelectorAll('.image-picker').forEach((picker) => {
     showPickerCrop(picker, picker.querySelector('.image-picker-input')?.value ?? '');
   });
+  container.querySelectorAll('.gallery-field').forEach(showGalleryThumbnailCrops);
   followImageDetails(container.ownerDocument);
 }
 
@@ -191,8 +189,9 @@ function setupImagePickers(container, onChange) {
 const followingDocuments = new WeakSet();
 
 /**
- * When the library saves a file's details (a crop set or cleared, with or
- * without Select), every field holding that file shows it at once.
+ * When a file's details change (the library saved a crop, with or without
+ * Select; its listing showed one changed elsewhere), every picker and
+ * gallery thumbnail holding that file shows it at once.
  */
 function followImageDetails(doc) {
   if (!doc || followingDocuments.has(doc)) return;
@@ -204,18 +203,10 @@ function followImageDetails(doc) {
       const value = picker.querySelector('.image-picker-input')?.value ?? '';
       if (uploadFilename(value) === filename) showPickerCrop(picker, value);
     });
+    doc.querySelectorAll('.gallery-field-thumb').forEach((thumb) => {
+      if (uploadFilename(thumb.querySelector('img')?.getAttribute('src')) === filename) showThumbnailCrop(thumb);
+    });
   });
-}
-
-/**
- * The file name of a public upload's value (`/images/<name>`), or null for
- * anything else: a src/assets path, an entry-relative image() value, a URL.
- * The admin serves src/assets/images at /images too, so a name that is only
- * there is asked for and refused (a 404), which reads as no details.
- */
-function uploadFilename(value) {
-  const match = typeof value === 'string' ? value.match(/^\/images\/([^/?#]+)$/) : null;
-  return match ? match[1] : null;
 }
 
 /**
@@ -228,16 +219,14 @@ function showPickerCrop(picker, url) {
   const preview = picker.querySelector('[data-preview]');
   const previewImg = picker.querySelector('img[data-preview-img]');
   if (!preview || !previewImg) return;
-  const filename = picker.hasAttribute('data-astro-image') ? null : uploadFilename(url);
-  if (filename === null) {
-    showCropView(preview, previewImg, null);
-    return;
-  }
-  loadImageDetails(filename, 'uploads').then((metadata) => {
-    // The field may hold another value by now; that value's own call shows it
-    if (picker.querySelector('.image-picker-input')?.value !== url) return;
-    showCropView(preview, previewImg, metadata?.crop ?? null);
-  });
+  // The field may hold another value when the details arrive; that value's own call shows it
+  const stillHeld = () => picker.querySelector('.image-picker-input')?.value === url;
+  showStoredCrop(preview, previewImg, picker.hasAttribute('data-astro-image') ? null : url, stillHeld);
+}
+
+/** Clip each of a gallery field's thumbnails to its upload's stored crop. */
+function showGalleryThumbnailCrops(galleryField) {
+  galleryField.querySelectorAll('.gallery-field-thumb').forEach(showThumbnailCrop);
 }
 
 /**
@@ -401,6 +390,7 @@ function updateGalleryFieldPreview(galleryField, images) {
         </div>
       `).join('') + (moreCount > 0 ? `<div class="gallery-field-more">+${moreCount}</div>` : '')
     : '<span class="gallery-field-empty">No images</span>';
+  showGalleryThumbnailCrops(galleryField);
 
   editBtn.textContent = images.length > 0 ? `Edit ${images.length} images` : 'Add images';
 }

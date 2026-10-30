@@ -9,7 +9,7 @@ import { MAX_IMAGE_SIZE, MAX_VIDEO_SIZE, megabytes, mediaRefusal } from './media
 import { pushModal, removeModal } from './modal-stack.js';
 import { loadAdminConfig } from './admin-config.js';
 import { showCropView, isCrop, isPercent } from './crop-view.js';
-import { rememberImageDetails } from './image-details.js';
+import { rememberImageDetails, rememberImageListing } from './image-details.js';
 
 let currentCallback = null;
 let currentImages = [];
@@ -328,6 +328,10 @@ async function loadImages() {
     const data = await readJson(response);
 
     if (data.success) {
+      // The page's record of each upload's details is as fresh as this
+      // listing, so a crop changed in another tab is on the field after
+      // this opening, Select or not
+      rememberImageListing(data.images);
       currentImages = data.images
         .filter(img => (img.kind || 'image') === libraryKind)
         .filter(img => forAstroImage || img.source !== 'assets');

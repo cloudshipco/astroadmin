@@ -128,6 +128,20 @@ function getImageMetadata(metadata, url, filename) {
   return entryAt(metadata, url) || (legacyKey === null ? null : entryAt(metadata, legacyKey)) || {};
 }
 
+/**
+ * An entry as a client may see it: with its `crop` only if the build would
+ * apply it (`parseCrop`, the one crop rule), so no editor crops a preview to
+ * a region the build ignores. The stored entry is left as it is; a PUT
+ * refuses such a crop, so one in the file was written by hand.
+ * @param {object} entry
+ */
+function metadataForEditor(entry) {
+  if (!Object.hasOwn(entry, 'crop')) return entry;
+  const { crop, ...rest } = entry;
+  const parsed = parseCrop(crop);
+  return parsed === undefined ? rest : { ...rest, crop: parsed };
+}
+
 const METADATA_KEYS = ['alt', 'focalPoint', 'crop'];
 const METADATA_REFUSALS = {
   body: 'The image details must be an object',
@@ -567,7 +581,7 @@ router.get('/', async (req, res) => {
               source, // 'source': src/assets/images, 'uploads': public/images, 'assets': image() files
               alt: imageMeta.alt || '',
               focalPoint: imageMeta.focalPoint || null,
-              crop: imageMeta.crop || null,
+              crop: parseCrop(imageMeta.crop) ?? null,
             });
           } catch (err) {
             // Skip files we can't stat
@@ -872,7 +886,7 @@ router.get('/:filename/metadata', async (req, res) => {
     res.json({
       success: true,
       filename: sanitizedFilename,
-      metadata: imageMeta,
+      metadata: metadataForEditor(imageMeta),
     });
   } catch (error) {
     console.error('Error getting image metadata:', error);
@@ -915,7 +929,7 @@ router.put('/:filename/metadata', express.json(), async (req, res) => {
     res.json({
       success: true,
       filename: sanitizedFilename,
-      metadata: entry,
+      metadata: metadataForEditor(entry),
     });
   } catch (error) {
     console.error('Error updating image metadata:', error);

@@ -864,7 +864,10 @@ queue, so the old body is never written back.
   the upload; an entry at its site-path key is patched in place, so an unchanged patch
   leaves the file byte-identical (mtime too) and a change keeps the key order; the listing
   dedupes by url (the image() folder's same-named file is listed beside the src/assets
-  one) and carries `crop`; `/api/config` reports `imageCrop` from `images.crop`. ~1 s.
+  one) and carries `crop`; a stored crop the build ignores (x + width > 100, written by
+  hand) reaches no client: null in the listing, absent from GET and the PUT response
+  (`metadataForEditor`, through `parseCrop`), the file left as it is; `/api/config` reports
+  `imageCrop` from `images.crop`. ~1 s.
 - `bun tests/image-focal-browser.test.js` — the library's focal point and crop panel in
   real Chromium (#82): selecting a public upload shows `[data-focal-panel]`, whose box is
   the rendered image (src/assets and videos show none; the alt field stays); a click 30%
@@ -887,11 +890,23 @@ queue, so the old body is never written back.
   thumbnail (`ui/crop-view.js`: the `<img>` moved into a `[data-crop-window]` the crop
   region's shape, sized 100/width and offset -x/width of it; the container gets
   `data-cropped` and a "Cropped" caption; no crop leaves the DOM as rendered), with a
-  red/blue PNG whose cropped box is read from a screenshot; a crop dragged in the library
+  red/blue PNG whose cropped box is read from a screenshot; a gallery field's thumbnails and
+  the gallery editor's show their uploads' crops too; a crop dragged in the library
   crops the field on Cancel (no Select) and the thumbnail at once, Select shows the chosen
-  file's crop, Clear puts the whole image back; one `GET /api/images/<name>/metadata?source=uploads`
-  per file per page load (`ui/image-details.js`, seeded by the library's saves), none for
-  an image() or video value; the entry is never rewritten. Seen red (5 of 9). ~4 s.
+  file's crop (applying the view once, to that picker only: counted by a MutationObserver
+  on `data-cropped`), Clear puts the whole image back; one `GET
+  /api/images/<name>/metadata?source=uploads` per file per page load (`ui/image-details.js`,
+  seeded by the library's saves and by every listing it or the gallery editor reads, so a
+  crop written to `.metadata.json` by another tab is on the field after open + Cancel), a
+  percent-encoded value (`/images/hero%20image.png`) asked for as that file, none for an
+  image() or video value; picking a cropped file whose image never loads leaves no window of
+  the old crop (`showCropView` clears before it waits for `load`). On a second load with
+  `page.route` (GETs only: a route sees the library's PUTs too): a 500 is asked again by the
+  next reader and a 200 then crops, and the library's listing reaches a picker that showed
+  the failure (open + Cancel, no second GET); a stale page-load answer after the library cleared the
+  crop, or an aborted one after it set one, changes nothing (a reader gets the record current
+  when its request settles, `currentWhenSettled`; a failed request forgets only itself). The
+  entry is never rewritten. Seen red (5 of 9; then 9 of 17 for the review fixes). ~8 s.
 
 - `bun tests/video-upload.test.js` — videos through the real upload route: MP4 and WebM
   (real ffmpeg fixtures in `tests/fixtures/video`, commands in the test header) install

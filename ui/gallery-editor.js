@@ -8,6 +8,8 @@ import { openImageLibrary } from './image-library.js';
 import { escapeHtml } from './escape-html.js';
 import { readJson } from './api-response.js';
 import { pushModal, removeModal } from './modal-stack.js';
+import { showThumbnailCrop } from './crop-view.js';
+import { rememberImageListing } from './image-details.js';
 
 let currentCallback = null;
 let currentImages = []; // Array of { src, alt } objects
@@ -74,6 +76,8 @@ async function loadImageMetadata() {
       data.images.forEach(img => {
         allImageMetadata[img.url] = img;
       });
+      // The page's record of each upload's details (crops for the thumbnails) is as fresh as this listing
+      rememberImageListing(data.images);
     }
   } catch (error) {
     console.error('Error loading image metadata:', error);
@@ -214,6 +218,8 @@ function renderImages() {
       </div>
     `;
   }).join('');
+  // Each thumbnail shows its upload's stored crop, as the field's thumbnails do
+  list.querySelectorAll('.gallery-editor-item-thumb').forEach(showThumbnailCrop);
 }
 
 /**

@@ -352,6 +352,34 @@ try {
     assert.equal((await listImages()).find((image) => image.url === '/images/read-legacy.png').alt, 'Site path');
   });
 
+  await check('a stored crop the build ignores reaches no client: null in the listing, absent from GET and the PUT response, the file as it was', async () => {
+    write('public/images/overflow.png', png(11, 11, 11));
+    write('public/images/fits.png', png(12, 12, 12));
+    const OVERFLOW = { x: 60, y: 0, width: 50, height: 100 };
+    const FITS = { x: 50, y: 0, width: 50, height: 100 };
+    writeMetadata({
+      ...readMetadata(),
+      '/images/overflow.png': { alt: 'Over', crop: OVERFLOW },
+      '/images/fits.png': { crop: FITS },
+    });
+    const before = fs.readFileSync(metadataPath);
+    const listed = await listImages();
+    const overflow = listed.find((image) => image.url === '/images/overflow.png');
+    assert.strictEqual(overflow.crop, null, 'the listing hands out no crop the build refuses');
+    assert.equal(overflow.alt, 'Over', 'the rest of the entry is listed');
+    assert.deepEqual(listed.find((image) => image.url === '/images/fits.png').crop, FITS, 'control: a crop the build accepts is listed');
+    const got = await getMetadata('overflow.png', 'uploads');
+    assert.equal(got.status, 200, got.text);
+    assert.deepEqual(got.body.metadata, { alt: 'Over' }, 'GET leaves the refused crop out');
+    assert.deepEqual((await getMetadata('fits.png', 'uploads')).body.metadata, { crop: FITS }, 'control: GET carries an accepted crop');
+    assert.ok(before.equals(fs.readFileSync(metadataPath)), 'reads leave the file as it was');
+    // A PUT of another key reports the entry as written, without the refused crop, and leaves it stored
+    const put = await putMetadata('overflow.png', { alt: 'Still over' }, 'uploads');
+    assert.equal(put.status, 200, put.text);
+    assert.deepEqual(put.body.metadata, { alt: 'Still over' }, 'the PUT response leaves the refused crop out');
+    assert.deepEqual(readMetadata()['/images/overflow.png'], { alt: 'Still over', crop: OVERFLOW }, 'the stored crop is left as it is');
+  });
+
   await check('an image() folder image is keyed by /assets/images/<name>', async () => {
     const response = await putMetadata('asset-only.png', { alt: 'An asset', focalPoint: { x: 1, y: 2 } });
     assert.equal(response.status, 200, response.text);

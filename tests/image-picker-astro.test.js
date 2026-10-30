@@ -75,13 +75,16 @@ await check('only the image() field is marked data-astro-image', () => {
   assert.equal(pickerFor(form, 'banner').hasAttribute('data-astro-image'), false, 'banner');
 });
 
-await check('a plain image field stores the library URL and makes no request', async () => {
+await check('a plain image field stores the library URL without asking the server (the only request is its preview\'s crop lookup, which may fail)', async () => {
   const calls = stubFetch(500, {});
   const form = render({});
   const changed = await applyPickedImage(pickerFor(form, 'banner'), '/images/x-1.png', { filename: 'x-1.png', source: 'uploads' });
   assert.equal(changed, true);
   assert.equal(form.querySelector('[name="banner"]').value, '/images/x-1.png');
-  assert.equal(calls.length, 0);
+  // The value needs no request; the preview reads the file's details once
+  // (ui/image-details.js) to show a stored crop, and a 500 there changes nothing
+  assert.deepEqual(calls.map((call) => call.url), ['/api/images/x-1.png/metadata?source=uploads']);
+  assert.equal(form.querySelector('[name="banner"]').value, '/images/x-1.png', 'still stored after the failed lookup');
 });
 
 await check('an image() field stores the entry-relative value the server resolves', async () => {

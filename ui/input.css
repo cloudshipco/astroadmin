@@ -793,12 +793,12 @@
      and offsets from the crop's percentages (inline, with !important, so the
      image's own sizing rules do not apply to it). The container that holds
      the window carries data-cropped and captions it. */
-  .crop-window {
+  [data-crop-window] {
     @apply relative overflow-hidden;
     aspect-ratio: var(--crop-aspect);
   }
 
-  .crop-window > img {
+  [data-crop-window] > img {
     position: absolute !important;
     max-width: none !important;
     max-height: none !important;
@@ -815,21 +815,34 @@
 
   /* Contained in the field's preview as the whole image is (12rem tall at
      most, 8rem in the compact variant), centred; the preview grows to it. */
-  .image-picker-preview > .crop-window {
+  .image-picker-preview > [data-crop-window] {
     width: min(100%, calc(12rem * var(--crop-aspect)));
     margin-inline: auto;
   }
 
-  .image-picker--compact .image-picker-preview > .crop-window {
+  .image-picker--compact .image-picker-preview > [data-crop-window] {
     width: min(100%, calc(8rem * var(--crop-aspect)));
   }
 
-  /* Covering a square box (a library grid cell, the thumbnail variant),
-     centred: as wide as the box or as tall as it, whichever fills it. */
-  .image-library-item > .crop-window,
-  .image-picker--thumb .image-picker-preview > .crop-window {
+  /* Covering a square box (a library grid cell, the thumbnail variant, a
+     gallery thumbnail), centred: as wide as the box or as tall as it,
+     whichever fills it. */
+  .image-library-item > [data-crop-window],
+  .image-picker--thumb .image-picker-preview > [data-crop-window],
+  .gallery-field-thumb > [data-crop-window],
+  .gallery-editor-item-thumb > [data-crop-window] {
     @apply absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2;
     width: max(100%, calc(100% * var(--crop-aspect)));
+  }
+
+  /* A gallery thumbnail is small (2.5rem, 3rem): its caption is smaller too */
+  .gallery-field-thumb[data-cropped]::after,
+  .gallery-editor-item-thumb[data-cropped]::after {
+    left: 1px;
+    bottom: 1px;
+    padding-inline: 2px;
+    font-size: 0.5rem;
+    line-height: 0.75rem;
   }
 
   /* Hide labels inside simple array items - context is clear */
@@ -1210,7 +1223,7 @@
   }
 
   .gallery-editor-item-thumb {
-    @apply w-12 h-12 rounded overflow-hidden bg-gray-200 flex-shrink-0;
+    @apply relative w-12 h-12 rounded overflow-hidden bg-gray-200 flex-shrink-0;
   }
 
   .gallery-editor-item-thumb img {
@@ -1285,7 +1298,7 @@
   }
 
   .gallery-field-thumb {
-    @apply w-10 h-10 rounded overflow-hidden bg-gray-200 flex-shrink-0;
+    @apply relative w-10 h-10 rounded overflow-hidden bg-gray-200 flex-shrink-0;
   }
 
   .gallery-field-thumb img {
