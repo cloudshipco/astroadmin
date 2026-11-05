@@ -291,7 +291,10 @@ async function git(cwd, args) {
  */
 async function imageCachePaths(projectRoot, siteSubdir, siteDir) {
   const commonDir = await git(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  const kept = path.join(commonDir, 'astroadmin', 'check-image-cache', siteSubdir || '.', 'assets');
+  // One flat name per site directory: nesting by path would put a site in a
+  // subdirectory named "assets" inside the root site's cache.
+  const site = siteSubdir ? `site-${encodeURIComponent(siteSubdir)}` : 'root';
+  const kept = path.join(commonDir, 'astroadmin', 'check-image-cache', site, 'assets');
   return { kept, inWorktree: path.join(siteDir, 'node_modules', '.astro', 'assets') };
 }
 
@@ -305,13 +308,45 @@ function seedImageCache({ kept, inWorktree }) {
   }
 }
 
-function keepImageCache({ kept, inWorktree }) {
+/** Every file name under `dir`, leaving out node_modules and .git. */
+function fileNamesUnder(dir, names = new Set()) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    if (entry.isDirectory()) fileNamesUnder(path.join(dir, entry.name), names);
+    else names.add(entry.name);
+  }
+  return names;
+}
+
+/**
+ * After a PASSING build, drop the cache entries it did not use, so the cache
+ * does not grow with every image the site has ever had. Astro names an entry
+ * after the file it writes to the build output (and keeps a remote image's
+ * details beside it as <entry>.json), so an entry is in use when a file of
+ * that name is anywhere in the site's worktree outside node_modules. A failed
+ * or timed-out build's output is incomplete, so it trims nothing; nor does a
+ * build whose output matches no entry at all (an outDir outside the site, or
+ * a check command that writes no output), which proves nothing.
+ */
+function trimToUsed(cacheDir, siteDir) {
+  const entries = fs.readdirSync(cacheDir).filter((name) => !name.endsWith('.json'));
+  const output = fileNamesUnder(siteDir);
+  const used = new Set(entries.filter((name) => output.has(name)));
+  if (used.size === 0) return;
+  for (const name of fs.readdirSync(cacheDir)) {
+    const entry = name.endsWith('.json') ? name.slice(0, -'.json'.length) : name;
+    if (!used.has(entry)) fs.rmSync(path.join(cacheDir, name), { recursive: true, force: true });
+  }
+}
+
+function keepImageCache({ kept, inWorktree }, { passed, siteDir }) {
   const next = `${kept}.next-${process.pid}`;
   try {
     if (!fs.existsSync(inWorktree)) return;
     fs.rmSync(next, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(kept), { recursive: true });
     fs.cpSync(inWorktree, next, { recursive: true });
+    if (passed) trimToUsed(next, siteDir);
     fs.rmSync(kept, { recursive: true, force: true });
     fs.renameSync(next, kept);
   } catch (error) {
@@ -601,7 +636,7 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
     seedImageCache(imageCache);
     console.log(`🔎 Checking ${commit.slice(0, 7)} with: ${command}`);
     const result = await runCommand(command, siteDir, timeoutMs, buildEnvironment());
-    keepImageCache(imageCache);
+    keepImageCache(imageCache, { passed: !result.timedOut && result.exitCode === 0, siteDir });
     if (result.timedOut) {
       return fail(`The check did not finish within ${Math.max(1, Math.round(timeoutMs / 1000))} seconds, so nothing was pushed.`, result.output);
     }

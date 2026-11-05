@@ -287,11 +287,13 @@ off). It times out after `build.checkTimeoutMs` (default 300000, five
 minutes).
 
 The check keeps Astro's image cache from one check to the next, in the
-repository's git directory (`.git/astroadmin/check-image-cache/`), so a
+repository's git directory (`.git/astroadmin/check-image-cache/`, one folder per site), so a
 check optimises only the images that are new since the last one. It is the
 check's own copy: the live checkout's `node_modules/.astro` is never read or
 written. It is kept even when a check fails or times out, so a site whose
-first build takes longer than the limit gets further on each try. A site that
+first build takes longer than the limit gets further on each try. After a
+check that passes, entries its build did not use (images the site no longer
+has) are dropped, so the cache stays the size of the site's images. A site that
 sets its own `cacheDir` in `astro.config` builds every check from cold. To
 start from cold, delete the directory.
 

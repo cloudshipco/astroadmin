@@ -537,6 +537,47 @@ await check("Astro's image cache carries from one check to the next, and never i
   assert.equal(git(repo, 'status', '--porcelain', '--ignored'), '', 'nothing appeared in the working tree');
 });
 
+await check('a passing check keeps only the cached images its build used', async () => {
+  const repo = makeRepo('image-cache-trim', { 'README.md': 'x\n' });
+  // Astro names a cache entry after the file it writes to the build output,
+  // and keeps a remote image's details beside it as <entry>.json.
+  const run = (script) => checkHeadWithAstro({ paths: { projectRoot: repo }, build: { check: script, checkTimeoutMs: 5000 } });
+  const cache = 'node_modules/.astro/assets';
+  const listCache = `mkdir -p ${cache} && ls -A ${cache} | tr '\\n' ' '`;
+  const listed = (result) => result.rawOutput.trim().split(/\s+/).filter(Boolean).sort();
+
+  const seeded = await run(`${listCache}; mkdir -p dist/_astro && for f in used old; do echo $f > ${cache}/$f.webp; echo $f > dist/_astro/$f.webp; done; echo {} > ${cache}/used.webp.json; echo {} > ${cache}/old.webp.json`);
+  assert.equal(seeded.success, true, seeded.rawOutput);
+
+  // The site stops using old.webp. A failed build does not trim: its output is
+  // incomplete, so a missing file proves nothing.
+  const failed = await run(`${listCache}; mkdir -p dist/_astro && echo used > dist/_astro/used.webp; exit 1`);
+  assert.equal(failed.success, false, 'control: the build really failed');
+  const passed = await run(`${listCache}; mkdir -p dist/_astro && echo used > dist/_astro/used.webp`);
+  assert.deepEqual(listed(passed), ['old.webp', 'old.webp.json', 'used.webp', 'used.webp.json'], 'the failed check trimmed nothing');
+  const after = await run(listCache);
+  assert.deepEqual(listed(after), ['used.webp', 'used.webp.json'], 'the passing check dropped old.webp and its details');
+
+  // A build whose output matches no cached entry (an outDir outside the site,
+  // or a check that writes no output) proves nothing either: nothing is dropped.
+  const noOutput = await run('true');
+  assert.equal(noOutput.success, true);
+  const stillThere = await run(listCache);
+  assert.deepEqual(listed(stillThere), ['used.webp', 'used.webp.json'], 'kept when the output matched nothing');
+});
+
+await check('a site at the repository root and one in a subdirectory named "assets" keep separate caches', async () => {
+  const repo = makeRepo('image-cache-subdir', { 'README.md': 'x\n', 'assets/package.json': '{}\n' });
+  const write = (root, name) => checkHeadWithAstro({
+    paths: { projectRoot: root },
+    build: { check: `mkdir -p node_modules/.astro/assets && ls node_modules/.astro/assets | tr '\\n' ' '; echo x > node_modules/.astro/assets/${name}.webp` },
+  });
+  await write(repo, 'root-image');
+  await write(path.join(repo, 'assets'), 'subdir-image');
+  const rootAgain = await write(repo, 'root-image');
+  assert.deepEqual(rootAgain.rawOutput.trim().split(/\s+/).filter(Boolean), ['root-image.webp'], "the root site's cache holds only its own image");
+});
+
 await check("no check rewrote the site's own Astro cache", () => {
   assert.equal(fileHash(liveCacheFile), liveCacheBefore);
 });
