@@ -289,16 +289,24 @@ async function git(cwd, args) {
  *
  * Failures here are logged and never fail the check: the cache only saves time.
  */
+/** Where the kept cache and the worktree's cache are, or null (the check builds cold). */
 async function imageCachePaths(projectRoot, siteSubdir, siteDir) {
-  const commonDir = await git(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  // One flat name per site directory: nesting by path would put a site in a
-  // subdirectory named "assets" inside the root site's cache.
-  const site = siteSubdir ? `site-${encodeURIComponent(siteSubdir)}` : 'root';
-  const kept = path.join(commonDir, 'astroadmin', 'check-image-cache', site, 'assets');
-  return { kept, inWorktree: path.join(siteDir, 'node_modules', '.astro', 'assets') };
+  try {
+    const commonDir = await git(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    // One flat name per site directory: nesting by path would put a site in a
+    // subdirectory named "assets" inside the root site's cache.
+    const site = siteSubdir ? `site-${encodeURIComponent(siteSubdir)}` : 'root';
+    const kept = path.join(commonDir, 'astroadmin', 'check-image-cache', site, 'assets');
+    return { kept, inWorktree: path.join(siteDir, 'node_modules', '.astro', 'assets') };
+  } catch (error) {
+    console.error('Could not find the image cache (the check builds cold):', error.message);
+    return null;
+  }
 }
 
-function seedImageCache({ kept, inWorktree }) {
+function seedImageCache(paths) {
+  if (!paths) return;
+  const { kept, inWorktree } = paths;
   try {
     if (!fs.existsSync(kept)) return;
     fs.mkdirSync(path.dirname(inWorktree), { recursive: true });
@@ -339,12 +347,18 @@ function trimToUsed(cacheDir, siteDir) {
   }
 }
 
-function keepImageCache({ kept, inWorktree }, { passed, siteDir }) {
+function keepImageCache(paths, { passed, siteDir }) {
+  if (!paths) return;
+  const { kept, inWorktree } = paths;
+  const nextPrefix = `${path.basename(kept)}.next-`;
   const next = `${kept}.next-${process.pid}`;
   try {
     if (!fs.existsSync(inWorktree)) return;
-    fs.rmSync(next, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(kept), { recursive: true });
+    // Copies a crashed process left behind (a different pid) as well as ours.
+    for (const name of fs.readdirSync(path.dirname(kept))) {
+      if (name.startsWith(nextPrefix)) fs.rmSync(path.join(path.dirname(kept), name), { recursive: true, force: true });
+    }
     fs.cpSync(inWorktree, next, { recursive: true });
     if (passed) trimToUsed(next, siteDir);
     fs.rmSync(kept, { recursive: true, force: true });

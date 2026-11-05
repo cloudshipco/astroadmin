@@ -566,6 +566,35 @@ await check('a passing check keeps only the cached images its build used', async
   assert.deepEqual(listed(stillThere), ['used.webp', 'used.webp.json'], 'kept when the output matched nothing');
 });
 
+await check("a checkout with its own node_modules/.astro: the check neither reads nor writes it", async () => {
+  const repo = makeRepo('image-cache-live', { 'README.md': 'x\n', '.gitignore': 'node_modules\n' });
+  // A real node_modules, as on a host: one package, and the preview's cache.
+  fs.mkdirSync(path.join(repo, 'node_modules', 'some-package'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'node_modules', 'some-package', 'index.js'), 'export default 1;\n');
+  const liveAssets = path.join(repo, 'node_modules', '.astro', 'assets');
+  fs.mkdirSync(liveAssets, { recursive: true });
+  fs.writeFileSync(path.join(liveAssets, 'preview-only.webp'), 'live');
+  const result = await checkHeadWithAstro({
+    paths: { projectRoot: repo },
+    build: { check: 'test -f node_modules/some-package/index.js && echo package-seen; mkdir -p node_modules/.astro/assets && ls node_modules/.astro/assets; echo x > node_modules/.astro/assets/check-made.webp' },
+  });
+  assert.ok(result.rawOutput.includes('package-seen'), `control: the checkout's packages are linked in: ${result.rawOutput}`);
+  assert.ok(!result.rawOutput.includes('preview-only.webp'), "the check did not start from the preview's cache");
+  assert.deepEqual(fs.readdirSync(liveAssets), ['preview-only.webp'], "the preview's cache is unchanged");
+});
+
+await check('a copy of the cache left by a crashed check is swept', async () => {
+  const repo = makeRepo('image-cache-crash', { 'README.md': 'x\n' });
+  const cacheRoot = path.join(repo, '.git', 'astroadmin', 'check-image-cache', 'root');
+  const leftover = path.join(cacheRoot, 'assets.next-99999999');
+  fs.mkdirSync(leftover, { recursive: true });
+  fs.writeFileSync(path.join(leftover, 'half.webp'), 'x');
+  const result = await checkHeadWithAstro({ paths: { projectRoot: repo }, build: { check: 'mkdir -p node_modules/.astro/assets && echo x > node_modules/.astro/assets/new.webp' } });
+  assert.equal(result.success, true, result.rawOutput);
+  assert.deepEqual(fs.readdirSync(cacheRoot), ['assets'], 'only the kept cache is left');
+  assert.deepEqual(fs.readdirSync(path.join(cacheRoot, 'assets')), ['new.webp']);
+});
+
 await check('a site at the repository root and one in a subdirectory named "assets" keep separate caches', async () => {
   const repo = makeRepo('image-cache-subdir', { 'README.md': 'x\n', 'assets/package.json': '{}\n' });
   const write = (root, name) => checkHeadWithAstro({
