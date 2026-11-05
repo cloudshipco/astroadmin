@@ -310,7 +310,10 @@ shelved SQLite store's are `npm run test:db`. Most run server-less and need env 
   links are refused, a tracked `.env` stays as committed, `build.production` is honoured,
   the admin's secrets are not in the build's environment, the 422 carries a code sentence and
   our validation of the refused entry (an Astro id such as `bad-page` resolved to the editor's
-  `Bad Page`), and the site's own `node_modules/.astro` is byte-identical afterwards. Takes
+  `Bad Page`), the site's own `node_modules/.astro` is byte-identical afterwards, and the
+  check's kept image cache carries across checks (after a timeout or failure too), is
+  trimmed only after a pass, is one folder per site, sweeps a crashed copy, and never reads
+  or writes a real checkout `node_modules/.astro`. Takes
   ~1-2 min (each publish runs a full `astro build`).
 - `bun tests/publish-sync.test.js` — publishing onto a site repo someone else also pushes to
   (#57), over HTTP through the real app with a trivial check: the commit route
@@ -1203,7 +1206,14 @@ deliberately no bare push endpoint.
 The worktree gets its own `node_modules` (a symlink per package, or for a package shipping
 `.astro` files a real directory tree; see below) WITHOUT dot-directories
 other than `.bin`: Astro writes its content data store into `node_modules/.astro`, so
-linking the whole directory would let the check overwrite the running preview's store. A
+linking the whole directory would let the check overwrite the running preview's store.
+That also left Astro's image cache out, so every check re-optimised every image and a
+growing image library pushed a publish past the time limit (1.12.1). The check therefore
+keeps its OWN copy of `<cacheDir>/assets` in the git common dir
+(`.git/astroadmin/check-image-cache/<root|site-…>/assets`): seeded into the worktree before
+the build, taken back after it whatever the outcome, trimmed after a pass to entries whose
+file name is in the build output, and never a failure of the check (`imageCachePaths`,
+`seedImageCache`, `keepImageCache`). A
 custom `cacheDir` inside `node_modules` that does NOT start with a dot would still be
 shared; none of our sites set one. Hoisted `node_modules` above a monorepo site are
 mirrored too. A package that ships `.astro` files is not one link: it is a real directory
