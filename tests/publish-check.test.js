@@ -502,6 +502,41 @@ await check("the check builds the way the site is built, without the admin's sec
   assert.equal(envResult.rawOutput.trim(), '[][][][home]', 'admin variables gone, ordinary ones (HOME) kept');
 });
 
+await check("Astro's image cache carries from one check to the next, and never into the checkout", async () => {
+  const repo = makeRepo('image-cache', { 'README.md': 'x\n' });
+  // Stands in for astro build: lists what the image cache held at the start,
+  // then adds an entry named by the run, as Astro adds one per new image.
+  const imageCacheRun = (name, rest = '') => checkHeadWithAstro({
+    paths: { projectRoot: repo },
+    build: {
+      check: `mkdir -p node_modules/.astro/assets && ls node_modules/.astro/assets | tr '\\n' ' '; echo ${name} > node_modules/.astro/assets/${name}.webp${rest}`,
+      checkTimeoutMs: 2000,
+    },
+  });
+  const listed = (result) => result.rawOutput.trim().split(/\s+/).filter(Boolean).sort();
+
+  const first = await imageCacheRun('first');
+  assert.equal(first.success, true, first.rawOutput);
+  assert.deepEqual(listed(first), [], 'control: the first check starts cold');
+
+  const second = await imageCacheRun('second');
+  assert.deepEqual(listed(second), ['first.webp'], "the second check starts with the first one's images");
+
+  // A check that runs out of time still keeps what it made, so the next one
+  // gets further (a site whose cold build is over the limit must recover).
+  const timedOut = await imageCacheRun('slow', '; sleep 30');
+  assert.equal(timedOut.success, false, 'control: the check really timed out');
+  const failed = await imageCacheRun('failing', '; exit 1');
+  assert.equal(failed.success, false, 'control: the build really failed');
+  assert.deepEqual(listed(failed), ['first.webp', 'second.webp', 'slow.webp']);
+  const after = await imageCacheRun('after');
+  assert.deepEqual(listed(after), ['failing.webp', 'first.webp', 'second.webp', 'slow.webp'],
+    'a timed-out and a failed check both kept their images');
+
+  assert.ok(!fs.existsSync(path.join(repo, 'node_modules', '.astro')), "the checkout's own cache was never created or written");
+  assert.equal(git(repo, 'status', '--porcelain', '--ignored'), '', 'nothing appeared in the working tree');
+});
+
 await check("no check rewrote the site's own Astro cache", () => {
   assert.equal(fileHash(liveCacheFile), liveCacheBefore);
 });

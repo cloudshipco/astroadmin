@@ -268,6 +268,58 @@ async function git(cwd, args) {
   return stdout.trim();
 }
 
+/**
+ * Astro's image cache, kept between checks.
+ *
+ * Each check is a fresh worktree whose node_modules leaves out the live
+ * checkout's .astro (linkNodeModules), so without this every check
+ * re-optimises every image on the site from nothing, and a check's time
+ * grows with the image library until it passes the time limit and nothing
+ * can be published. With it, a check processes only the images that are new.
+ *
+ * The cache is the check's own, never the live checkout's: it lives in the
+ * repository's git directory (not served, not in the working tree, kept
+ * across restarts), one per site directory. It is copied into the worktree at
+ * Astro's default cacheDir (node_modules/.astro/assets under the site) before
+ * the build and replaced with the worktree's afterwards, whether the build
+ * passed, failed or ran out of time, so a site whose cold build is over the
+ * limit gets further each try. An entry a killed build left half-written can
+ * only affect the check's own output, which is never published. A site that
+ * sets its own cacheDir builds cold, as before.
+ *
+ * Failures here are logged and never fail the check: the cache only saves time.
+ */
+async function imageCachePaths(projectRoot, siteSubdir, siteDir) {
+  const commonDir = await git(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  const kept = path.join(commonDir, 'astroadmin', 'check-image-cache', siteSubdir || '.', 'assets');
+  return { kept, inWorktree: path.join(siteDir, 'node_modules', '.astro', 'assets') };
+}
+
+function seedImageCache({ kept, inWorktree }) {
+  try {
+    if (!fs.existsSync(kept)) return;
+    fs.mkdirSync(path.dirname(inWorktree), { recursive: true });
+    fs.cpSync(kept, inWorktree, { recursive: true });
+  } catch (error) {
+    console.error('Could not reuse the image cache (the check builds cold):', error.message);
+  }
+}
+
+function keepImageCache({ kept, inWorktree }) {
+  const next = `${kept}.next-${process.pid}`;
+  try {
+    if (!fs.existsSync(inWorktree)) return;
+    fs.rmSync(next, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(kept), { recursive: true });
+    fs.cpSync(inWorktree, next, { recursive: true });
+    fs.rmSync(kept, { recursive: true, force: true });
+    fs.renameSync(next, kept);
+  } catch (error) {
+    fs.rmSync(next, { recursive: true, force: true });
+    console.error('Could not keep the image cache for the next check:', error.message);
+  }
+}
+
 // How long a command's output pipes may stay open after its shell exited and
 // its process group was killed: only a descendant that left the group can
 // still hold them, and it is not waited for.
@@ -545,8 +597,11 @@ export async function checkHeadWithAstro(fullConfig, { onBuilt } = {}) {
       }
     }
 
+    const imageCache = await imageCachePaths(projectRoot, siteSubdir, siteDir);
+    seedImageCache(imageCache);
     console.log(`🔎 Checking ${commit.slice(0, 7)} with: ${command}`);
     const result = await runCommand(command, siteDir, timeoutMs, buildEnvironment());
+    keepImageCache(imageCache);
     if (result.timedOut) {
       return fail(`The check did not finish within ${Math.max(1, Math.round(timeoutMs / 1000))} seconds, so nothing was pushed.`, result.output);
     }
